@@ -4,13 +4,23 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const core_lib = b.addModule("fr_core", .{
+        .root_source_file = b.path("src/core/core.zig"),
+    });
+
     const fracture = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/fracture.zig"),
+        .imports = &.{
+            .{ .name = "fr_core", .module = core_lib },
+        },
     });
 
     const entrypoint = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/entrypoint.zig"),
-        .imports = &.{.{ .name = "fracture", .module = fracture }},
+        .imports = &.{
+            .{ .name = "fracture", .module = fracture },
+            .{ .name = "fr_core", .module = core_lib },
+        },
     });
 
     const exe = b.addExecutable(.{
@@ -21,6 +31,7 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("entrypoint", entrypoint);
     exe.root_module.addImport("fracture", fracture);
+    exe.root_module.addImport("fr_core", core_lib);
 
     b.installArtifact(exe);
 
@@ -34,6 +45,14 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = exe.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    const docs_step = b.step("docs", "Copy documentation artifacts to prefix path");
+    docs_step.dependOn(&install_docs.step);
 
     const engine_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/unit_test.zig"),

@@ -1,0 +1,17 @@
+debug:
+	zig build --summary all && .\zig-out\bin\game.exe
+
+release:
+	zig build -Doptimize=ReleaseSafe --summary all && .\zig-out\bin\game.exe
+
+dist:
+	zig build -Doptimize=ReleaseFast --summary all && .\zig-out\bin\game.exe
+
+docs:
+	zig build docs --summary all && .\zig-out\docs\index.html
+
+uninstall:
+	zig build uninstall --summary all
+
+test:
+	zig build test --summary new
