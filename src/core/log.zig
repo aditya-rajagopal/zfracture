@@ -46,6 +46,77 @@ pub fn nop_log(
     };
 }
 
+const LogSystemData = struct {
+    log_file: ?[]const u8 = null,
+    tty_config: std.io.tty.Config,
+    buffered_writer: std.io.BufferedWriter(8192, std.fs.File.Writer),
+};
+
+var log_system_data: LogSystemData = .{ .tty_config = undefined, .buffered_writer = undefined };
+var system_initialized: bool = false;
+
+pub const LogError = error{UnableToGetConsoleScreenBuffer};
+
+/// Initializes the logging system by creating the buffered stderr writer
+pub fn init() LogError!void {
+    if (system_initialized) {
+        core_log.warn("Trying to reinitialize the logging system\n", .{});
+        return;
+    }
+
+    // Output is to stderr
+    const stderr = std.io.getStdErr();
+    var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+    if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(stderr.handle, &info) != std.os.windows.TRUE) {
+        return LogError.UnableToGetConsoleScreenBuffer;
+    }
+    log_system_data.tty_config = std.io.tty.Config{ .windows_api = .{
+        .handle = stderr.handle,
+        .reset_attributes = info.wAttributes,
+    } };
+
+    const stdwrite = stderr.writer();
+    log_system_data.buffered_writer = .{ .unbuffered_writer = stdwrite };
+
+    system_initialized = true;
+}
+
+/// Shutdown the logging system
+pub fn deinit() void {
+    if (!system_initialized) {
+        return;
+    }
+
+    log_system_data.buffered_writer.flush() catch unreachable;
+    system_initialized = false;
+}
+
+/// The default implementation for the log function, custom log functions may
+/// forward log messages to this function.
+pub fn default_log(
+    comptime message_level: Level,
+    comptime scope: @Type(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    if (!system_initialized) {
+        return;
+    }
+    // TODO: Can this be more efficient
+    const level_txt = comptime message_level.as_text();
+    const prefix2 = @tagName(scope) ++ ": " ++ "(" ++ level_txt ++ "): ";
+
+    const writer = log_system_data.buffered_writer.writer();
+    std.debug.getStderrMutex().lock();
+    defer std.debug.getStderrMutex().unlock();
+    nosuspend {
+        log_system_data.tty_config.setColor(writer, comptime message_level.colour()) catch return;
+        writer.print(prefix2 ++ format ++ "\n", args) catch return;
+        log_system_data.buffered_writer.flush() catch return;
+        log_system_data.tty_config.setColor(writer, .reset) catch return;
+    }
+}
+
 /// The levels of logging that are avilable within the engine
 pub const Level = enum {
     /// Fatal: Something has gone terribly wrong. This is irrecoverable and the program
@@ -111,43 +182,6 @@ pub fn log_enabled(comptime message_level: Level, comptime scope: @Type(.EnumLit
         if (scope_level.scope == scope) return @intFromEnum(message_level) <= @intFromEnum(scope_level.level);
     }
     return @intFromEnum(message_level) <= @intFromEnum(default_level);
-}
-
-/// The default implementation for the log function, custom log functions may
-/// forward log messages to this function.
-pub fn default_log(
-    comptime message_level: Level,
-    comptime scope: @Type(.EnumLiteral),
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    // TODO: Can this be more efficient
-    const level_txt = comptime message_level.as_text();
-    const prefix2 = @tagName(scope) ++ ": " ++ "(" ++ level_txt ++ "): ";
-
-    const stderr = std.io.getStdErr();
-    var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-    if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(stderr.handle, &info) != std.os.windows.TRUE) {
-        return;
-    }
-    const tty_config: std.io.tty.Config = .{ .windows_api = .{
-        .handle = stderr.handle,
-        .reset_attributes = info.wAttributes,
-    } };
-    // const tty_config = std.io.tty.detectConfig(stderr);
-
-    const stdwrite = stderr.writer();
-    var bw = std.io.bufferedWriter(stdwrite);
-    const writer = bw.writer();
-
-    std.debug.getStderrMutex().lock();
-    defer std.debug.getStderrMutex().unlock();
-    nosuspend {
-        tty_config.setColor(writer, comptime message_level.colour()) catch return;
-        writer.print(prefix2 ++ format ++ "\n", args) catch return;
-        bw.flush() catch return;
-        tty_config.setColor(writer, .reset) catch return;
-    }
 }
 
 /// Returns a scoped logging namespace that logs all messages using the scope

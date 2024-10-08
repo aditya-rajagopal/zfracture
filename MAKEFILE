@@ -1,17 +1,33 @@
-debug:
-	zig build --summary all && .\zig-out\bin\game.exe
+test:
+	zig build test --summary new
 
-release:
+build_debug:
+	zig build --summary all -freference-trace
+
+debug:
+	zig build --summary all -freference-trace && .\zig-out\bin\game.exe
+
+# release needs to pass tests first
+build_release: test
+	zig build -Doptimize=ReleaseSafe --summary all
+
+release: test
 	zig build -Doptimize=ReleaseSafe --summary all && .\zig-out\bin\game.exe
 
-dist:
+build_dist: test
+	zig build -Doptimize=ReleaseFast --summary all
+
+# distribution needs to pass tests first
+dist: test
 	zig build -Doptimize=ReleaseFast --summary all && .\zig-out\bin\game.exe
+
+build_docs:
+	zig build docs --summary all
 
 docs:
 	zig build docs --summary all && .\zig-out\docs\index.html
 
+all: test build_debug build_release build_dist build_docs
+
 uninstall:
 	zig build uninstall --summary all
-
-test:
-	zig build test --summary new
