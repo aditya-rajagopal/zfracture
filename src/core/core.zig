@@ -1,5 +1,2 @@
-pub const log = @import("log.zig");
-
-const asserts = @import("assert.zig");
-pub const assert = asserts.assert;
-pub const debug_assert = asserts.debug_assert;
+pub const logging = @import("logging.zig");
+pub const asserts = @import("asserts.zig");

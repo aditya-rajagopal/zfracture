@@ -2,32 +2,32 @@ test:
 	zig build test --summary new
 
 build_debug:
-	zig build --summary all -freference-trace
+	zig build -freference-trace
 
 debug:
-	zig build --summary all -freference-trace && .\zig-out\bin\game.exe
+	zig build -freference-trace && .\zig-out\bin\game.exe
 
 # release needs to pass tests first
 build_release: test
-	zig build -Doptimize=ReleaseSafe --summary all
+	zig build -Doptimize=ReleaseSafe
 
 release: test
-	zig build -Doptimize=ReleaseSafe --summary all && .\zig-out\bin\game.exe
+	zig build -Doptimize=ReleaseSafe && .\zig-out\bin\game.exe
 
 build_dist: test
-	zig build -Doptimize=ReleaseFast --summary all
+	zig build -Doptimize=ReleaseFast
 
 # distribution needs to pass tests first
 dist: test
-	zig build -Doptimize=ReleaseFast --summary all && .\zig-out\bin\game.exe
+	zig build -Doptimize=ReleaseFast && .\zig-out\bin\game.exe
 
 build_docs:
-	zig build docs --summary all
+	zig build docs
 
 docs:
-	zig build docs --summary all && .\zig-out\docs\index.html
+	zig build docs && .\zig-out\docs\index.html
 
 all: test build_debug build_release build_dist build_docs
 
 uninstall:
-	zig build uninstall --summary all
+	zig build uninstall

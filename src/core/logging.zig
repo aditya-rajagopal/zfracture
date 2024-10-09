@@ -1,3 +1,38 @@
+///! This logging library is sort of a mirror of the std.log libarary.
+///! The reason for this is I need additional logging levels and want to colour the logs
+///!
+///! There are 2 main exports from this library: core_log and log
+///!    core_log: is the logger meant to be used within the enging
+///!    log: is the logger intended to be used on the game side
+///!
+///! You can customize the logging library by creating a logger_config public constant in your root module of the
+///! type LogConfig.
+///! Here you can override the log_fn used by the logger and the log level for the app.
+///!
+///! You can create a new logging scope by calling the scope function. You can add those new scopes and their
+///! corresponding log levels to the custom_scopes field in the logger_config.
+///!
+///!
+///! ```
+///! pub const libfoo = log.scoped(.libfoo);
+///!
+///! // ------ in app.zig -------
+///!
+///! const libfoo_level = switch (builtin.mode) {
+///!    .Debug => .info,
+///!    .ReleaseSafe => .err,
+///!    .ReleaseFast, .ReleaseSmall => .fatal,
+///! };
+///!
+///! pub const logger_config: fracture.core.log.LogConfig = .{
+///!     .log_fn = fracture.core.log.default_log,
+///!     .app_log_level = fracture.core.log.default_level,
+///!     .custom_scopes = &[_]fracture.core.log.ScopeLevel{
+///!         .{ .scope = .libfoo, .level = libfoo_level },
+///!     },
+///! };
+///! ```
+
 // TODO(aditya):
 // - [ ] Change the log function to also optionally write to a log file in addition to console
 // - [ ] Seperate log thread? job?
@@ -19,15 +54,22 @@ pub const LogFn = *const fn (comptime Level, comptime @Type(.EnumLiteral), compt
 
 const engine_log_level = default_level;
 
+pub const LogConfig = struct {
+    app_log_level: Level = .debug,
+    log_fn: LogFn = default_log,
+    custom_scopes: []const ScopeLevel = &.{},
+};
+
 const root = @import("root");
-const game_log_level: Level = if (@hasDecl(root, "log_level")) root.log_level else .debug;
+const logger_config: LogConfig = if (@hasDecl(root, "logger_config")) root.logger_config else .{};
+// const game_log_level: Level = if (@hasDecl(root, "log_level")) root.log_level else .debug;
 
 const scope_levels: []const ScopeLevel = &[_]ScopeLevel{
     .{ .scope = .Engine, .level = engine_log_level },
-    .{ .scope = .Game, .level = game_log_level },
-};
+    .{ .scope = .Game, .level = logger_config.app_log_level },
+} ++ logger_config.custom_scopes;
 
-const log_fn: LogFn = if (@hasDecl(root, "log_fn")) root.log_fn else default_log;
+const log_fn: LogFn = logger_config.log_fn;
 
 /// Function to be used to remove all logging everywhere.
 /// straight up stole from tigerbeatle. Made sure to change the name.
@@ -107,14 +149,34 @@ pub fn default_log(
     const prefix2 = @tagName(scope) ++ ": " ++ "(" ++ level_txt ++ "): ";
 
     const writer = log_system_data.buffered_writer.writer();
-    std.debug.getStderrMutex().lock();
-    defer std.debug.getStderrMutex().unlock();
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+
     nosuspend {
         log_system_data.tty_config.setColor(writer, comptime message_level.colour()) catch return;
         writer.print(prefix2 ++ format ++ "\n", args) catch return;
         log_system_data.buffered_writer.flush() catch return;
         log_system_data.tty_config.setColor(writer, .reset) catch return;
     }
+}
+
+/// Log current stack trace. This is only correct in debug builds. In non debug builds this will be incorrect due to
+/// optimizations
+pub fn dump_stack_trace() void {
+    if (!system_initialized) {
+        return;
+    }
+    const debug_info = std.debug.getSelfDebugInfo() catch |err| {
+        core_log.fatal("\n Unable to print stack trace: {s}\n", .{@errorName(err)});
+        return;
+    };
+
+    const writer = log_system_data.buffered_writer.writer();
+    std.debug.writeCurrentStackTrace(writer, debug_info, log_system_data.tty_config, null) catch |err| {
+        core_log.fatal("\n Unable to print stack trace: {s}\n", .{@errorName(err)});
+        return;
+    };
+    log_system_data.buffered_writer.flush() catch unreachable;
 }
 
 /// The levels of logging that are avilable within the engine
@@ -150,17 +212,18 @@ pub const Level = enum {
     /// Returns a string literal of the given level in full text form.
     pub fn colour(comptime self: Level) std.io.tty.Color {
         return switch (self) {
-            .fatal => .bright_cyan,
+            .fatal => .bright_magenta,
             .err => .bright_red,
             .warn => .yellow,
-            .info => .magenta,
+            .info => .cyan,
             .debug => .green,
             .trace => .white,
         };
     }
 };
 
-const ScopeLevel = struct {
+/// Struct to define log levels of custom scopes defined in the app
+pub const ScopeLevel = struct {
     scope: @Type(.EnumLiteral),
     level: Level,
 };
