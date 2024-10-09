@@ -4,6 +4,8 @@ const fracture = @import("fracture");
 const core = @import("fr_core");
 const log = fracture.log;
 
+pub const libfoo_logger = core.logging.scoped(.libfoo);
+
 pub const logger_config: core.logging.LogConfig = .{
     .log_fn = core.logging.default_log,
     .app_log_level = core.logging.default_level,
@@ -11,8 +13,6 @@ pub const logger_config: core.logging.LogConfig = .{
         .{ .scope = .libfoo, .level = .warn },
     },
 };
-
-pub const libfoo_logger = core.logging.scoped(.libfoo);
 
 pub const app_api = .{
     .start = start,
