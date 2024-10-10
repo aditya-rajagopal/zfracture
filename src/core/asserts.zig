@@ -72,7 +72,7 @@ pub fn debug_assert_msg(
     args: anytype,
 ) void {
     switch (builtin.mode) {
-        .Debug => assert(condition, src, fmt, args),
+        .Debug => assert_msg(condition, src, fmt, args),
         else => {},
     }
 }

@@ -1,3 +1,6 @@
+///! The Platform abstraction lives here.
+///!
+///! To define a new platform you need to implement the functions defined in this file.
 const platform = switch (builtin.os.tag) {
     .windows => @import("windows.zig"),
     else => |p| @compileError("Platform " ++ @tagName(p) ++ " is not supported"),

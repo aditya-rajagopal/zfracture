@@ -62,7 +62,6 @@ pub fn init(
 
     window_width += border_rect.right - border_rect.left;
     window_height += border_rect.bottom - border_rect.top;
-    std.debug.print("Size: {}, {}, {}, {}\n", .{ window_x, window_y, window_width, window_height });
 
     platform_state.hwnd = win32.CreateWindowExA(
         @bitCast(window_style_ex),

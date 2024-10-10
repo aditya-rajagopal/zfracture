@@ -2,20 +2,22 @@ const fracture = @import("fracture");
 const platform = @import("platform");
 const core = @import("fr_core");
 
-const app = fracture.config.app_api;
-
 pub fn main() !void {
-    try core.logging.init();
+    const allocator = platform.get_allocator();
 
-    var state: platform.PlatformState = undefined;
+    core.logging.init();
+    errdefer core.logging.deinit();
+    fracture.core_log.info("Logging system has been initialized", .{});
 
-    try platform.init(&state, "SoulCat", 100, 100, 1280, 720);
+    fracture.config.app_start(allocator);
 
-    app.start();
-    while (true) {
-        platform.pump_messages(&state);
-    }
+    try fracture.application.init(allocator);
+    errdefer fracture.application.deinit();
 
-    platform.deinit(&state);
+    try fracture.application.run();
+
+    fracture.application.deinit();
+
     core.logging.deinit();
+    fracture.core_log.info("Logging system has been shutdown", .{});
 }

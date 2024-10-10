@@ -16,7 +16,7 @@
 ///! ```
 ///! pub const libfoo = log.scoped(.libfoo);
 ///!
-///! // ------ in app.zig -------
+///! // ------ in app/config.zig -------
 ///!
 ///! const libfoo_level = switch (builtin.mode) {
 ///!    .Debug => .info,
@@ -31,6 +31,9 @@
 ///!         .{ .scope = .libfoo, .level = libfoo_level },
 ///!     },
 ///! };
+///!
+///! // -------- in app.zig ----------------
+///! pub const config = @import("config");
 ///! ```
 const platform = @import("platform");
 
@@ -64,7 +67,10 @@ pub const LogConfig = struct {
 };
 
 const root = @import("root");
-const logger_config: LogConfig = if (@hasDecl(root, "logger_config")) root.logger_config else .{};
+const logger_config: LogConfig = if (@hasDecl(root, "config") and @hasDecl(root.config, "logger_config"))
+    root.config.logger_config
+else
+    .{};
 
 const scope_levels: []const ScopeLevel = &[_]ScopeLevel{
     .{ .scope = .Engine, .level = engine_log_level },
@@ -83,7 +89,7 @@ var log_system_data: LogSystemData = .{ .tty_config = undefined, .buffered_write
 var system_initialized: bool = false;
 
 /// Initializes the logging system by creating the buffered stderr writer
-pub fn init() !void {
+pub fn init() void {
     if (system_initialized) {
         core_log.warn("Trying to reinitialize the logging system\n", .{});
         return;
@@ -91,7 +97,7 @@ pub fn init() !void {
 
     // Output is to stderr
     const stderr = std.io.getStdErr();
-    log_system_data.tty_config = try platform.get_tty_config(stderr);
+    log_system_data.tty_config = platform.get_tty_config(stderr) catch unreachable;
 
     const stdwrite = stderr.writer();
     log_system_data.buffered_writer = .{ .unbuffered_writer = stdwrite };
