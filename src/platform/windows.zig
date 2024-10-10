@@ -1,13 +1,15 @@
 const windows = std.os.windows;
 
+/// The windows internal state
 pub const InternalState = struct {
     /// Handel to the instance of the application
     h_instance: windows.HINSTANCE,
     /// Window handle
     hwnd: ?windows.HWND,
 };
-pub const Error = error{ FailedHandleGet, WndRegistrationFailed };
+
 pub const TTYError = error{UnableToGetConsoleScreenBuffer};
+pub const Error = error{ FailedHandleGet, WndRegistrationFailed };
 
 const window_class_name: [*:0]const u8 = "fracture_window_class";
 

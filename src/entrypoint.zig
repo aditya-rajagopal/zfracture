@@ -1,7 +1,8 @@
 const fracture = @import("fracture");
-const core = @import("fr_core");
-const app = fracture.config.app_api;
 const platform = @import("platform");
+const core = @import("fr_core");
+
+const app = fracture.config.app_api;
 
 pub fn main() !void {
     try core.logging.init();
