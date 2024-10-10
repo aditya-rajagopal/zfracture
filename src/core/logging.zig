@@ -32,6 +32,7 @@
 ///!     },
 ///! };
 ///! ```
+const platform = @import("platform");
 
 // TODO(aditya):
 // - [ ] Change the log function to also optionally write to a log file in addition to console
@@ -45,7 +46,7 @@ pub const log = scoped(.Game);
 /// The default log level is based on build mode.
 pub const default_level: Level = switch (builtin.mode) {
     .Debug => .trace,
-    .ReleaseSafe => .info,
+    .ReleaseSafe => .warn,
     .ReleaseFast, .ReleaseSmall => .err,
 };
 
@@ -54,6 +55,8 @@ pub const LogFn = *const fn (comptime Level, comptime @Type(.EnumLiteral), compt
 
 const engine_log_level = default_level;
 
+/// The configuration for the logging system that can be set by the user in the root module with the variable name
+/// logger_config
 pub const LogConfig = struct {
     app_log_level: Level = .debug,
     log_fn: LogFn = default_log,
@@ -62,7 +65,6 @@ pub const LogConfig = struct {
 
 const root = @import("root");
 const logger_config: LogConfig = if (@hasDecl(root, "logger_config")) root.logger_config else .{};
-// const game_log_level: Level = if (@hasDecl(root, "log_level")) root.log_level else .debug;
 
 const scope_levels: []const ScopeLevel = &[_]ScopeLevel{
     .{ .scope = .Engine, .level = engine_log_level },
@@ -70,23 +72,6 @@ const scope_levels: []const ScopeLevel = &[_]ScopeLevel{
 } ++ logger_config.custom_scopes;
 
 const log_fn: LogFn = logger_config.log_fn;
-
-/// Function to be used to remove all logging everywhere.
-/// straight up stole from tigerbeatle. Made sure to change the name.
-/// Use this as the log_fn in the root module to disable all logging
-pub fn nop_log(
-    comptime message_level: Level,
-    comptime scope: @Type(.EnumLiteral),
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    _ = .{
-        message_level,
-        scope,
-        format,
-        args,
-    };
-}
 
 const LogSystemData = struct {
     log_file: ?[]const u8 = null,
@@ -97,10 +82,8 @@ const LogSystemData = struct {
 var log_system_data: LogSystemData = .{ .tty_config = undefined, .buffered_writer = undefined };
 var system_initialized: bool = false;
 
-pub const LogError = error{UnableToGetConsoleScreenBuffer};
-
 /// Initializes the logging system by creating the buffered stderr writer
-pub fn init() LogError!void {
+pub fn init() !void {
     if (system_initialized) {
         core_log.warn("Trying to reinitialize the logging system\n", .{});
         return;
@@ -108,14 +91,7 @@ pub fn init() LogError!void {
 
     // Output is to stderr
     const stderr = std.io.getStdErr();
-    var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-    if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(stderr.handle, &info) != std.os.windows.TRUE) {
-        return LogError.UnableToGetConsoleScreenBuffer;
-    }
-    log_system_data.tty_config = std.io.tty.Config{ .windows_api = .{
-        .handle = stderr.handle,
-        .reset_attributes = info.wAttributes,
-    } };
+    log_system_data.tty_config = try platform.get_tty_config(stderr);
 
     const stdwrite = stderr.writer();
     log_system_data.buffered_writer = .{ .unbuffered_writer = stdwrite };
@@ -158,6 +134,23 @@ pub fn default_log(
         log_system_data.buffered_writer.flush() catch return;
         log_system_data.tty_config.setColor(writer, .reset) catch return;
     }
+}
+
+/// Function to be used to remove all logging everywhere.
+/// straight up stole from tigerbeatle. Made sure to change the name.
+/// Use this as the log_fn in the root module to disable all logging
+pub fn nop_log(
+    comptime message_level: Level,
+    comptime scope: @Type(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    _ = .{
+        message_level,
+        scope,
+        format,
+        args,
+    };
 }
 
 /// Log current stack trace. This is only correct in debug builds. In non debug builds this will be incorrect due to

@@ -4,14 +4,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const platform = b.addModule("platform", .{
+        .root_source_file = b.path("src/platform/platform.zig"),
+    });
+
     const core_lib = b.addModule("fr_core", .{
         .root_source_file = b.path("src/core/core.zig"),
+        .imports = &.{
+            .{ .name = "platform", .module = platform },
+        },
     });
 
     const fracture = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/fracture.zig"),
         .imports = &.{
             .{ .name = "fr_core", .module = core_lib },
+            .{ .name = "platform", .module = platform },
         },
     });
 
@@ -20,6 +28,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "fracture", .module = fracture },
             .{ .name = "fr_core", .module = core_lib },
+            .{ .name = "platform", .module = platform },
         },
     });
 
@@ -32,6 +41,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("entrypoint", entrypoint);
     exe.root_module.addImport("fracture", fracture);
     exe.root_module.addImport("fr_core", core_lib);
+    exe.root_module.addImport("platform", platform);
 
     b.installArtifact(exe);
 

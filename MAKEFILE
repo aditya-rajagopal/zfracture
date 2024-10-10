@@ -14,10 +14,10 @@ build_release: test
 release: test
 	zig build -Doptimize=ReleaseSafe && .\zig-out\bin\game.exe
 
+# distribution needs to pass tests first
 build_dist: test
 	zig build -Doptimize=ReleaseFast
 
-# distribution needs to pass tests first
 dist: test
 	zig build -Doptimize=ReleaseFast && .\zig-out\bin\game.exe
 
