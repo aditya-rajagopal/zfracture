@@ -1,3 +1,4 @@
 comptime {
-    _ = @import("fracture.zig");
+    _ = @import("application.zig");
+    _ = @import("memory.zig");
 }

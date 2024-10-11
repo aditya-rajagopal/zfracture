@@ -64,11 +64,31 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Copy documentation artifacts to prefix path");
     docs_step.dependOn(&install_docs.step);
 
+    const platform_unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/platform/platform.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const run_platform_unit_tests = b.addRunArtifact(platform_unit_tests);
+    run_platform_unit_tests.has_side_effects = true;
+
+    const core_unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/core/core.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    core_unit_tests.root_module.addImport("platform", platform);
+
+    const run_core_unit_tests = b.addRunArtifact(core_unit_tests);
+    run_core_unit_tests.has_side_effects = true;
+
     const engine_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/unit_test.zig"),
         .target = target,
         .optimize = optimize,
     });
+    engine_unit_tests.root_module.addImport("platform", platform);
+    engine_unit_tests.root_module.addImport("fr_core", core_lib);
 
     const run_engine_unit_tests = b.addRunArtifact(engine_unit_tests);
     run_engine_unit_tests.has_side_effects = true;
@@ -78,10 +98,15 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    game_unit_tests.root_module.addImport("entrypoint", entrypoint);
+    game_unit_tests.root_module.addImport("fracture", fracture);
+    game_unit_tests.root_module.addImport("fr_core", core_lib);
 
     const run_game_unit_tests = b.addRunArtifact(game_unit_tests);
     run_game_unit_tests.has_side_effects = true;
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_engine_unit_tests.step);
     test_step.dependOn(&run_game_unit_tests.step);
+    test_step.dependOn(&run_platform_unit_tests.step);
+    test_step.dependOn(&run_core_unit_tests.step);
 }

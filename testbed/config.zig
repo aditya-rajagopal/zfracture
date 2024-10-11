@@ -2,7 +2,16 @@ const fracture = @import("fracture");
 const core = @import("fr_core");
 const game = @import("game.zig");
 
-pub const app_api: fracture.config.API = .{
+pub const memory_tags = enum(u8) {
+    foo,
+    bar,
+};
+
+pub const allocator_tags = enum(u8) {
+    monsters,
+};
+
+pub const app_api: fracture.types.API = .{
     .init = game.init,
     .deinit = game.deinit,
     .update = game.update,
@@ -10,7 +19,7 @@ pub const app_api: fracture.config.API = .{
     .on_resize = game.on_resize,
 };
 
-pub const app_config: fracture.config.AppConfig = .{
+pub const app_config: fracture.types.AppConfig = .{
     .application_name = "Testbed",
     .window_pos = .{ .x = 100, .y = 100, .width = 1280, .height = 720 },
 };

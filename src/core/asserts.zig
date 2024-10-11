@@ -106,5 +106,11 @@ pub fn never(comptime src: std.builtin.SourceLocation) void {
     never_msg(src, "", .{});
 }
 
+test never {
+    if (0 == 1) {
+        never(@src());
+    }
+}
+
 const builtin = @import("builtin");
 const std = @import("std");

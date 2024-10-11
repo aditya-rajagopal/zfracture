@@ -9,13 +9,17 @@ const platform = @import("platform");
 const config = @import("config.zig");
 const app_config = config.app_config;
 
+const types = @import("types.zig");
+const memory = @import("memory.zig");
+
 // -------------------------------------------- Application Types ------------------------------------------------/
 
 const AppState = struct {
-    is_running: bool,
-    is_suspended: bool,
+    context: types.AppContext,
+    frame_arena: std.heap.ArenaAllocator,
     platform_state: platform.PlatformState,
-    allocator: std.mem.Allocator,
+    is_suspended: bool,
+    is_running: bool,
     width: i32,
     height: i32,
     last_time: f64,
@@ -43,23 +47,25 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!void {
     );
     core_log.info("Platform layer has been initialized", .{});
 
-    app_state.allocator = allocator;
+    app_state.context.gpa = allocator;
+    app_state.frame_arena = std.heap.ArenaAllocator.init(allocator);
+    app_state.context.frame_allocator = app_state.frame_arena.allocator();
 
-    if (!config.app_api.init(app_state.allocator)) {
+    if (!config.app_api.init(&app_state.context)) {
         core_log.fatal("Client application failed to initialize", .{});
         return ApplicationError.ClientAppInit;
     }
 
     core_log.info("Client application has been initialized", .{});
 
-    config.app_api.on_resize(app_config.window_pos.width, app_config.window_pos.height);
+    config.app_api.on_resize(&app_state.context, app_config.window_pos.width, app_config.window_pos.height);
 
     initialized = true;
 }
 
 pub fn deinit() void {
     debug_assert(initialized, @src(), "Trying to deinit application when none was created.", .{});
-    config.app_api.deinit();
+    config.app_api.deinit(&app_state.context);
     core_log.info("Client application has been shutdown", .{});
 
     platform.deinit(&app_state.platform_state);
@@ -73,17 +79,21 @@ pub fn run() ApplicationError!void {
     var err: ?ApplicationError = null;
 
     while (app_state.is_running) {
+        if (!app_state.frame_arena.reset(.retain_capacity)) {
+            @setCold(true);
+            core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
+        }
         platform.pump_messages(&app_state.platform_state);
 
         if (!app_state.is_suspended) {
-            if (!config.app_api.update(0.0)) {
+            if (!config.app_api.update(&app_state.context, 0.0)) {
                 @setCold(true);
                 core_log.fatal("Client app update failed, shutting down", .{});
                 err = ApplicationError.FailedUpdate;
                 break;
             }
 
-            if (!config.app_api.render(0.0)) {
+            if (!config.app_api.render(&app_state.context, 0.0)) {
                 @setCold(true);
                 core_log.fatal("Client app render failed, shutting down", .{});
                 err = ApplicationError.FailedRender;

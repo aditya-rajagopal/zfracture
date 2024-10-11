@@ -24,5 +24,9 @@ pub const get_tty_config = platform.get_tty_config;
 /// Get the platform specific allocator
 pub const get_allocator = platform.get_allocator;
 
+test {
+    std.testing.refAllDeclsRecursive(platform);
+}
+
 const builtin = @import("builtin");
 const std = @import("std");

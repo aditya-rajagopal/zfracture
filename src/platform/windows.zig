@@ -117,11 +117,6 @@ pub fn get_allocator() std.mem.Allocator {
     return std.heap.page_allocator;
 }
 
-test init {
-    var state: InternalState = undefined;
-    try init(&state, "Fracture Engine", 0, 0, 1280, 720);
-}
-
 // -------------------------------------- private functions -------------------------------------------/
 
 fn win32_process_message(
