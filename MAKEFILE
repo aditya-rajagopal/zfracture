@@ -11,7 +11,7 @@ debug:
 build_release: test
 	zig build -Doptimize=ReleaseSafe
 
-release: test
+release:
 	zig build -Doptimize=ReleaseSafe && .\zig-out\bin\game.exe
 
 # distribution needs to pass tests first

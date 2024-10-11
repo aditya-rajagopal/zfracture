@@ -56,6 +56,20 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    const exe_check = b.addExecutable(.{
+        .name = "game",
+        .root_source_file = b.path("testbed/app.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_check.root_module.addImport("entrypoint", entrypoint);
+    exe_check.root_module.addImport("fracture", fracture);
+    exe_check.root_module.addImport("fr_core", core_lib);
+    exe_check.root_module.addImport("platform", platform);
+
+    const check_step = b.step("check", "Check if the app compiles");
+    check_step.dependOn(&exe_check.step);
+
     const install_docs = b.addInstallDirectory(.{
         .source_dir = exe.getEmittedDocs(),
         .install_dir = .prefix,

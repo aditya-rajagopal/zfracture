@@ -10,7 +10,6 @@ const config = @import("config.zig");
 const app_config = config.app_config;
 
 const types = @import("types.zig");
-const memory = @import("memory.zig");
 
 // -------------------------------------------- Application Types ------------------------------------------------/
 
@@ -47,9 +46,13 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!void {
     );
     core_log.info("Platform layer has been initialized", .{});
 
-    app_state.context.gpa = allocator;
-    app_state.frame_arena = std.heap.ArenaAllocator.init(allocator);
-    app_state.context.frame_allocator = app_state.frame_arena.allocator();
+    app_state.context.gpa = types.GPA{};
+    app_state.context.gpa.init(allocator);
+    const arena_allocator = app_state.context.gpa.get_type_allocator(.frame_arena);
+
+    app_state.frame_arena = std.heap.ArenaAllocator.init(arena_allocator);
+    app_state.context.frame_allocator = types.FrameArena{};
+    app_state.context.frame_allocator.init(app_state.frame_arena.allocator());
 
     if (!config.app_api.init(&app_state.context)) {
         core_log.fatal("Client application failed to initialize", .{});
@@ -59,7 +62,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!void {
     core_log.info("Client application has been initialized", .{});
 
     config.app_api.on_resize(&app_state.context, app_config.window_pos.width, app_config.window_pos.height);
-
+    core_log.info("Application has been initialized", .{});
     initialized = true;
 }
 
@@ -71,6 +74,14 @@ pub fn deinit() void {
     platform.deinit(&app_state.platform_state);
     core_log.info("Platform layer has been shutdown", .{});
 
+    app_state.context.gpa.print_memory_stats();
+    app_state.context.frame_allocator.print_memory_stats();
+
+    app_state.context.gpa.deinit();
+    app_state.context.frame_allocator.deinit();
+    app_state.frame_arena.deinit();
+    core_log.info("Context memory has been shutdown", .{});
+
     initialized = false;
 }
 
@@ -78,11 +89,15 @@ pub fn run() ApplicationError!void {
     debug_assert(initialized, @src(), "Trying to run application when none was created.", .{});
     var err: ?ApplicationError = null;
 
+    app_state.context.gpa.print_memory_stats();
+
     while (app_state.is_running) {
         if (!app_state.frame_arena.reset(.retain_capacity)) {
             @setCold(true);
             core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
+        app_state.context.frame_allocator.reset_stats();
+
         platform.pump_messages(&app_state.platform_state);
 
         if (!app_state.is_suspended) {

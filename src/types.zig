@@ -2,12 +2,15 @@ pub const TrackingAllocator = memory.TrackingAllocator;
 pub const MemoryTag = memory.MemoryTag;
 pub const AllocatorTag = memory.AllocatorTag;
 
+pub const GPA: type = TrackingAllocator(.gpa);
+pub const FrameArena: type = TrackingAllocator(.frame_arena);
+
 /// The data passed to the application API
 pub const AppContext = struct {
     /// The general allocator used to allocate permanent data
-    gpa: TrackingAllocator(.gpa),
+    gpa: GPA,
     /// Temporary Allocator that is cleared each frame. Used for storing transient frame data.
-    frame_allocator: TrackingAllocator(.frame_arena),
+    frame_allocator: FrameArena,
 };
 
 /// Game API that must be defined by the application

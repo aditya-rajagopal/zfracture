@@ -40,6 +40,8 @@ const platform = @import("platform");
 // TODO(aditya):
 // - [ ] Change the log function to also optionally write to a log file in addition to console
 // - [ ] Seperate log thread? job?
+//       - [ ] Could this be done by having a logger that has a memory arena and adds data to a buffer and every second
+//             dumps the data into the log and reset the arena. After max logs are written there is no allocations.
 
 /// The logger for the engine
 pub const core_log = scoped(.Engine);

@@ -9,7 +9,14 @@ else
     @compileError("app.zig must define a pub fn start(std.mem.Allocator) void {}");
 
 pub fn main() !void {
-    const allocator = platform.get_allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer {
+        const check = gpa.deinit();
+        if (check == .leak) {
+            @panic("memory leak");
+        }
+    }
 
     core.logging.init();
     errdefer core.logging.deinit();
