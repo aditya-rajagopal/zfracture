@@ -1,8 +1,7 @@
-const fracture = @import("fracture");
 const core = @import("fr_core");
 const game = @import("game.zig");
 
-pub const app_api: fracture.types.API = .{
+pub const app_api: core.API = .{
     .init = game.init,
     .deinit = game.deinit,
     .update = game.update,
@@ -10,8 +9,8 @@ pub const app_api: fracture.types.API = .{
     .on_resize = game.on_resize,
 };
 
-pub const app_config: fracture.types.AppConfig = .{
+pub const app_config: core.AppConfig = .{
     .application_name = "Testbed",
     .window_pos = .{ .x = 100, .y = 100, .width = 1280, .height = 720 },
-    .frame_arena_preheat_bytes = 512 * fracture.defines.MB,
+    .frame_arena_preheat_bytes = 512 * core.defines.MB,
 };

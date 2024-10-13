@@ -10,6 +10,14 @@ pub const EngineMemoryTag = enum(u8) {
 pub const GPA = TrackingAllocator(.gpa, EngineMemoryTag);
 pub const FrameArena: type = TrackingAllocator(.frame_arena, EngineMemoryTag);
 
+/// The memory system passed to the game
+pub const Memory = struct {
+    /// The general allocator used to allocate permanent data
+    gpa: GPA = undefined,
+    /// Temporary Allocator that is cleared each frame. Used for storing transient frame data.
+    frame_allocator: FrameArena = undefined,
+};
+
 ///! An allocator that allows you to track total allocations and deallocations of the backing allocator
 ///! During release memory stats are not tracked and this essentially becomes a thin wrapper around
 ///! the backing allocator
@@ -222,7 +230,6 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.EnumLiteral), comptime Memor
     };
 }
 
-// // TODO: Write memory tests
 test "type consistency" {
     const allocType = TrackingAllocator(.testing, EngineMemoryTag);
     const allocType2 = TrackingAllocator(.testing, EngineMemoryTag);
@@ -231,7 +238,6 @@ test "type consistency" {
     try std.testing.expect(allocType == allocType2);
     var alloc: allocType = allocType{};
     alloc.init(std.testing.allocator);
-    std.debug.print("Size of {d}\n", .{@sizeOf(gpa)});
     defer alloc.deinit();
 }
 

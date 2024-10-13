@@ -7,13 +7,11 @@ const platform = @import("platform/platform.zig");
 const config = @import("config.zig");
 const app_config = config.app_config;
 
-const types = @import("types/types.zig");
-const event = @import("event.zig");
-
 pub const Application = @This();
 platform_state: platform.PlatformState = undefined,
-engine: types.Fracture = undefined,
+engine: core.Fracture = undefined,
 frame_arena: std.heap.ArenaAllocator = undefined,
+game_state: *anyopaque,
 
 const ApplicationError =
     error{ ClientAppInit, FailedUpdate, FailedRender } || platform.PlatformError || std.mem.Allocator.Error || core.log.LoggerError;
@@ -51,10 +49,10 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.engine.memory.gpa.init(allocator);
     const arena_allocator = app.engine.memory.gpa.get_type_allocator(.frame_arena);
     if (comptime builtin.mode == .Debug) {
-        app.engine.memory.gpa.memory_stats.current_memory[@intFromEnum(core.EngineMemoryTag.application)] = @sizeOf(Application);
+        app.engine.memory.gpa.memory_stats.current_memory[@intFromEnum(core.mem.EngineMemoryTag.application)] = @sizeOf(Application);
         app.engine.memory.gpa.memory_stats.current_total_memory = @sizeOf(Application);
         app.engine.memory.gpa.memory_stats.peak_total_memory = @sizeOf(Application);
-        app.engine.memory.gpa.memory_stats.peak_memory[@intFromEnum(core.EngineMemoryTag.application)] = @sizeOf(Application);
+        app.engine.memory.gpa.memory_stats.peak_memory[@intFromEnum(core.mem.EngineMemoryTag.application)] = @sizeOf(Application);
     }
 
     app.frame_arena = std.heap.ArenaAllocator.init(arena_allocator);
@@ -71,19 +69,19 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.engine.core_log.info("Memory has been initialized", .{});
 
     // Event
-    try event.init(&app.engine.memory);
-    errdefer event.deinit();
+    try app.engine.event.init();
+    errdefer app.engine.event.deinit();
 
     // Application
-    if (!config.app_api.init(&app.engine)) {
+    app.game_state = config.app_api.init(&app.engine) orelse {
         @setCold(true);
         app.engine.core_log.fatal("Client application failed to initialize", .{});
         return ApplicationError.ClientAppInit;
-    }
+    };
 
     app.engine.core_log.info("Client application has been initialized", .{});
 
-    config.app_api.on_resize(&app.engine, app_config.window_pos.width, app_config.window_pos.height);
+    config.app_api.on_resize(&app.engine, app.game_state, app_config.window_pos.width, app_config.window_pos.height);
     app.engine.core_log.info("Application has been initialized", .{});
 
     return app;
@@ -92,11 +90,11 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 pub fn deinit(self: *Application) void {
 
     // Application shutdown
-    config.app_api.deinit(&self.engine);
+    config.app_api.deinit(&self.engine, self.game_state);
     self.engine.core_log.info("Client application has been shutdown", .{});
 
     // Event shutdown
-    event.deinit();
+    self.engine.event.deinit();
 
     // Platform shutdown
     platform.deinit(&self.platform_state);
@@ -140,14 +138,14 @@ pub fn run(self: *Application) ApplicationError!void {
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
-            if (!config.app_api.update(&self.engine, 0.0)) {
+            if (!config.app_api.update(&self.engine, self.game_state)) {
                 @setCold(true);
                 core_log.fatal("Client app update failed, shutting down", .{});
                 err = ApplicationError.FailedUpdate;
                 break;
             }
 
-            if (!config.app_api.render(&self.engine, 0.0)) {
+            if (!config.app_api.render(&self.engine, self.game_state)) {
                 @setCold(true);
                 core_log.fatal("Client app render failed, shutting down", .{});
                 err = ApplicationError.FailedRender;

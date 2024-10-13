@@ -1,5 +1,4 @@
 const core_log = @import("fr_core");
-const input = @import("../input.zig");
 const windows = std.os.windows;
 
 /// The windows internal state

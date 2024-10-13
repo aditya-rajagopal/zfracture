@@ -1,4 +1,4 @@
-const fracture = @import("fracture");
+const application = @import("application.zig");
 const core = @import("fr_core");
 
 // const root = @import("root");
@@ -19,7 +19,7 @@ pub fn main() !void {
         }
     }
 
-    var app = try fracture.application.init(allocator);
+    var app = try application.init(allocator);
     errdefer app.deinit();
 
     try app.run();

@@ -1,6 +1,7 @@
 # Things needed in the Fracture Engine
 
 ## Engine general:
+- [ ] Test if the game can be loaded as a DLL in debug and statically linked in release
 - [ ] logging
     - [x] Create basic logging functionality
     - [x] Make logs coloured based on log level
@@ -12,9 +13,8 @@
 - [ ] Memory System
     - [x] Create a tracking allocator that resolves to a normal allocator in release
     - [x] Add allocators to the context passed to the game. One GPA and one FrameArena
-    - [ ] Move memory into core
-    - [ ] Remove merge enums from memory and let the game handle it's own memory
-    - [ ] Remove this in favour of having the game do it's own TrackingAllocator if needed
+    - [x] Move memory into core
+    - [x] Remove merge enums from memory and let the game handle it's own memory
     - [ ] Create a custom allocator for Fracture that allows larger virtual space allocations for expanding allocations
 - [ ] windows platform layer
     - [x] Create a window
@@ -22,8 +22,8 @@
     - [ ] Handles events and dispatch to the event system
 - [ ] Event system
     - [x] Basic event handling and types
-    - [ ] Move event system into core as type
-    - [ ] Move event state into Engine
+    - [x] Move event system into core as type
+    - [x] Move event state into Engine
     - [ ] Create multiple lists for handling frame future events and timed events
         - [ ] Create an EventData pool for the deffered events storage
     - [ ] Decide if we need additional context for listeners and senders
@@ -42,5 +42,5 @@
 - [ ] Instrumentation
 - [ ] Renderer
 - [ ] Jobs System
-- [ ] Move types into core
-- [ ] Application and platform should be part of entry point
+- [x] Move types into core
+- [x] Application and platform should be part of entry point

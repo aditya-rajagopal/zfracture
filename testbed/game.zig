@@ -1,46 +1,47 @@
-const types = @import("fracture").types;
 const config = @import("config.zig");
 const core = @import("fr_core");
 
 pub const GameState = struct {
     delta_time: f64,
+    testing: bool = false,
 };
 
-var game_state: *GameState = undefined;
-var testing: bool = true;
-
-pub fn init(ctx: *types.Fracture) bool {
-    const foo_allocator = ctx.memory.gpa.get_type_allocator(.game);
-    game_state = foo_allocator.create(GameState) catch return false;
-    return true;
+pub fn init(engine: *core.Fracture) ?*anyopaque {
+    const foo_allocator: std.mem.Allocator = engine.memory.gpa.get_type_allocator(.game);
+    const state = foo_allocator.create(GameState) catch return null;
+    state.testing = true;
+    state.delta_time = 0.0;
+    return state;
 }
 
-pub fn deinit(ctx: *types.Fracture) void {
-    const foo_allocator = ctx.memory.gpa.get_type_allocator(.game);
-    foo_allocator.destroy(game_state);
+pub fn deinit(engine: *core.Fracture, game_state: *anyopaque) void {
+    const state: *GameState = @ptrCast(@alignCast(game_state));
+    const foo_allocator = engine.memory.gpa.get_type_allocator(.game);
+    foo_allocator.destroy(state);
 }
 
-pub fn update(ctx: *types.Fracture, delta_time: f64) bool {
-    game_state.delta_time = delta_time;
-    if (testing) {
-        const frame_alloc = ctx.memory.frame_allocator.get_type_allocator(.application);
+pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
+    const state: *GameState = @ptrCast(@alignCast(game_state));
+    if (state.testing) {
+        const frame_alloc = engine.memory.frame_allocator.get_type_allocator(.application);
         const temp_data = frame_alloc.alloc(f32, 16) catch return false;
-        ctx.memory.gpa.print_memory_stats(&ctx.core_log);
-        ctx.memory.frame_allocator.print_memory_stats(&ctx.core_log);
+        engine.memory.gpa.print_memory_stats(&engine.core_log);
+        engine.memory.frame_allocator.print_memory_stats(&engine.core_log);
         frame_alloc.free(temp_data);
-        testing = false;
+        state.testing = false;
     }
     return true;
 }
 
-pub fn render(ctx: *types.Fracture, delta_time: f64) bool {
-    _ = ctx;
-    _ = delta_time;
+pub fn render(engine: *core.Fracture, game_state: *anyopaque) bool {
+    _ = engine;
+    _ = game_state;
     return true;
 }
 
-pub fn on_resize(ctx: *types.Fracture, width: u32, height: u32) void {
-    _ = ctx; // autofix
+pub fn on_resize(engine: *core.Fracture, game_state: *anyopaque, width: u32, height: u32) void {
+    _ = engine; // autofix
+    _ = game_state;
     _ = width;
     _ = height;
 }

@@ -9,24 +9,15 @@ pub fn build(b: *std.Build) void {
     // });
 
     const core_lib = b.addModule("fr_core", .{
-        .root_source_file = b.path("src/core/core.zig"),
+        .root_source_file = b.path("src/core/fracture.zig"),
         // .imports = &.{
         //     .{ .name = "platform", .module = platform },
         // },
     });
 
-    const fracture = b.addModule("entrypoint", .{
-        .root_source_file = b.path("src/fracture.zig"),
-        .imports = &.{
-            .{ .name = "fr_core", .module = core_lib },
-            // .{ .name = "platform", .module = platform },
-        },
-    });
-
     const entrypoint = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/entrypoint.zig"),
         .imports = &.{
-            .{ .name = "fracture", .module = fracture },
             .{ .name = "fr_core", .module = core_lib },
             // .{ .name = "platform", .module = platform },
         },
@@ -41,7 +32,6 @@ pub fn build(b: *std.Build) void {
         // .use_lld = false,
     });
     exe.root_module.addImport("entrypoint", entrypoint);
-    exe.root_module.addImport("fracture", fracture);
     exe.root_module.addImport("fr_core", core_lib);
     // exe.root_module.addImport("platform", platform);
 
@@ -65,7 +55,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe_check.root_module.addImport("entrypoint", entrypoint);
-    exe_check.root_module.addImport("fracture", fracture);
     exe_check.root_module.addImport("fr_core", core_lib);
     // exe_check.root_module.addImport("platform", platform);
 
@@ -115,7 +104,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     game_unit_tests.root_module.addImport("entrypoint", entrypoint);
-    game_unit_tests.root_module.addImport("fracture", fracture);
     game_unit_tests.root_module.addImport("fr_core", core_lib);
 
     const run_game_unit_tests = b.addRunArtifact(game_unit_tests);
