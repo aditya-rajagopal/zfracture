@@ -8,9 +8,6 @@
 //      - [ ] Do permanent events need a seperate structure?
 //      - [ ] Priority queue for deferred events?
 const core = @import("fr_core");
-const debug_assert_msg = core.asserts.debug_assert_msg;
-const never_msg = core.asserts.never_msg;
-const core_log = core.logging.core_log;
 
 const types = @import("types/types.zig");
 
@@ -30,13 +27,13 @@ var local_arena: std.heap.ArenaAllocator = undefined;
 var initialized: bool = false;
 
 /// Initialize the event system
-pub fn init(ctx: *types.AppContext) !void {
-    debug_assert_msg(
-        !initialized,
-        @src(),
-        "Reinitializing Event system.",
-        .{},
-    );
+pub fn init(ctx: *types.Memory) !void {
+    // debug_assert_msg(
+    //     !initialized,
+    //     @src(),
+    //     "Reinitializing Event system.",
+    //     .{},
+    // );
     _ = ctx;
     // const allocator = ctx.gpa.get_type_allocator(.event);
     // local_arena = std.heap.ArenaAllocator.init(allocator);
@@ -51,12 +48,12 @@ pub fn init(ctx: *types.AppContext) !void {
 
 /// Cleanup the event system
 pub fn deinit() void {
-    debug_assert_msg(
-        initialized,
-        @src(),
-        "Reinitializing Event system.",
-        .{},
-    );
+    // debug_assert_msg(
+    //     initialized,
+    //     @src(),
+    //     "Reinitializing Event system.",
+    //     .{},
+    // );
     initialized = false;
 }
 
@@ -70,18 +67,18 @@ pub fn deinit() void {
 ///     - event_code: Comptime known code for the type of event that needs to be listened for
 ///     - callback: Function to call when an event is fired
 pub fn register(comptime event_code: types.EventCode, callback: types.EventCallback) bool {
-    debug_assert_msg(
-        initialized,
-        @src(),
-        "Cannot register to the Event system. Not Initialized.",
-        .{},
-    );
+    // debug_assert_msg(
+    //     initialized,
+    //     @src(),
+    //     "Cannot register to the Event system. Not Initialized.",
+    //     .{},
+    // );
 
     const code: usize = @intFromEnum(event_code);
     const array_list = &event_state.callbacks[code];
     for (array_list.items) |c| {
         if (c == callback) {
-            never_msg(@src(), "Trying to register callback for event_code: {d} again", .{code});
+            // never_msg(@src(), "Trying to register callback for event_code: {d} again", .{code});
             return false;
         }
     }
@@ -99,12 +96,12 @@ pub fn register(comptime event_code: types.EventCode, callback: types.EventCallb
 ///     - event_code: Comptime known code for the type of event that the callback was registered for
 ///     - callback: Function pointer that was registered
 pub fn deregister(event_code: types.EventCode, callback: types.EventCallback) bool {
-    debug_assert_msg(
-        initialized,
-        @src(),
-        "Cannot deregister from the Event system. Not Initialized.",
-        .{},
-    );
+    // debug_assert_msg(
+    //     initialized,
+    //     @src(),
+    //     "Cannot deregister from the Event system. Not Initialized.",
+    //     .{},
+    // );
     const code: usize = @intFromEnum(event_code);
     const array_list = &event_state.callbacks[code];
     for (array_list.items, 0..) |c, i| {
@@ -116,7 +113,7 @@ pub fn deregister(event_code: types.EventCode, callback: types.EventCallback) bo
             return true;
         }
     }
-    never_msg(@src(), "Deregistering an event that was not registered", .{});
+    // never_msg(@src(), "Deregistering an event that was not registered", .{});
     return false;
 }
 
@@ -132,12 +129,12 @@ pub fn dispatch_deffered() bool {
 ///     - event_code: Comptime known code for the type of event that is being fired
 ///     - event_data: the packet that is forwarded to all callbacks
 pub fn fire(comptime event_code: types.EventCode, event_data: types.EventData) bool {
-    debug_assert_msg(
-        initialized,
-        @src(),
-        "Cannot fire an event. Event system not Initialized.",
-        .{},
-    );
+    // debug_assert_msg(
+    //     initialized,
+    //     @src(),
+    //     "Cannot fire an event. Event system not Initialized.",
+    //     .{},
+    // );
     const code: usize = @intFromEnum(event_code);
     const array_list = &event_state.callbacks[code];
 
@@ -154,7 +151,7 @@ pub fn fire_deffered() bool {
 }
 
 test "Event" {
-    var app_context: types.AppContext = undefined;
+    var app_context: types.Memory = undefined;
     try init(&app_context);
     errdefer deinit();
     defer deinit();

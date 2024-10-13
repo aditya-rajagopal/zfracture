@@ -1,3 +1,6 @@
+check:
+	zig build check
+
 test:
 	zig build test --summary new -freference-trace
 

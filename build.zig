@@ -37,6 +37,8 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("testbed/app.zig"),
         .target = target,
         .optimize = optimize,
+        // .use_llvm = false,
+        // .use_lld = false,
     });
     exe.root_module.addImport("entrypoint", entrypoint);
     exe.root_module.addImport("fracture", fracture);

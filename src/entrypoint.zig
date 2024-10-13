@@ -1,5 +1,4 @@
 const fracture = @import("fracture");
-const platform = @import("platform");
 const core = @import("fr_core");
 
 // const root = @import("root");
@@ -20,13 +19,12 @@ pub fn main() !void {
         }
     }
 
-    try fracture.application.init(allocator);
-    errdefer fracture.application.deinit();
-    fracture.core_log.info("Application has been initialized", .{});
+    var app = try fracture.application.init(allocator);
+    errdefer app.deinit();
 
-    try fracture.application.run();
+    try app.run();
 
-    fracture.application.deinit();
+    app.deinit();
 
     const check = gpa.deinit();
     if (check == .leak) {

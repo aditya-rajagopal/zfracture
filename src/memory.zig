@@ -1,6 +1,4 @@
 const core = @import("fr_core");
-const core_log = core.logging.core_log;
-const debug_assert = core.asserts.debug_assert_msg;
 const client_memory_tags = @import("config.zig").client_memory_tags;
 const client_allocator_tags = @import("config.zig").client_allocator_tags;
 
@@ -9,6 +7,7 @@ const EngineMemoryTag = enum(u8) {
     event,
     renderer,
     application,
+    game,
     frame_arena,
 };
 
@@ -18,6 +17,7 @@ const EngineMemoryTypes = enum(u8) {
     testing,
 };
 
+// TODO: Remove this in favour of having the game do it's own TrackingAllocator if needed
 /// The combined engine and client memory tags to track
 pub const MemoryTag: type = core.MergeEnums(&[_]type{ EngineMemoryTag, client_memory_tags }, u8);
 
@@ -64,12 +64,12 @@ pub fn TrackingAllocator(comptime alloc_tag: AllocatorTag) type {
         const Self = @This();
 
         pub fn init(self: *Self, allocator: Allocator) void {
-            debug_assert(
-                !initialized,
-                @src(),
-                "Reinitializing {s} allocator. Each allocator type can only be initalized once.",
-                .{@tagName(struct_tag)},
-            );
+            // debug_assert(
+            //     !initialized,
+            //     @src(),
+            //     "Reinitializing {s} allocator. Each allocator type can only be initalized once.",
+            //     .{@tagName(struct_tag)},
+            // );
             self.backing_allocator = allocator;
             if (comptime memory_tag_len != 0) {
                 inline for (AllocatorTypes, 0..) |t, i| {
@@ -88,23 +88,23 @@ pub fn TrackingAllocator(comptime alloc_tag: AllocatorTag) type {
         }
 
         pub fn deinit(self: *Self) void {
-            debug_assert(
-                initialized,
-                @src(),
-                "Double shutdown of {s} allocator.",
-                .{@tagName(struct_tag)},
-            );
+            // debug_assert(
+            //     initialized,
+            //     @src(),
+            //     "Double shutdown of {s} allocator.",
+            //     .{@tagName(struct_tag)},
+            // );
             self.backing_allocator = undefined;
             initialized = false;
         }
 
         pub fn get_type_allocator(self: *const Self, comptime tag: MemoryTag) Allocator {
-            debug_assert(
-                initialized,
-                @src(),
-                "Use of {s} allocator before init or after shutdown.",
-                .{@tagName(struct_tag)},
-            );
+            // debug_assert(
+            //     initialized,
+            //     @src(),
+            //     "Use of {s} allocator before init or after shutdown.",
+            //     .{@tagName(struct_tag)},
+            // );
             if (comptime memory_tag_len != 0) {
                 return type_allocators[@intFromEnum(tag)];
             } else {
@@ -113,12 +113,12 @@ pub fn TrackingAllocator(comptime alloc_tag: AllocatorTag) type {
         }
 
         pub fn reset_stats(self: *Self) void {
-            debug_assert(
-                initialized,
-                @src(),
-                "Use of {s} allocator before init or after shutdown.",
-                .{@tagName(struct_tag)},
-            );
+            // debug_assert(
+            //     initialized,
+            //     @src(),
+            //     "Use of {s} allocator before init or after shutdown.",
+            //     .{@tagName(struct_tag)},
+            // );
             _ = self;
             if (comptime memory_tag_len != 0) {
                 memory_stats.current_total_memory = 0;
@@ -127,23 +127,23 @@ pub fn TrackingAllocator(comptime alloc_tag: AllocatorTag) type {
         }
 
         pub fn query_stats(self: *Self) *const MemoryStats {
-            debug_assert(
-                initialized,
-                @src(),
-                "Use of {s} allocator before init or after shutdown.",
-                .{@tagName(struct_tag)},
-            );
+            // debug_assert(
+            //     initialized,
+            //     @src(),
+            //     "Use of {s} allocator before init or after shutdown.",
+            //     .{@tagName(struct_tag)},
+            // );
             _ = self;
             return &memory_stats;
         }
 
-        pub fn print_memory_stats(self: *Self) void {
-            debug_assert(
-                initialized,
-                @src(),
-                "Use of {s} allocator before init or after shutdown.",
-                .{@tagName(struct_tag)},
-            );
+        pub fn print_memory_stats(self: *Self, core_log: *core.log.CoreLog) void {
+            // debug_assert(
+            //     initialized,
+            //     @src(),
+            //     "Use of {s} allocator before init or after shutdown.",
+            //     .{@tagName(struct_tag)},
+            // );
             _ = self;
             if (comptime memory_tag_len != 0) {
                 core_log.debug("Memory Subsystem[{s}]: ", .{@tagName(struct_tag)});

@@ -1,5 +1,4 @@
-pub const logging = @import("logging.zig");
-pub const asserts = @import("asserts.zig");
+pub const log = @import("log.zig");
 pub const defines = @import("defines.zig");
 
 pub const MergeEnums = comptime_funcs.MergeEnums;
