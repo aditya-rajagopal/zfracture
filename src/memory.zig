@@ -1,10 +1,12 @@
 const core = @import("fr_core");
 const core_log = core.logging.core_log;
 const debug_assert = core.asserts.debug_assert_msg;
-const config = @import("config.zig");
+const client_memory_tags = @import("config.zig").client_memory_tags;
+const client_allocator_tags = @import("config.zig").client_allocator_tags;
 
 const EngineMemoryTag = enum(u8) {
     unknown = 0,
+    event,
     renderer,
     application,
     frame_arena,
@@ -17,10 +19,10 @@ const EngineMemoryTypes = enum(u8) {
 };
 
 /// The combined engine and client memory tags to track
-pub const MemoryTag: type = core.MergeEnums(&[_]type{ EngineMemoryTag, config.client_memory_tags }, u8);
+pub const MemoryTag: type = core.MergeEnums(&[_]type{ EngineMemoryTag, client_memory_tags }, u8);
 
 /// The combined engine and client allocators that can be created
-pub const AllocatorTag: type = core.MergeEnums(&[_]type{ EngineMemoryTypes, config.client_allocator_tags }, u8);
+pub const AllocatorTag: type = core.MergeEnums(&[_]type{ EngineMemoryTypes, client_allocator_tags }, u8);
 
 const memory_tag_len = switch (builtin.mode) {
     .Debug => std.enums.directEnumArrayLen(MemoryTag, 256),

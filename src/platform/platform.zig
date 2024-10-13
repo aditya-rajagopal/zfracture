@@ -19,8 +19,6 @@ pub const init = platform.init;
 pub const deinit = platform.deinit;
 /// Read and process all the platform event messages in queue
 pub const pump_messages = platform.pump_messages;
-/// Get the terminal config for colouring
-pub const get_tty_config = platform.get_tty_config;
 /// Get the platform specific allocator
 pub const get_allocator = platform.get_allocator;
 

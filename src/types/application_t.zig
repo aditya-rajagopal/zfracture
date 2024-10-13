@@ -1,6 +1,4 @@
-pub const TrackingAllocator = memory.TrackingAllocator;
-pub const MemoryTag = memory.MemoryTag;
-pub const AllocatorTag = memory.AllocatorTag;
+const TrackingAllocator = @import("../memory.zig").TrackingAllocator;
 
 pub const GPA: type = TrackingAllocator(.gpa);
 pub const FrameArena: type = TrackingAllocator(.frame_arena);
@@ -32,12 +30,10 @@ pub const API = struct {
 /// The configuration of the application that must be defined by the client
 pub const AppConfig = struct {
     /// The name of the application displayed on the window
-    application_name: [:0]const u8,
+    application_name: [:0]const u8 = "Unnamed Application. Please Name the application",
     /// The initial position and size of the window
-    window_pos: struct { x: i32, y: i32, width: i32, height: i32 },
+    window_pos: struct { x: i32 = 0, y: i32 = 0, width: i32 = 1280, height: i32 = 720 } = .{},
+    /// The value to start the frame_arena at. It can still grow after but this can be set by the
+    /// application to a reasonable upper bound to prevent reallocations
+    frame_arena_preheat_bytes: u64 = 0,
 };
-
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-
-const memory = @import("memory.zig");

@@ -1,4 +1,5 @@
 const types = @import("fracture").types;
+const config = @import("config.zig");
 
 pub const GameState = struct {
     delta_time: f64,

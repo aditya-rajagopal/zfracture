@@ -1,3 +1,5 @@
+const core_log = @import("fr_core");
+const input = @import("../input.zig");
 const windows = std.os.windows;
 
 /// The windows internal state
@@ -8,7 +10,6 @@ pub const InternalState = struct {
     hwnd: ?windows.HWND,
 };
 
-pub const TTYError = error{UnableToGetConsoleScreenBuffer};
 pub const Error = error{ FailedHandleGet, WndRegistrationFailed };
 
 const window_class_name: [*:0]const u8 = "fracture_window_class";
@@ -100,17 +101,6 @@ pub fn pump_messages(platform_state: *InternalState) void {
         _ = win32.TranslateMessage(&msg);
         _ = win32.DispatchMessageA(&msg);
     }
-}
-
-pub fn get_tty_config(file: std.fs.File) TTYError!std.io.tty.Config {
-    var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-    if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(file.handle, &info) != std.os.windows.TRUE) {
-        return TTYError.UnableToGetConsoleScreenBuffer;
-    }
-    return std.io.tty.Config{ .windows_api = .{
-        .handle = file.handle,
-        .reset_attributes = info.wAttributes,
-    } };
 }
 
 pub fn get_allocator() std.mem.Allocator {

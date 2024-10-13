@@ -35,7 +35,7 @@
 ///! // -------- in app.zig ----------------
 ///! pub const config = @import("config");
 ///! ```
-const platform = @import("platform");
+const platform = @import("core_platform.zig");
 
 // TODO(aditya):
 // - [ ] Change the log function to also optionally write to a log file in addition to console

@@ -22,6 +22,7 @@ pub const app_api: fracture.types.API = .{
 pub const app_config: fracture.types.AppConfig = .{
     .application_name = "Testbed",
     .window_pos = .{ .x = 100, .y = 100, .width = 1280, .height = 720 },
+    .frame_arena_preheat_bytes = 512 * fracture.defines.MB,
 };
 
 pub const logger_config: core.logging.LogConfig = .{

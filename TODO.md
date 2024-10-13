@@ -16,12 +16,22 @@
     - [ ] Support multiple windows
     - [ ] Handles events and dispatch to the event system
 - [ ] Event system
+    - [x] Basic event handling and types
+    - [ ] Create multiple lists for handling frame future events and timed events
+        - [ ] Create an EventData pool for the deffered events storage
+    - [ ] Decide if we need additional context for listeners and senders
+    - [ ] Does the event system need the idea of layers so that certain handlers get first shot at handling events
+    - [ ] Do permanent events need a seperate structure?
+    - [ ] Priority queue for deferred events?
 - [ ] Input system
+- [ ] Signal System
+    - [ ] Decide if there is a need for signal plug and socket system.
 - [ ] SIMD Math Library
 - [ ] Containers
-    - [ ] StaticArrayList
+    - [ ] StaticArrayList: Partially implemented
     - [ ] Array backed linked list?
     - [ ] Array backed memory pool?
+    - [ ] Create a static multiarrayList
 - [ ] Instrumentation
 - [ ] Renderer
 - [ ] Jobs System

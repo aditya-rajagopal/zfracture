@@ -3,39 +3,31 @@
 const core_log = @import("logging.zig").core_log;
 const dump_stack_trace = @import("logging.zig").dump_stack_trace;
 
+// TODO: Asserts need to put unreachable to help the optimizer.
+
 /// Asserts a condition. If it fails print an error along with user provided context and dumps a stack trace
 /// Example:
 /// ```
 /// assert_msg(1 == 0, @src(), "Number system is consistent: {d} != {d}", .{1, 0});
 /// ```
 pub fn assert_msg(condition: bool, comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
-    switch (builtin.mode) {
-        .Debug, .ReleaseSafe => {
-            if (condition) {} else {
-                @setCold(true);
-                core_log.fatal(
-                    "Assertion failed: {s}:{d} in file {s}",
-                    .{ src.fn_name, src.line, src.file },
-                );
-                if (comptime fmt.len != 0) {
-                    core_log.fatal(fmt, args);
-                }
-                dump_stack_trace();
+    if (!condition) {
+        @setCold(true);
+        core_log.fatal(
+            "Assertion failed: {s}:{d} in file {s}",
+            .{ src.fn_name, src.line, src.file },
+        );
+        if (comptime fmt.len != 0) {
+            core_log.fatal(fmt, args);
+        }
+        dump_stack_trace();
+        switch (builtin.mode) {
+            .Debug, .ReleaseSafe => {
                 @breakpoint();
-            }
-        },
-        else => {
-            if (condition) {} else {
-                @setCold(true);
-                core_log.fatal(
-                    "Assertion failed: {s}:{d} in file {s}",
-                    .{ src.fn_name, src.line, src.file },
-                );
-                if (comptime fmt.len != 0) {
-                    core_log.fatal(fmt, args);
-                }
-            }
-        },
+            },
+            else => {},
+        }
+        unreachable;
     }
 }
 
@@ -55,7 +47,7 @@ pub fn assert(condition: bool, comptime src: std.builtin.SourceLocation) void {
 /// ```
 pub fn debug_assert(condition: bool, comptime src: std.builtin.SourceLocation) void {
     switch (builtin.mode) {
-        .Debug => assert_msg(condition, src, "", .{}),
+        .Debug, .ReleaseSafe => assert_msg(condition, src, "", .{}),
         else => {},
     }
 }
@@ -94,6 +86,7 @@ pub fn never_msg(comptime src: std.builtin.SourceLocation, comptime fmt: []const
         .Debug, .ReleaseSafe => @breakpoint(),
         else => {},
     }
+    unreachable;
 }
 
 /// Equivalent to unreachable but with some logging

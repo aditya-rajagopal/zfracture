@@ -4,22 +4,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const platform = b.addModule("platform", .{
-        .root_source_file = b.path("src/platform/platform.zig"),
-    });
+    // const platform = b.addModule("platform", .{
+    //     .root_source_file = b.path("src/platform/platform.zig"),
+    // });
 
     const core_lib = b.addModule("fr_core", .{
         .root_source_file = b.path("src/core/core.zig"),
-        .imports = &.{
-            .{ .name = "platform", .module = platform },
-        },
+        // .imports = &.{
+        //     .{ .name = "platform", .module = platform },
+        // },
     });
 
     const fracture = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/fracture.zig"),
         .imports = &.{
             .{ .name = "fr_core", .module = core_lib },
-            .{ .name = "platform", .module = platform },
+            // .{ .name = "platform", .module = platform },
         },
     });
 
@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "fracture", .module = fracture },
             .{ .name = "fr_core", .module = core_lib },
-            .{ .name = "platform", .module = platform },
+            // .{ .name = "platform", .module = platform },
         },
     });
 
@@ -41,7 +41,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("entrypoint", entrypoint);
     exe.root_module.addImport("fracture", fracture);
     exe.root_module.addImport("fr_core", core_lib);
-    exe.root_module.addImport("platform", platform);
+    // exe.root_module.addImport("platform", platform);
 
     b.installArtifact(exe);
 
@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
     exe_check.root_module.addImport("entrypoint", entrypoint);
     exe_check.root_module.addImport("fracture", fracture);
     exe_check.root_module.addImport("fr_core", core_lib);
-    exe_check.root_module.addImport("platform", platform);
+    // exe_check.root_module.addImport("platform", platform);
 
     const check_step = b.step("check", "Check if the app compiles");
     check_step.dependOn(&exe_check.step);
@@ -91,7 +91,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    core_unit_tests.root_module.addImport("platform", platform);
+    // core_unit_tests.root_module.addImport("platform", platform);
 
     const run_core_unit_tests = b.addRunArtifact(core_unit_tests);
     run_core_unit_tests.has_side_effects = true;
@@ -101,7 +101,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    engine_unit_tests.root_module.addImport("platform", platform);
+    // engine_unit_tests.root_module.addImport("platform", platform);
     engine_unit_tests.root_module.addImport("fr_core", core_lib);
 
     const run_engine_unit_tests = b.addRunArtifact(engine_unit_tests);

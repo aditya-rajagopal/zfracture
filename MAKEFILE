@@ -1,5 +1,5 @@
 test:
-	zig build test --summary new
+	zig build test --summary new -freference-trace
 
 build_debug:
 	zig build -freference-trace
