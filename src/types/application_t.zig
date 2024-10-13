@@ -1,15 +1,11 @@
 const core = @import("fr_core");
-const TrackingAllocator = @import("../memory.zig").TrackingAllocator;
-
-pub const GPA: type = TrackingAllocator(.gpa);
-pub const FrameArena: type = TrackingAllocator(.frame_arena);
 
 /// The data passed to the application API
 pub const Memory = struct {
     /// The general allocator used to allocate permanent data
-    gpa: GPA = undefined,
+    gpa: core.GPA = undefined,
     /// Temporary Allocator that is cleared each frame. Used for storing transient frame data.
-    frame_allocator: FrameArena = undefined,
+    frame_allocator: core.FrameArena = undefined,
 };
 
 /// Game API that must be defined by the application

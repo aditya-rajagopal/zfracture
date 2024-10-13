@@ -21,11 +21,8 @@ const ApplicationError =
 pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Memory
-    var gpa = types.GPA{};
-    gpa.init(allocator);
+    const app: *Application = try allocator.create(Application);
 
-    const appliation_allocator: std.mem.Allocator = gpa.get_type_allocator(.application);
-    const app: *Application = try appliation_allocator.create(Application);
     app.engine.is_running = true;
     app.engine.is_suspended = false;
 
@@ -51,11 +48,16 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.engine.core_log.info("Platform layer has been initialized", .{});
 
     // Memory
-    app.engine.memory.gpa = gpa;
+    app.engine.memory.gpa.init(allocator);
     const arena_allocator = app.engine.memory.gpa.get_type_allocator(.frame_arena);
+    if (comptime builtin.mode == .Debug) {
+        app.engine.memory.gpa.memory_stats.current_memory[@intFromEnum(core.EngineMemoryTag.application)] = @sizeOf(Application);
+        app.engine.memory.gpa.memory_stats.current_total_memory = @sizeOf(Application);
+        app.engine.memory.gpa.memory_stats.peak_total_memory = @sizeOf(Application);
+        app.engine.memory.gpa.memory_stats.peak_memory[@intFromEnum(core.EngineMemoryTag.application)] = @sizeOf(Application);
+    }
 
     app.frame_arena = std.heap.ArenaAllocator.init(arena_allocator);
-    app.engine.memory.frame_allocator = types.FrameArena{};
     app.engine.memory.frame_allocator.init(app.frame_arena.allocator());
 
     if (comptime app_config.frame_arena_preheat_bytes != 0) {
@@ -163,3 +165,4 @@ pub fn run(self: *Application) ApplicationError!void {
 }
 
 const std = @import("std");
+const builtin = @import("builtin");

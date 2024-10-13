@@ -1,7 +1,6 @@
 pub const types = @import("types/types.zig");
 pub const core = @import("fr_core");
 pub const defines = core.defines;
-pub const mem = @import("memory.zig");
 pub const event = @import("event.zig");
 
 // Stuff not meant to be touched by client ideally

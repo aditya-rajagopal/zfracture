@@ -2,15 +2,6 @@ const fracture = @import("fracture");
 const core = @import("fr_core");
 const game = @import("game.zig");
 
-pub const memory_tags = enum(u8) {
-    foo,
-    bar,
-};
-
-pub const allocator_tags = enum(u8) {
-    monsters,
-};
-
 pub const app_api: fracture.types.API = .{
     .init = game.init,
     .deinit = game.deinit,

@@ -1,5 +1,6 @@
 const types = @import("fracture").types;
 const config = @import("config.zig");
+const core = @import("fr_core");
 
 pub const GameState = struct {
     delta_time: f64,
@@ -9,13 +10,13 @@ var game_state: *GameState = undefined;
 var testing: bool = true;
 
 pub fn init(ctx: *types.Fracture) bool {
-    const foo_allocator = ctx.memory.gpa.get_type_allocator(.foo);
+    const foo_allocator = ctx.memory.gpa.get_type_allocator(.game);
     game_state = foo_allocator.create(GameState) catch return false;
     return true;
 }
 
 pub fn deinit(ctx: *types.Fracture) void {
-    const foo_allocator = ctx.memory.gpa.get_type_allocator(.foo);
+    const foo_allocator = ctx.memory.gpa.get_type_allocator(.game);
     foo_allocator.destroy(game_state);
 }
 
