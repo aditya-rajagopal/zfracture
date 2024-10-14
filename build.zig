@@ -78,7 +78,7 @@ pub fn build(b: *std.Build) void {
     run_platform_unit_tests.has_side_effects = true;
 
     const core_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/core/core.zig"),
+        .root_source_file = b.path("src/core/fracture.zig"),
         .target = target,
         .optimize = optimize,
     });

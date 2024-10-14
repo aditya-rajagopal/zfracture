@@ -49,7 +49,7 @@ pub const Distinct = comptime_funcs.Distinct;
 
 pub const StaticArrayList = static_array_list.StaticArrayList;
 
-pub fn not_implemented(src: std.builtin.SourceLocation) void {
+pub fn not_implemented(comptime src: std.builtin.SourceLocation) void {
     @compileError("NOT IMPLEMENTED: " ++ src.fn_name ++ " - " ++ src.file);
 }
 

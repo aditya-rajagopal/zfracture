@@ -8,7 +8,7 @@
 //      - [ ] Do permanent events need a seperate structure?
 //      - [ ] Priority queue for deferred events?
 
-const not_implemented = @import("fracture.zig").not_implemented;
+const Memory = @import("fracture.zig").mem.Memory;
 
 pub const max_callbacks_per_event = 2048;
 pub const max_event_types = std.math.maxInt(EventCodeBacking);
@@ -74,7 +74,7 @@ pub fn register(self: *Event, comptime event_code: EventCode, callback: EventCal
     // );
 
     const code: usize = @intFromEnum(event_code);
-    const array_list = &self.callbacks[code];
+    const array_list = &self.event_state.callbacks[code];
     for (array_list.items) |c| {
         if (c == callback) {
             // never_msg(@src(), "Trying to register callback for event_code: {d} again", .{code});
@@ -102,7 +102,7 @@ pub fn deregister(self: *Event, event_code: EventCode, callback: EventCallback) 
     //     .{},
     // );
     const code: usize = @intFromEnum(event_code);
-    const array_list = &self.callbacks[code];
+    const array_list = &self.event_state.callbacks[code];
     for (array_list.items, 0..) |c, i| {
         if (c == callback) {
             // TODO: How do you deal with events that handle the event
@@ -118,7 +118,8 @@ pub fn deregister(self: *Event, event_code: EventCode, callback: EventCallback) 
 
 pub fn dispatch_deffered(self: *Event) bool {
     _ = self;
-    not_implemented(@src());
+    // not_implemented(@src());
+    return false;
 }
 
 /// Fire an event with a specific event code.
@@ -136,7 +137,7 @@ pub fn fire(self: *Event, comptime event_code: EventCode, event_data: EventData)
     //     .{},
     // );
     const code: usize = @intFromEnum(event_code);
-    const array_list = &self.callbacks[code];
+    const array_list = &self.event_state.callbacks[code];
 
     for (array_list.items) |callback| {
         if (callback(event_code, event_data)) {
@@ -147,8 +148,9 @@ pub fn fire(self: *Event, comptime event_code: EventCode, event_data: EventData)
 }
 
 pub fn fire_deffered(self: *Event) bool {
-    not_implemented(@src());
+    // not_implemented(@src());
     _ = self;
+    return false;
 }
 
 /// The function signature that any event handler must satisfy.
@@ -246,36 +248,37 @@ pub const EventCode = enum(EventCodeBacking) {
 
 const assert = @import("std").debug.assert;
 
-// test "Event" {
-//     // var app_context: Memory = undefined;
-//     try init(&app_context);
-//     errdefer deinit();
-//     defer deinit();
-//     const key_data: types.KeyEventData = .{ .key_code = 1, .pressed = 1, .mouse_pos = .{ .x = 69, .y = 420 }, .is_repeated = 1 };
-//
-//     const dispatcher = struct {
-//         pub fn dipatch() bool {
-//             return fire(types.EventCode.key_press, @bitCast(key_data));
-//         }
-//     };
-//
-//     const listener = struct {
-//         pub fn listen(event_code: types.EventCode, event_data: types.EventData) bool {
-//             const in_data: types.KeyEventData = @bitCast(event_data);
-//             std.testing.expectEqual(event_code, types.EventCode.key_press) catch {
-//                 std.debug.panic("Not a key press event. Got: {s}", .{@tagName(event_code)});
-//             };
-//             std.testing.expectEqual(in_data, key_data) catch {
-//                 std.debug.panic("Event data is not all 0s", .{});
-//             };
-//             return true;
-//         }
-//     };
-//
-//     var success = register(.key_press, listener.listen);
-//     try std.testing.expect(success);
-//     success = dispatcher.dipatch();
-//     try std.testing.expect(success);
-// }
+test "Event" {
+    const event: *Event = try std.testing.allocator.create(Event);
+    defer std.testing.allocator.destroy(event);
+    try init(event);
+    errdefer event.deinit();
+    defer event.deinit();
+    const key_data: KeyEventData = .{ .key_code = 1, .pressed = 1, .mouse_pos = .{ .x = 69, .y = 420 }, .is_repeated = 1 };
+
+    const dispatcher = struct {
+        pub fn dipatch(e: *Event) bool {
+            return e.fire(EventCode.key_press, @bitCast(key_data));
+        }
+    };
+
+    const listener = struct {
+        pub fn listen(event_code: EventCode, event_data: EventData) bool {
+            const in_data: KeyEventData = @bitCast(event_data);
+            std.testing.expectEqual(event_code, EventCode.key_press) catch {
+                std.debug.panic("Not a key press event. Got: {s}", .{@tagName(event_code)});
+            };
+            std.testing.expectEqual(in_data, key_data) catch {
+                std.debug.panic("Event data is not all 0s", .{});
+            };
+            return true;
+        }
+    };
+
+    var success = event.register(.key_press, listener.listen);
+    try std.testing.expect(success);
+    success = dispatcher.dipatch(event);
+    try std.testing.expect(success);
+}
 
 const std = @import("std");
