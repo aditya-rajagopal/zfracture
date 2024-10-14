@@ -1,3 +1,6 @@
+game:
+	zig build game -freference-trace  --summary all
+
 check:
 	zig build check
 
@@ -7,7 +10,7 @@ test:
 build_debug:
 	zig build -freference-trace
 
-debug:
+debug: game
 	zig build -freference-trace && .\zig-out\bin\game.exe
 
 # release needs to pass tests first
@@ -30,7 +33,7 @@ build_docs:
 docs:
 	zig build docs && .\zig-out\docs\index.html
 
-all: test build_debug build_release build_dist build_docs
+all: test game build_debug build_release build_dist build_docs
 
 uninstall:
 	zig build uninstall

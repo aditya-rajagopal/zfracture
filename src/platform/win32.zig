@@ -675,6 +675,25 @@ pub extern "user32" fn DefWindowProcA(
     lParam: windows.LPARAM,
 ) callconv(windows.WINAPI) windows.LRESULT;
 
+pub extern "kernel32" fn CopyFileA(
+    lpExistingFileName: ?[*:0]const u8,
+    lpNewFileName: ?[*:0]const u8,
+    bFailIfExists: windows.BOOL,
+) callconv(windows.WINAPI) windows.BOOL;
+
+pub extern "kernel32" fn LoadLibraryA(
+    lpLibFileName: ?[*:0]const u8,
+) callconv(windows.WINAPI) ?windows.HINSTANCE;
+
+pub extern "kernel32" fn GetProcAddress(
+    hModule: ?windows.HINSTANCE,
+    lpProcName: ?[*:0]const u8,
+) callconv(windows.WINAPI) ?windows.FARPROC;
+
+pub extern "kernel32" fn FreeLibrary(
+    hLibModule: ?windows.HINSTANCE,
+) callconv(windows.WINAPI) windows.BOOL;
+
 pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);
 }

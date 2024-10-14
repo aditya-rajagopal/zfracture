@@ -1,5 +1,6 @@
 const core_log = @import("fr_core");
 const windows = std.os.windows;
+const Application = @import("../application.zig");
 
 /// The windows internal state
 pub const InternalState = struct {
@@ -9,11 +10,16 @@ pub const InternalState = struct {
     hwnd: ?windows.HWND,
 };
 
+pub const LibraryHandle = windows.HINSTANCE;
+
 pub const Error = error{ FailedHandleGet, WndRegistrationFailed };
 
 const window_class_name: [*:0]const u8 = "fracture_window_class";
 
+var application_state: *Application = undefined;
+
 pub fn init(
+    app_state: *Application,
     platform_state: *InternalState,
     application_name: [*:0]const u8,
     x: i32,
@@ -21,6 +27,7 @@ pub fn init(
     width: i32,
     height: i32,
 ) Error!void {
+    application_state = app_state;
     platform_state.h_instance = win32.GetModuleHandleA(null) orelse return Error.FailedHandleGet;
 
     const icon: ?windows.HICON = win32.LoadIconA(platform_state.h_instance, win32.IDI_APPLICATION);
@@ -102,6 +109,29 @@ pub fn pump_messages(platform_state: *InternalState) void {
     }
 }
 
+pub fn load_library(name: [:0]const u8) ?LibraryHandle {
+    const instance = win32.LoadLibraryA(name);
+    return instance;
+}
+
+pub fn copy_file(name: [:0]const u8, new_name: [:0]const u8, overwrite: bool) bool {
+    const result = win32.CopyFileA(name.ptr, new_name.ptr, @intFromBool(!overwrite));
+    return result != 0;
+}
+
+pub fn library_lookup(handle: LibraryHandle, func_name: [:0]const u8, comptime T: type) ?T {
+    if (win32.GetProcAddress(handle, func_name.ptr)) |f| {
+        return @as(T, @ptrCast(@alignCast(f)));
+    } else {
+        return null;
+    }
+}
+
+pub fn free_library(handle: LibraryHandle) bool {
+    const result = win32.FreeLibrary(handle);
+    return result != 0;
+}
+
 pub fn get_allocator() std.mem.Allocator {
     return std.heap.page_allocator;
 }
@@ -118,7 +148,10 @@ fn win32_process_message(
         // Erasing the backgroudn will be handled by the application. Stops flickering
         win32.WM_ERASEBKGND => return 1,
         // TODO: Fire event for application to quit
-        win32.WM_CLOSE => return 0,
+        win32.WM_CLOSE => {
+            Application.on_event(application_state, .application_quit, std.mem.zeroes([16]u8));
+            return 0;
+        },
         win32.WM_DESTROY => {
             win32.PostQuitMessage(0);
             return 0;

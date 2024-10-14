@@ -1,7 +1,9 @@
 # Things needed in the Fracture Engine
 
 ## Engine general:
-- [ ] Test if the game can be loaded as a DLL in debug and statically linked in release
+- [x] Test if the game can be loaded as a DLL in debug and statically linked in release
+    - [x] Game builds as a DLL in debug builds and is loaded dynamically
+    - [x] Everything is statically linked in release builds
 - [ ] logging
     - [x] Create basic logging functionality
     - [x] Make logs coloured based on log level
