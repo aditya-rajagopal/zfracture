@@ -4,22 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // const platform = b.addModule("platform", .{
-    //     .root_source_file = b.path("src/platform/platform.zig"),
-    // });
-
     const core_lib = b.addModule("fr_core", .{
         .root_source_file = b.path("src/core/fracture.zig"),
-        // .imports = &.{
-        //     .{ .name = "platform", .module = platform },
-        // },
     });
 
     const entrypoint = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/entrypoint.zig"),
         .imports = &.{
             .{ .name = "fr_core", .module = core_lib },
-            // .{ .name = "platform", .module = platform },
         },
     });
 
@@ -28,12 +20,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("testbed/app.zig"),
         .target = target,
         .optimize = optimize,
-        // .use_llvm = false,
-        // .use_lld = false,
     });
     exe.root_module.addImport("entrypoint", entrypoint);
     exe.root_module.addImport("fr_core", core_lib);
-    // exe.root_module.addImport("platform", platform);
 
     b.installArtifact(exe);
 
@@ -49,14 +38,13 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const exe_check = b.addExecutable(.{
-        .name = "game",
+        .name = "testbed",
         .root_source_file = b.path("testbed/app.zig"),
         .target = target,
         .optimize = optimize,
     });
     exe_check.root_module.addImport("entrypoint", entrypoint);
     exe_check.root_module.addImport("fr_core", core_lib);
-    // exe_check.root_module.addImport("platform", platform);
 
     const check_step = b.step("check", "Check if the app compiles");
     check_step.dependOn(&exe_check.step);
@@ -82,7 +70,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    // core_unit_tests.root_module.addImport("platform", platform);
 
     const run_core_unit_tests = b.addRunArtifact(core_unit_tests);
     run_core_unit_tests.has_side_effects = true;
@@ -92,7 +79,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    // engine_unit_tests.root_module.addImport("platform", platform);
     engine_unit_tests.root_module.addImport("fr_core", core_lib);
 
     const run_engine_unit_tests = b.addRunArtifact(engine_unit_tests);
@@ -113,4 +99,17 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_game_unit_tests.step);
     test_step.dependOn(&run_platform_unit_tests.step);
     test_step.dependOn(&run_core_unit_tests.step);
+
+    const game_dll = b.addSharedLibrary(.{
+        .name = "game",
+        .root_source_file = b.path("testbed/app.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    game_dll.root_module.addImport("fr_core", core_lib);
+
+    const dll_step = b.addInstallArtifact(game_dll, .{});
+
+    const game_step = b.step("game", "Build the game as a dll");
+    game_step.dependOn(&dll_step.step);
 }
