@@ -5,16 +5,27 @@ const core = @import("fr_core");
 const platform = @import("platform/platform.zig");
 
 const config = @import("config.zig");
-const app_config = config.app_config;
+const application_config = config.app_config;
 
 pub const Application = @This();
 platform_state: platform.PlatformState = undefined,
 engine: core.Fracture = undefined,
 frame_arena: std.heap.ArenaAllocator = undefined,
 game_state: *anyopaque,
+api: core.API,
+dll: struct {
+    instance: platform.LibraryHandle,
+    time_stamp: i128,
+},
+buffer: [1024]u8,
 
 const ApplicationError =
-    error{ ClientAppInit, FailedUpdate, FailedRender } || platform.PlatformError || std.mem.Allocator.Error || core.log.LoggerError;
+    error{ ClientAppInit, FailedUpdate, FailedRender } ||
+    platform.PlatformError ||
+    std.mem.Allocator.Error ||
+    core.log.LoggerError ||
+    std.fs.File.OpenError ||
+    std.fs.File.StatError;
 
 pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
@@ -23,6 +34,23 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     app.engine.is_running = true;
     app.engine.is_suspended = false;
+    const app_config = application_config;
+    switch (builtin.mode) {
+        .Debug => {
+            const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
+                return app;
+            };
+            const stats = try file.stat();
+            file.close();
+            app.dll.time_stamp = stats.mtime;
+            if (!app.reload_library()) {
+                return app;
+            }
+        },
+        else => {
+            app.api = config.app_api;
+        },
+    }
 
     // Logging
     try app.engine.core_log.stderr_init();
@@ -35,6 +63,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Platform
     try platform.init(
+        app,
         &app.platform_state,
         app_config.application_name,
         app_config.window_pos.x,
@@ -73,7 +102,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     errdefer app.engine.event.deinit();
 
     // Application
-    app.game_state = config.app_api.init(&app.engine) orelse {
+    app.game_state = app.api.init(&app.engine) orelse {
         @setCold(true);
         app.engine.core_log.fatal("Client application failed to initialize", .{});
         return ApplicationError.ClientAppInit;
@@ -81,7 +110,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     app.engine.core_log.info("Client application has been initialized", .{});
 
-    config.app_api.on_resize(&app.engine, app.game_state, app_config.window_pos.width, app_config.window_pos.height);
+    app.api.on_resize(&app.engine, app.game_state, app_config.window_pos.width, app_config.window_pos.height);
     app.engine.core_log.info("Application has been initialized", .{});
 
     return app;
@@ -90,7 +119,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 pub fn deinit(self: *Application) void {
 
     // Application shutdown
-    config.app_api.deinit(&self.engine, self.game_state);
+    self.api.deinit(&self.engine, self.game_state);
     self.engine.core_log.info("Client application has been shutdown", .{});
 
     // Event shutdown
@@ -101,12 +130,12 @@ pub fn deinit(self: *Application) void {
     self.engine.core_log.info("Platform layer has been shutdown", .{});
 
     // Memory Shutdown
-    self.engine.memory.gpa.print_memory_stats(&self.engine.core_log);
     self.engine.memory.frame_allocator.print_memory_stats(&self.engine.core_log);
 
     // self.engine.memory.gpa.deinit();
     self.engine.memory.frame_allocator.deinit();
     self.frame_arena.deinit();
+    self.engine.memory.gpa.print_memory_stats(&self.engine.core_log);
     self.engine.core_log.info("Context memory has been shutdown", .{});
 
     // Logging shutdown
@@ -138,19 +167,36 @@ pub fn run(self: *Application) ApplicationError!void {
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
-            if (!config.app_api.update(&self.engine, self.game_state)) {
+            if (!self.api.update(&self.engine, self.game_state)) {
                 @setCold(true);
                 core_log.fatal("Client app update failed, shutting down", .{});
                 err = ApplicationError.FailedUpdate;
                 break;
             }
 
-            if (!config.app_api.render(&self.engine, self.game_state)) {
+            if (!self.api.render(&self.engine, self.game_state)) {
                 @setCold(true);
                 core_log.fatal("Client app render failed, shutting down", .{});
                 err = ApplicationError.FailedRender;
                 break;
             }
+        }
+
+        switch (builtin.mode) {
+            .Debug => {
+                const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
+                    continue;
+                };
+                const stats = try file.stat();
+                file.close();
+                if (self.dll.time_stamp != stats.mtime) {
+                    self.engine.core_log.debug("New DLL detected", .{});
+                    self.dll.time_stamp = stats.mtime;
+                    _ = platform.free_library(self.dll.instance);
+                    _ = self.reload_library();
+                }
+            },
+            else => {},
         }
         // break;
     }
@@ -160,6 +206,37 @@ pub fn run(self: *Application) ApplicationError!void {
     if (err) |e| {
         return e;
     }
+}
+
+pub fn on_event(self: *Application, comptime event_code: core.event.EventCode, event_data: core.event.EventData) void {
+    self.engine.core_log.trace("Got an event", .{});
+    if (event_code == .application_quit) {
+        _ = self.engine.event.fire(.application_quit, event_data);
+        self.engine.is_running = false;
+    }
+}
+
+fn reload_library(self: *Application) bool {
+    // const new_name = std.fmt.bufPrintZ(&self.buffer, "{s}_{d}", .{ config.dll_name, self.dll.time_stamp }) catch {
+    //     return false;
+    // };
+    const new_name = config.dll_name ++ "_tmp";
+    if (!platform.copy_file(config.dll_name, new_name, true)) {
+        return false;
+    }
+
+    self.dll.instance = platform.load_library(new_name) orelse return false;
+    const init_fn = platform.library_lookup(self.dll.instance, "init", core.InitFn) orelse return false;
+    const deinit_fn = platform.library_lookup(self.dll.instance, "deinit", core.DeinitFn) orelse return false;
+    const update = platform.library_lookup(self.dll.instance, "update", core.UpdateFn) orelse return false;
+    const render = platform.library_lookup(self.dll.instance, "render", core.RenderFn) orelse return false;
+    const on_resize = platform.library_lookup(self.dll.instance, "on_resize", core.OnResizeFn) orelse return false;
+    self.api.init = init_fn;
+    self.api.deinit = deinit_fn;
+    self.api.update = update;
+    self.api.render = render;
+    self.api.on_resize = on_resize;
+    return true;
 }
 
 const std = @import("std");

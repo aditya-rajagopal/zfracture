@@ -10,6 +10,12 @@ pub const Fracture = struct {
     last_time: f64 = 0,
 };
 
+pub const InitFn = *const fn (engine: *Fracture) ?*anyopaque;
+pub const DeinitFn = *const fn (engine: *Fracture, game_state: *anyopaque) void;
+pub const UpdateFn = *const fn (engine: *Fracture, game_state: *anyopaque) bool;
+pub const RenderFn = *const fn (engine: *Fracture, game_state: *anyopaque) bool;
+pub const OnResizeFn = *const fn (engine: *Fracture, game_state: *anyopaque, width: u32, height: u32) void;
+
 /// Game API that must be defined by the application
 /// The GameData is passed to these functions as context
 pub const API = struct {

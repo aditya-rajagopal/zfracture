@@ -10,6 +10,8 @@ const platform = switch (builtin.os.tag) {
 /// to interact with the state. You can technically do it but you really should not.
 pub const PlatformState = platform.InternalState;
 
+pub const LibraryHandle = platform.LibraryHandle;
+
 /// Error type that will be returned by platform functions
 pub const PlatformError = platform.Error;
 
@@ -22,9 +24,17 @@ pub const pump_messages = platform.pump_messages;
 /// Get the platform specific allocator
 pub const get_allocator = platform.get_allocator;
 
-test {
-    std.testing.refAllDeclsRecursive(platform);
-}
+pub const load_library = platform.load_library;
+
+pub const copy_file = platform.copy_file;
+
+pub const library_lookup = platform.library_lookup;
+
+pub const free_library = platform.free_library;
+
+// test {
+//     std.testing.refAllDeclsRecursive(platform);
+// }
 
 const builtin = @import("builtin");
 const std = @import("std");

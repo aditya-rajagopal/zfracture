@@ -10,7 +10,7 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     const foo_allocator: std.mem.Allocator = engine.memory.gpa.get_type_allocator(.game);
     const state = foo_allocator.create(GameState) catch return null;
     state.testing = true;
-    state.delta_time = 0.0;
+    state.delta_time = 1.0;
     return state;
 }
 
@@ -30,6 +30,8 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         frame_alloc.free(temp_data);
         state.testing = false;
     }
+    // core.log.GameLog.err(&engine.log, "Hi ramani", .{});
+    // engine.log.warn("Hi ramani", .{});
     return true;
 }
 
