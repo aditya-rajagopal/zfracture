@@ -11,6 +11,7 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     const state = foo_allocator.create(GameState) catch return null;
     state.testing = true;
     state.delta_time = 1.0;
+    _ = engine.event.register(@enumFromInt(50), random_event);
     return state;
 }
 
@@ -38,6 +39,13 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
 pub fn render(engine: *core.Fracture, game_state: *anyopaque) bool {
     _ = engine;
     _ = game_state;
+    return true;
+}
+
+pub fn random_event(event_code: core.event.EventCode, event_data: core.event.EventData) bool {
+    _ = event_code;
+    _ = event_data;
+    // std.debug.print("I am in an event\n", .{});
     return true;
 }
 

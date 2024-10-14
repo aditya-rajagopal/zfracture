@@ -26,9 +26,11 @@
     - [x] Basic event handling and types
     - [x] Move event system into core as type
     - [x] Move event state into Engine
+    - [ ] Make sure that when the DLL is reloaded the event listerers are still valid
+    - [ ] We need additional context for the listener and sender since most game functions are stateless
+        - [ ] Maybe the game can have it's own event handler and can be called by the event system instead of having to connect directly
     - [ ] Create multiple lists for handling frame future events and timed events
         - [ ] Create an EventData pool for the deffered events storage
-    - [ ] Decide if we need additional context for listeners and senders
     - [ ] Does the event system need the idea of layers so that certain handlers get first shot at handling events
     - [ ] Do permanent events need a seperate structure?
     - [ ] Priority queue for deferred events?

@@ -157,6 +157,7 @@ pub fn run(self: *Application) ApplicationError!void {
 
     while (self.engine.is_running) {
         platform.pump_messages(&self.platform_state);
+        _ = self.engine.event.fire(@enumFromInt(50), std.mem.zeroes(core.event.EventData));
 
         // Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
