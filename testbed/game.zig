@@ -11,11 +11,12 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     const state = foo_allocator.create(GameState) catch return null;
     state.testing = true;
     state.delta_time = 1.0;
-    _ = engine.event.register(.KEY_PRESS, random_event);
-    _ = engine.event.register(.KEY_RELEASE, random_event);
-    _ = engine.event.register(.KEY_ESCAPE, random_event);
-    _ = engine.event.register(.MOUSE_BUTTON_PRESS, random_event);
-    _ = engine.event.register(.MOUSE_BUTTON_RELEASE, random_event);
+    const callback: core.event.EventCallback = .{ .listener = engine, .function = random_event };
+    _ = engine.event.register(.KEY_PRESS, callback);
+    _ = engine.event.register(.KEY_RELEASE, callback);
+    _ = engine.event.register(.KEY_ESCAPE, callback);
+    _ = engine.event.register(.MOUSE_BUTTON_PRESS, callback);
+    _ = engine.event.register(.MOUSE_BUTTON_RELEASE, callback);
     return state;
 }
 
@@ -66,10 +67,18 @@ pub fn render(engine: *core.Fracture, game_state: *anyopaque) bool {
     return true;
 }
 
-pub fn random_event(event_code: core.event.EventCode, event_data: core.event.EventData) bool {
-    // const key_data: core.event.KeyEventData = @bitCast(event_data);
-    std.debug.print("{s}\n", .{@tagName(event_code)});
-    std.debug.print("{any}\n", .{event_data});
+pub fn random_event(
+    event_code: core.event.EventCode,
+    event_data: core.event.EventData,
+    listener: ?*anyopaque,
+    sender: ?*anyopaque,
+) bool {
+    _ = sender;
+    if (listener) |l| {
+        const engine: *core.Fracture = @ptrCast(@alignCast(l));
+        engine.log.trace("FROM GAME: {s}", .{@tagName(event_code)});
+        engine.log.trace("FROM GAME: {any}", .{event_data});
+    }
     return true;
 }
 

@@ -1,15 +1,22 @@
 pub const Fracture = struct {
+    is_suspended: bool = false,
+    is_running: bool = false,
     memory: mem.Memory,
     event: event,
     input: input,
     core_log: log.CoreLog,
     log: log.GameLog,
-    is_suspended: bool = false,
-    is_running: bool = false,
     width: i32 = 1280,
     height: i32 = 720,
     last_time: f64 = 0,
 };
+
+// test {
+//     std.debug.print("Size of Fracture: {d}, {d}\n", .{ @sizeOf(Fracture), @alignOf(Fracture) });
+//     std.debug.print("Size of log: {d}, {d}\n", .{ @sizeOf(log.GameLog), @alignOf(log.GameLog) });
+//     std.debug.print("Size of input: {d}, {d}\n", .{ @sizeOf(input), @alignOf(input) });
+//     std.debug.print("Size of event: {d}, {d}\n", .{ @sizeOf(event), @alignOf(event) });
+// }
 
 pub const InitFn = *const fn (engine: *Fracture) ?*anyopaque;
 pub const DeinitFn = *const fn (engine: *Fracture, game_state: *anyopaque) void;

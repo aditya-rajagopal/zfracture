@@ -1,6 +1,7 @@
 # Things needed in the Fracture Engine
 
 ## Engine general:
+- [ ] Does the data in the engine structure need to be pointers or is it okay to have them flat in the structure.
 - [x] Test if the game can be loaded as a DLL in debug and statically linked in release
     - [x] Game builds as a DLL in debug builds and is loaded dynamically
     - [x] Everything is statically linked in release builds
@@ -26,10 +27,11 @@
     - [x] Basic event handling and types
     - [x] Move event system into core as type
     - [x] Move event state into Engine
+    - [x] We need additional context for the listener and sender since most game functions are stateless
+    - [ ] Maybe the game can have it's own event handler and can be called by the event system instead of having to connect directly
+    - [ ] Check if we need SoA or AoS for the event data.
     - [ ] Make sure that when the DLL is reloaded the event listerers are still valid
     - [ ] Do we need the static versions of some of the functions
-    - [ ] We need additional context for the listener and sender since most game functions are stateless
-        - [ ] Maybe the game can have it's own event handler and can be called by the event system instead of having to connect directly
     - [ ] Create multiple lists for handling frame future events and timed events
         - [ ] Create an EventData pool for the deffered events storage
     - [ ] Does the event system need the idea of layers so that certain handlers get first shot at handling events
@@ -38,6 +40,7 @@
 - [ ] Input system
     - [x] Initial input system implementation
     - [x] API for platform layer to dispatch input events 
+    - [ ] Remove reference to event system here. The platform/application should handle firing events. Or pass the engine.
     - [ ] Think of using a bit set for the keys instead of an array
     - [ ] Are the comptime versions of the functions necessary
 - [ ] Signal System

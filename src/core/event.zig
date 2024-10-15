@@ -1,8 +1,8 @@
 //  TODO:
 //      - [ ] Create a static multiarrayList
+//      - [ ] Check if we need SoA or AoS for the event data.
 //      - [ ] Are the static versions of the functions necessary
 //      - [ ] Create multiple lists for handling frame future events and timed events
-//      - [ ] For now assume there is no listener and sender pointers. Maybe in the future.
 //      - [ ] Structure the data to be data oriented
 //      - [ ] Create an EventData pool for the deffered events storage
 //      - [ ] Does the event system need the idea of layers so that certain handlers get first shot at handling events
@@ -11,49 +11,45 @@
 
 const Memory = @import("fracture.zig").mem.Memory;
 
-pub const max_callbacks_per_event = 2048;
-pub const max_event_types = std.math.maxInt(u12);
+pub const max_callbacks_per_event = 512;
+pub const max_event_types = 1024;
 
 // const EventCallbackList = core.StaticArrayList(EventCallback, max_callbacks_per_event);
+// TODO: Does this need to be SoA or AoS
+const Listeners = [max_callbacks_per_event * max_event_types]?*anyopaque;
 const CallbackFuncList = [max_callbacks_per_event * max_event_types]EventCallback;
 const EventState = struct {
+    // listeners: [max_event_types]std.ArrayListUnmanaged(?*anyopaque),
     callbacks: [max_event_types]std.ArrayListUnmanaged(EventCallback),
 };
 
 const Event = @This();
 
+listeners_list: Listeners = undefined,
 callback_list: CallbackFuncList = undefined,
 event_state: EventState = undefined,
+lens: [max_event_types]usize,
 // local_arena: std.heap.ArenaAllocator = undefined,
 // initialized: bool = false,
 
 /// Initialize the event system
 pub fn init(self: *Event) !void {
-    // debug_assert_msg(
-    //     !initialized,
-    //     @src(),
-    //     "Reinitializing Event system.",
-    //     .{},
-    // );
     // const allocator = ctx.gpa.get_type_allocator(.event);
     // local_arena = std.heap.ArenaAllocator.init(allocator);
+
+    // self.lens = std.mem.zeroes([max_event_types]usize);
+    @memset(self.lens[0..max_event_types], 0);
 
     for (0..max_event_types) |i| {
         const start = i * max_callbacks_per_event;
         const end = start + max_callbacks_per_event;
         self.event_state.callbacks[i] = std.ArrayListUnmanaged(EventCallback).initBuffer(self.callback_list[start..end]);
+        // self.event_state.listeners[i] = std.ArrayListUnmanaged(?*anyopaque).initBuffer(self.listeners_list[start..end]);
     }
 }
 
 /// Cleanup the event system
 pub fn deinit(self: *Event) void {
-    // debug_assert_msg(
-    //     initialized,
-    //     @src(),
-    //     "Reinitializing Event system.",
-    //     .{},
-    // );
-    // initialized = false;
     _ = self;
 }
 
@@ -66,41 +62,63 @@ pub fn deinit(self: *Event) void {
 /// Arguments:
 ///     - event_code: code for the type of event that needs to be listened for
 ///     - callback: Function to call when an event is fired
-pub fn register(self: *Event, event_code: EventCode, callback: EventCallback) bool {
-    // debug_assert_msg(
-    //     initialized,
-    //     @src(),
-    //     "Cannot register to the Event system. Not Initialized.",
-    //     .{},
-    // );
+pub fn register2(self: *Event, event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
+    const code: usize = @intFromEnum(event_code);
+    const start = code * max_callbacks_per_event;
+    const len = self.lens[code];
 
+    for (start..start + len) |i| {
+        if (self.listeners_list[i] == listener and self.callback_list[i] == callback) {
+            switch (builtin.mode) {
+                .Debug => {
+                    unreachable;
+                },
+                else => return false,
+            }
+        }
+    }
+    self.listeners_list[len] = listener;
+    self.callback_list[len] = callback;
+    return true;
+}
+
+// TODO: If we know an event is going to handle the event before hand can we place it in front of the callback queue?
+/// Register a callback to handle a specific event.
+/// The function pointer uniquely identifies a particular function and you can only have the callback registered
+/// once per event code type.
+/// You are forced to know event_code at compile time when registering for events
+///
+/// Arguments:
+///     - event_code: code for the type of event that needs to be listened for
+///     - callback: Function to call when an event is fired
+pub fn register(self: *Event, event_code: EventCode, callback: EventCallback) bool {
     const code: usize = @intFromEnum(event_code);
     const array_list = &self.event_state.callbacks[code];
     for (array_list.items) |c| {
-        if (c == callback) {
-            // never_msg(@src(), "Trying to register callback for event_code: {d} again", .{code});
-            return false;
+        if (c.function == callback.function and c.listener == callback.listener) {
+            switch (builtin.mode) {
+                .Debug => {
+                    unreachable;
+                },
+                else => return false,
+            }
         }
     }
-
     array_list.appendAssumeCapacity(callback);
     return true;
 }
 
 pub fn register_static(self: *Event, comptime event_code: EventCode, callback: EventCallback) bool {
-    // debug_assert_msg(
-    //     initialized,
-    //     @src(),
-    //     "Cannot register to the Event system. Not Initialized.",
-    //     .{},
-    // );
-
     const code: usize = @intFromEnum(event_code);
     const array_list = &self.event_state.callbacks[code];
     for (array_list.items) |c| {
-        if (c == callback) {
-            // never_msg(@src(), "Trying to register callback for event_code: {d} again", .{code});
-            return false;
+        if (c.listener == callback.listener and c.function == callback.function) {
+            switch (builtin.mode) {
+                .Debug => {
+                    unreachable;
+                },
+                else => return false,
+            }
         }
     }
 
@@ -117,16 +135,10 @@ pub fn register_static(self: *Event, comptime event_code: EventCode, callback: E
 ///     - event_code:code for the type of event that the callback was registered for
 ///     - callback: Function pointer that was registered
 pub fn deregister(self: *Event, event_code: EventCode, callback: EventCallback) bool {
-    // debug_assert_msg(
-    //     initialized,
-    //     @src(),
-    //     "Cannot deregister from the Event system. Not Initialized.",
-    //     .{},
-    // );
     const code: usize = @intFromEnum(event_code);
     const array_list = &self.event_state.callbacks[code];
     for (array_list.items, 0..) |c, i| {
-        if (c == callback) {
+        if (c.function == callback.function and c.listner == callback.listener) {
             // TODO: How do you deal with events that handle the event
             // What is the order we need to maintain. Do we need layers?
             // _ = array_list.swapRemove(i);
@@ -134,8 +146,13 @@ pub fn deregister(self: *Event, event_code: EventCode, callback: EventCallback) 
             return true;
         }
     }
-    // never_msg(@src(), "Deregistering an event that was not registered", .{});
-    return false;
+
+    switch (builtin.mode) {
+        .Debug => {
+            unreachable;
+        },
+        else => return false,
+    }
 }
 
 pub fn dispatch_deffered(self: *Event) bool {
@@ -151,36 +168,24 @@ pub fn dispatch_deffered(self: *Event) bool {
 /// Arguments:
 ///     - event_code: code for the type of event that is being fired
 ///     - event_data: the packet that is forwarded to all callbacks
-pub fn fire(self: *Event, event_code: EventCode, event_data: EventData) bool {
-    // debug_assert_msg(
-    //     initialized,
-    //     @src(),
-    //     "Cannot fire an event. Event system not Initialized.",
-    //     .{},
-    // );
+pub fn fire(self: *Event, event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
     const code: usize = @intFromEnum(event_code);
     const array_list = &self.event_state.callbacks[code];
 
     for (array_list.items) |callback| {
-        if (callback(event_code, event_data)) {
+        if (callback.function(event_code, event_data, callback.listener, sender)) {
             return true;
         }
     }
     return true;
 }
 
-pub fn fire_static(self: *Event, comptime event_code: EventCode, event_data: EventData) bool {
-    // debug_assert_msg(
-    //     initialized,
-    //     @src(),
-    //     "Cannot fire an event. Event system not Initialized.",
-    //     .{},
-    // );
+pub fn fire_static(self: *Event, comptime event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
     const code: usize = @intFromEnum(event_code);
     const array_list = &self.event_state.callbacks[code];
 
     for (array_list.items) |callback| {
-        if (callback(event_code, event_data)) {
+        if (callback.function(event_code, event_data, callback.listener, sender)) {
             return true;
         }
     }
@@ -200,13 +205,15 @@ pub fn fire_deffered_static(self: *Event) bool {
 }
 
 /// The function signature that any event handler must satisfy.
-pub const EventCallback = *const fn (
-    event_code: EventCode,
-    data: EventData,
-    // sender: *anyopaque,
-    // listener: *anyopaque,
-) bool;
-
+pub const EventCallback = struct {
+    listener: ?*anyopaque,
+    function: *const fn (
+        event_code: EventCode,
+        data: EventData,
+        listener: ?*anyopaque,
+        sender: ?*anyopaque,
+    ) bool,
+};
 pub const EventHandle = struct {
     index: usize,
     generation: usize,
@@ -474,6 +481,7 @@ pub const EventCode = enum(EventCodeBacking) {
     KEY_APOSTROPHE = 0xDE,
 
     KEY_IME_PROCESS = 0xE5,
+    INPUT_LAST = 0xE6,
 
     APPLICATION_QUIT = 0xFF,
     KEY_PRESS = 0x100,
@@ -483,6 +491,8 @@ pub const EventCode = enum(EventCodeBacking) {
     MOUSE_MOVE = 0x104,
     MOUSE_SCROLL = 0x105,
     WINDOW_RESIZE = 0x106,
+
+    APPLICATION_EVENTS_START = 0x144,
     _,
 
     pub fn from_int(val: EventCodeBacking) EventCode {
@@ -498,18 +508,18 @@ test "Event" {
     try init(event);
     errdefer event.deinit();
     defer event.deinit();
-    const key_data: KeyEventData = .{ .key_code = 1, .pressed = 1, .mouse_pos = .{ .x = 69, .y = 420 }, .is_repeated = 1 };
+    const key_data: KeyEventData = .{ .key = .A, .pressed = 1, .mouse_pos = .{ .x = 69, .y = 420 }, .is_repeated = 1 };
 
     const dispatcher = struct {
         pub fn dipatch(e: *Event) bool {
-            return e.fire(EventCode.key_press, @bitCast(key_data));
+            return e.fire(EventCode.KEY_PRESS, @bitCast(key_data));
         }
     };
 
     const listener = struct {
         pub fn listen(event_code: EventCode, event_data: EventData) bool {
             const in_data: KeyEventData = @bitCast(event_data);
-            std.testing.expectEqual(event_code, EventCode.key_press) catch {
+            std.testing.expectEqual(event_code, EventCode.KEY_PRESS) catch {
                 std.debug.panic("Not a key press event. Got: {s}", .{@tagName(event_code)});
             };
             std.testing.expectEqual(in_data, key_data) catch {
@@ -526,4 +536,5 @@ test "Event" {
 }
 
 const std = @import("std");
+const builtin = @import("builtin");
 const input = @import("input.zig");
