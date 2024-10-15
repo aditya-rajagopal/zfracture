@@ -11,12 +11,12 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     const state = foo_allocator.create(GameState) catch return null;
     state.testing = true;
     state.delta_time = 1.0;
-    const callback: core.event.EventCallback = .{ .listener = engine, .function = random_event };
-    _ = engine.event.register(.KEY_PRESS, callback);
-    _ = engine.event.register(.KEY_RELEASE, callback);
-    _ = engine.event.register(.KEY_ESCAPE, callback);
-    _ = engine.event.register(.MOUSE_BUTTON_PRESS, callback);
-    _ = engine.event.register(.MOUSE_BUTTON_RELEASE, callback);
+    // const callback: core.event.EventCallback = .{ .listener = engine, .function = random_event };
+    _ = engine.event.register(.KEY_PRESS, engine, random_event);
+    _ = engine.event.register(.KEY_RELEASE, engine, random_event);
+    _ = engine.event.register(.KEY_ESCAPE, engine, random_event);
+    _ = engine.event.register(.MOUSE_BUTTON_PRESS, engine, random_event);
+    _ = engine.event.register(.MOUSE_BUTTON_RELEASE, engine, random_event);
     return state;
 }
 
@@ -24,6 +24,11 @@ pub fn deinit(engine: *core.Fracture, game_state: *anyopaque) void {
     const state: *GameState = @ptrCast(@alignCast(game_state));
     const foo_allocator = engine.memory.gpa.get_type_allocator(.game);
     foo_allocator.destroy(state);
+    _ = engine.event.deregister(.KEY_PRESS, engine, random_event);
+    _ = engine.event.deregister(.KEY_RELEASE, engine, random_event);
+    _ = engine.event.deregister(.KEY_ESCAPE, engine, random_event);
+    _ = engine.event.deregister(.MOUSE_BUTTON_PRESS, engine, random_event);
+    _ = engine.event.deregister(.MOUSE_BUTTON_RELEASE, engine, random_event);
 }
 
 pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {

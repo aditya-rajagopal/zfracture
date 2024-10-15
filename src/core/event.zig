@@ -25,9 +25,9 @@ const EventState = struct {
 
 const Event = @This();
 
-listeners_list: Listeners = undefined,
-callback_list: CallbackFuncList = undefined,
-event_state: EventState = undefined,
+listeners_list: [max_callbacks_per_event * max_event_types]?*anyopaque = undefined,
+callback_list: [max_callbacks_per_event * max_event_types]EventCallback = undefined,
+// event_state: EventState = undefined,
 lens: [max_event_types]usize,
 // local_arena: std.heap.ArenaAllocator = undefined,
 // initialized: bool = false,
@@ -39,13 +39,14 @@ pub fn init(self: *Event) !void {
 
     // self.lens = std.mem.zeroes([max_event_types]usize);
     @memset(self.lens[0..max_event_types], 0);
+    @memset(self.listeners_list[0 .. max_event_types * max_callbacks_per_event], null);
 
-    for (0..max_event_types) |i| {
-        const start = i * max_callbacks_per_event;
-        const end = start + max_callbacks_per_event;
-        self.event_state.callbacks[i] = std.ArrayListUnmanaged(EventCallback).initBuffer(self.callback_list[start..end]);
-        // self.event_state.listeners[i] = std.ArrayListUnmanaged(?*anyopaque).initBuffer(self.listeners_list[start..end]);
-    }
+    // for (0..max_event_types) |i| {
+    //     const start = i * max_callbacks_per_event;
+    //     const end = start + max_callbacks_per_event;
+    //     self.event_state.callbacks[i] = std.ArrayListUnmanaged(EventCallback).initBuffer(self.callback_list[start..end]);
+    //     // self.event_state.listeners[i] = std.ArrayListUnmanaged(?*anyopaque).initBuffer(self.listeners_list[start..end]);
+    // }
 }
 
 /// Cleanup the event system
@@ -62,12 +63,15 @@ pub fn deinit(self: *Event) void {
 /// Arguments:
 ///     - event_code: code for the type of event that needs to be listened for
 ///     - callback: Function to call when an event is fired
-pub fn register2(self: *Event, event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
+pub fn register(self: *Event, event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
     const code: usize = @intFromEnum(event_code);
-    const start = code * max_callbacks_per_event;
     const len = self.lens[code];
+    assert(len < max_callbacks_per_event);
+    assert(code < max_event_types);
 
-    for (start..start + len) |i| {
+    const start = code * max_callbacks_per_event;
+    const end = start + len;
+    for (start..end) |i| {
         if (self.listeners_list[i] == listener and self.callback_list[i] == callback) {
             switch (builtin.mode) {
                 .Debug => {
@@ -77,54 +81,31 @@ pub fn register2(self: *Event, event_code: EventCode, listener: ?*anyopaque, cal
             }
         }
     }
-    self.listeners_list[len] = listener;
-    self.callback_list[len] = callback;
+
+    self.listeners_list[end] = listener;
+    self.callback_list[end] = callback;
+    self.lens[code] += 1;
+
     return true;
 }
 
-// TODO: If we know an event is going to handle the event before hand can we place it in front of the callback queue?
-/// Register a callback to handle a specific event.
-/// The function pointer uniquely identifies a particular function and you can only have the callback registered
-/// once per event code type.
-/// You are forced to know event_code at compile time when registering for events
-///
-/// Arguments:
-///     - event_code: code for the type of event that needs to be listened for
-///     - callback: Function to call when an event is fired
-pub fn register(self: *Event, event_code: EventCode, callback: EventCallback) bool {
-    const code: usize = @intFromEnum(event_code);
-    const array_list = &self.event_state.callbacks[code];
-    for (array_list.items) |c| {
-        if (c.function == callback.function and c.listener == callback.listener) {
-            switch (builtin.mode) {
-                .Debug => {
-                    unreachable;
-                },
-                else => return false,
-            }
-        }
-    }
-    array_list.appendAssumeCapacity(callback);
-    return true;
-}
-
-pub fn register_static(self: *Event, comptime event_code: EventCode, callback: EventCallback) bool {
-    const code: usize = @intFromEnum(event_code);
-    const array_list = &self.event_state.callbacks[code];
-    for (array_list.items) |c| {
-        if (c.listener == callback.listener and c.function == callback.function) {
-            switch (builtin.mode) {
-                .Debug => {
-                    unreachable;
-                },
-                else => return false,
-            }
-        }
-    }
-
-    array_list.appendAssumeCapacity(callback);
-    return true;
-}
+// pub fn register_static(self: *Event, comptime event_code: EventCode, callback: EventCallback) bool {
+//     const code: usize = @intFromEnum(event_code);
+//     const array_list = &self.event_state.callbacks[code];
+//     for (array_list.items) |c| {
+//         if (c.listener == callback.listener and c.function == callback.function) {
+//             switch (builtin.mode) {
+//                 .Debug => {
+//                     unreachable;
+//                 },
+//                 else => return false,
+//             }
+//         }
+//     }
+//
+//     array_list.appendAssumeCapacity(callback);
+//     return true;
+// }
 
 /// Deregister an event.
 /// This will check if the function actually exists and will return false if it could not find it. In debug builds
@@ -134,15 +115,24 @@ pub fn register_static(self: *Event, comptime event_code: EventCode, callback: E
 /// Arguments:
 ///     - event_code:code for the type of event that the callback was registered for
 ///     - callback: Function pointer that was registered
-pub fn deregister(self: *Event, event_code: EventCode, callback: EventCallback) bool {
+pub fn deregister(self: *Event, event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
     const code: usize = @intFromEnum(event_code);
-    const array_list = &self.event_state.callbacks[code];
-    for (array_list.items, 0..) |c, i| {
-        if (c.function == callback.function and c.listner == callback.listener) {
+    const len = self.lens[code];
+    assert(len > 0);
+    assert(code < max_event_types);
+
+    const start = code * max_callbacks_per_event;
+    const end = start + len;
+    for (start..end) |i| {
+        if (self.listeners_list[i] == listener and self.callback_list[i] == callback) {
             // TODO: How do you deal with events that handle the event
             // What is the order we need to maintain. Do we need layers?
             // _ = array_list.swapRemove(i);
-            _ = array_list.orderedRemove(i);
+            for (self.listeners_list[i .. end - 1], self.listeners_list[i + 1 .. end]) |*d, s| d.* = s;
+            for (self.callback_list[i .. end - 1], self.callback_list[i + 1 .. end]) |*d, s| d.* = s;
+            self.listeners_list[end] = undefined;
+            self.callback_list[end] = undefined;
+            self.lens[code] -= 1;
             return true;
         }
     }
@@ -170,10 +160,15 @@ pub fn dispatch_deffered(self: *Event) bool {
 ///     - event_data: the packet that is forwarded to all callbacks
 pub fn fire(self: *Event, event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
     const code: usize = @intFromEnum(event_code);
-    const array_list = &self.event_state.callbacks[code];
+    const len = self.lens[code];
+    assert(code < max_event_types);
 
-    for (array_list.items) |callback| {
-        if (callback.function(event_code, event_data, callback.listener, sender)) {
+    if (len == 0) return true;
+
+    const start = code * max_callbacks_per_event;
+    const end = start + len;
+    for (start..end) |i| {
+        if (self.callback_list[i](event_code, event_data, self.listeners_list[i], sender)) {
             return true;
         }
     }
@@ -205,15 +200,13 @@ pub fn fire_deffered_static(self: *Event) bool {
 }
 
 /// The function signature that any event handler must satisfy.
-pub const EventCallback = struct {
+pub const EventCallback = *const fn (
+    event_code: EventCode,
+    data: EventData,
     listener: ?*anyopaque,
-    function: *const fn (
-        event_code: EventCode,
-        data: EventData,
-        listener: ?*anyopaque,
-        sender: ?*anyopaque,
-    ) bool,
-};
+    sender: ?*anyopaque,
+) bool;
+
 pub const EventHandle = struct {
     index: usize,
     generation: usize,

@@ -40,17 +40,17 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.engine.is_suspended = false;
     const app_config = application_config;
     switch (builtin.mode) {
-        .Debug => {
-            const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
-                return app;
-            };
-            const stats = try file.stat();
-            file.close();
-            app.dll.time_stamp = stats.mtime;
-            if (!app.reload_library()) {
-                return app;
-            }
-        },
+        // .Debug => {
+        //     const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
+        //         return app;
+        //     };
+        //     const stats = try file.stat();
+        //     file.close();
+        //     app.dll.time_stamp = stats.mtime;
+        //     if (!app.reload_library()) {
+        //         return app;
+        //     }
+        // },
         else => {
             app.api = config.app_api;
         },
@@ -191,19 +191,19 @@ pub fn run(self: *Application) ApplicationError!void {
         }
 
         switch (builtin.mode) {
-            .Debug => {
-                const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
-                    continue;
-                };
-                const stats = try file.stat();
-                file.close();
-                if (self.dll.time_stamp != stats.mtime) {
-                    self.engine.core_log.debug("New DLL detected", .{});
-                    self.dll.time_stamp = stats.mtime;
-                    _ = platform.free_library(self.dll.instance);
-                    _ = self.reload_library();
-                }
-            },
+            // .Debug => {
+            //     const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
+            //         continue;
+            //     };
+            //     const stats = try file.stat();
+            //     file.close();
+            //     if (self.dll.time_stamp != stats.mtime) {
+            //         self.engine.core_log.debug("New DLL detected", .{});
+            //         self.dll.time_stamp = stats.mtime;
+            //         _ = platform.free_library(self.dll.instance);
+            //         _ = self.reload_library();
+            //     }
+            // },
             else => {},
         }
         self.engine.input.update();
