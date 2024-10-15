@@ -1,4 +1,4 @@
-const core_log = @import("fr_core");
+const core = @import("fr_core");
 const windows = std.os.windows;
 const Application = @import("../application.zig");
 
@@ -32,7 +32,7 @@ pub fn init(
 
     const icon: ?windows.HICON = win32.LoadIconA(platform_state.h_instance, win32.IDI_APPLICATION);
     var wndclass: win32.WNDCLASSA = std.mem.zeroes(win32.WNDCLASSA);
-    wndclass.style = win32.CS_DBLCLKS; // Get double clicks
+    wndclass.style = win32.WNDCLASS_STYLES{}; //win32.CS_DBLCLKS; // Get double clicks
     wndclass.lpfnWndProc = win32_process_message;
     wndclass.cbClsExtra = 0;
     wndclass.cbWndExtra = 0;
@@ -147,9 +147,8 @@ fn win32_process_message(
     switch (msg) {
         // Erasing the backgroudn will be handled by the application. Stops flickering
         win32.WM_ERASEBKGND => return 1,
-        // TODO: Fire event for application to quit
         win32.WM_CLOSE => {
-            Application.on_event(application_state, .application_quit, std.mem.zeroes([16]u8));
+            Application.on_event(application_state, .APPLICATION_QUIT, std.mem.zeroes([16]u8));
             return 0;
         },
         win32.WM_DESTROY => {
@@ -161,44 +160,127 @@ fn win32_process_message(
             _ = win32.GetClientRect(hwnd, &rect);
             const width: i32 = rect.right - rect.left;
             const height: i32 = rect.bottom - rect.top;
-            _ = width;
-            _ = height;
-            //TODO: fire resize event
+            // application_state.engine.core_log.trace("W: {d}, H: {d}\n", .{ width, height });
+            // const lparam: i32 = @truncate(l_param);
+            // const w2: i16 = @truncate(lparam);
+            // const h2: i16 = @truncate(lparam >> 16);
+            // application_state.engine.core_log.trace("W2: {d}, H2: {d}\n", .{ w2, h2 });
+            const data: core.event.WindowResizeEventData = .{
+                .size = .{ .width = @truncate(width), .height = @truncate(height) },
+            };
+            application_state.on_event(.WINDOW_RESIZE, @bitCast(data));
+            return 0;
         },
-        win32.WM_KEYDOWN,
-        win32.WM_SYSKEYDOWN,
         win32.WM_KEYUP,
         win32.WM_SYSKEYUP,
         => {
-            const pressed = (msg == win32.WM_KEYDOWN or msg == win32.WM_SYSKEYDOWN);
-            _ = pressed;
-            //TODO: Input processing
+            var key: core.input.Key = @enumFromInt(w_param);
+            const lparam: usize = @bitCast(l_param);
+            const is_extended = @as(u32, @truncate(lparam)) & 0x01000000 != 0;
+
+            switch (key) {
+                .ALT => {
+                    key = if (is_extended) .RALT else .LALT;
+                },
+                .SHIFT => {
+                    key = @enumFromInt(win32.MapVirtualKeyA(@as(u8, @truncate(lparam >> 16)), win32.MAPVK_VSC_TO_VK_EX));
+                },
+                .CONTROL => {
+                    key = if (is_extended) .RCONTROL else .LCONTROL;
+                },
+                else => {},
+            }
+
+            application_state.engine.input.process_key_event(&application_state.engine.event, key, 0);
+            return 0;
+        },
+        win32.WM_KEYDOWN,
+        win32.WM_SYSKEYDOWN,
+        => {
+            var key: core.input.Key = @enumFromInt(w_param);
+            const lparam: u32 = @truncate(@as(usize, @bitCast(l_param)));
+            const is_extended = lparam & 0x01000000 != 0;
+
+            switch (key) {
+                .ALT => {
+                    key = if (is_extended) .RALT else .LALT;
+                },
+                .SHIFT => {
+                    key = @enumFromInt(win32.MapVirtualKeyA(@as(u8, @truncate(lparam >> 16)), win32.MAPVK_VSC_TO_VK_EX));
+                },
+                .CONTROL => {
+                    key = if (is_extended) .RCONTROL else .LCONTROL;
+                },
+                else => {},
+            }
+            application_state.engine.input.process_key_event(&application_state.engine.event, key, 1);
+            return 0;
         },
         win32.WM_MOUSEMOVE => {
-            const x_pos: isize = l_param & 0xffff;
-            const y_pos: isize = (l_param >> 16) & 0xffff;
-            _ = x_pos;
-            _ = y_pos;
-            // TODO: Input processing
+            const x_pos: i16 = @truncate(l_param & 0xffff);
+            const y_pos: i16 = @truncate((l_param >> 16) & 0xffff);
+            application_state.engine.input.process_mouse_move(&application_state.engine.event, x_pos, y_pos);
+            return 0;
         },
         win32.WM_MOUSEWHEEL => {
-            var z_delta = (w_param >> 16) & 0xffff;
+            //TODO: Do we want to parse the rest of the message
+            const z_delta: i16 = @bitCast(@as(u16, @truncate((w_param >> 16) & 0xffff)));
             if (z_delta != 0) {
-                z_delta = if (z_delta < 0) -1 else 1;
+                const delta: i8 = if (z_delta < 0) -1 else 1;
+                application_state.engine.input.process_mouse_wheel(
+                    &application_state.engine.event,
+                    delta,
+                    @truncate(l_param),
+                );
             }
-            // TODO: Input processing
         },
-        win32.WM_LBUTTONDOWN,
-        win32.WM_LBUTTONUP,
-        win32.WM_RBUTTONUP,
-        win32.WM_RBUTTONDOWN,
-        win32.WM_MBUTTONUP,
-        win32.WM_MBUTTONDOWN,
-        => {
-            const pressed = (msg == win32.WM_LBUTTONDOWN or msg == win32.WM_RBUTTONDOWN or msg == win32.WM_MBUTTONDOWN);
-            _ = pressed;
-            // TODO: Input processing
+        win32.WM_LBUTTONDOWN => {
+            const lparam: i32 = @truncate(l_param);
+            application_state.engine.input.process_mouse_event(&application_state.engine.event, .LEFT, lparam, 1);
+            return 1;
         },
+        win32.WM_RBUTTONDOWN => {
+            const lparam: i32 = @truncate(l_param);
+            application_state.engine.input.process_mouse_event(&application_state.engine.event, .RIGHT, lparam, 1);
+            return 1;
+        },
+
+        win32.WM_XBUTTONDOWN => {
+            const lparam: i32 = @truncate(l_param);
+            const x1: core.input.Button = if (w_param & 0x100000000 != 0) .X1 else .X2;
+            application_state.engine.input.process_xmouse_event(&application_state.engine.event, x1, lparam, 1);
+            return 1;
+        },
+
+        win32.WM_MBUTTONDOWN => {
+            const lparam: i32 = @truncate(l_param);
+            application_state.engine.input.process_mouse_event(&application_state.engine.event, .MIDDLE, lparam, 1);
+            return 1;
+        },
+        win32.WM_LBUTTONUP => {
+            const lparam: i32 = @truncate(l_param);
+            application_state.engine.input.process_mouse_event(&application_state.engine.event, .LEFT, lparam, 0);
+            return 1;
+        },
+
+        win32.WM_RBUTTONUP => {
+            const lparam: i32 = @truncate(l_param);
+            application_state.engine.input.process_mouse_event(&application_state.engine.event, .RIGHT, lparam, 0);
+            return 1;
+        },
+
+        win32.WM_MBUTTONUP => {
+            const lparam: i32 = @truncate(l_param);
+            application_state.engine.input.process_mouse_event(&application_state.engine.event, .MIDDLE, lparam, 0);
+            return 1;
+        },
+        win32.WM_XBUTTONUP => {
+            const lparam: i32 = @truncate(l_param);
+            const x1: core.input.Button = if (w_param & 0x100000000 != 0) .X1 else .X2;
+            application_state.engine.input.process_xmouse_event(&application_state.engine.event, x1, lparam, 0);
+            return 1;
+        },
+
         else => {},
     }
     return win32.DefWindowProcA(hwnd, msg, w_param, l_param);

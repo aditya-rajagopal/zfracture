@@ -18,6 +18,12 @@ pub fn main() !void {
             @panic("memory leak");
         }
     }
+    defer {
+        const check = gpa.deinit();
+        if (check == .leak) {
+            @panic("memory leak");
+        }
+    }
 
     var app = try application.init(allocator);
     errdefer app.deinit();
@@ -25,11 +31,6 @@ pub fn main() !void {
     try app.run();
 
     app.deinit();
-
-    const check = gpa.deinit();
-    if (check == .leak) {
-        @panic("memory leak");
-    }
 }
 
 const std = @import("std");

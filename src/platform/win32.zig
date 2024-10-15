@@ -585,6 +585,8 @@ pub const WM_PENWINLAST = @as(u32, 911);
 pub const WM_APP = @as(u32, 32768);
 pub const WM_USER = @as(u32, 1024);
 
+pub const MAPVK_VSC_TO_VK_EX = @as(u32, 3);
+pub const MAPVK_VK_TO_VSC_EX = @as(u32, 4);
 //------------------------------------------------ FUNCTIONS ------------------------------------------/
 
 pub extern "kernel32" fn GetModuleHandleA(
@@ -693,6 +695,11 @@ pub extern "kernel32" fn GetProcAddress(
 pub extern "kernel32" fn FreeLibrary(
     hLibModule: ?windows.HINSTANCE,
 ) callconv(windows.WINAPI) windows.BOOL;
+
+pub extern "user32" fn MapVirtualKeyA(
+    uCode: u32,
+    uMapType: u32,
+) callconv(windows.WINAPI) u32;
 
 pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);

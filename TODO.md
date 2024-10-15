@@ -20,13 +20,14 @@
     - [ ] Create a custom allocator for Fracture that allows larger virtual space allocations for expanding allocations
 - [ ] windows platform layer
     - [x] Create a window
+    - [x] Handles events and dispatch to the event system
     - [ ] Support multiple windows
-    - [ ] Handles events and dispatch to the event system
 - [ ] Event system
     - [x] Basic event handling and types
     - [x] Move event system into core as type
     - [x] Move event state into Engine
     - [ ] Make sure that when the DLL is reloaded the event listerers are still valid
+    - [ ] Do we need the static versions of some of the functions
     - [ ] We need additional context for the listener and sender since most game functions are stateless
         - [ ] Maybe the game can have it's own event handler and can be called by the event system instead of having to connect directly
     - [ ] Create multiple lists for handling frame future events and timed events
@@ -35,6 +36,10 @@
     - [ ] Do permanent events need a seperate structure?
     - [ ] Priority queue for deferred events?
 - [ ] Input system
+    - [x] Initial input system implementation
+    - [x] API for platform layer to dispatch input events 
+    - [ ] Think of using a bit set for the keys instead of an array
+    - [ ] Are the comptime versions of the functions necessary
 - [ ] Signal System
     - [ ] Decide if there is a need for signal plug and socket system.
 - [ ] SIMD Math Library

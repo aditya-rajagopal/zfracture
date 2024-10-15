@@ -11,7 +11,11 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     const state = foo_allocator.create(GameState) catch return null;
     state.testing = true;
     state.delta_time = 1.0;
-    _ = engine.event.register(@enumFromInt(50), random_event);
+    _ = engine.event.register(.KEY_PRESS, random_event);
+    _ = engine.event.register(.KEY_RELEASE, random_event);
+    _ = engine.event.register(.KEY_ESCAPE, random_event);
+    _ = engine.event.register(.MOUSE_BUTTON_PRESS, random_event);
+    _ = engine.event.register(.MOUSE_BUTTON_RELEASE, random_event);
     return state;
 }
 
@@ -31,6 +35,26 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         frame_alloc.free(temp_data);
         state.testing = false;
     }
+    if (engine.input.key_pressed_this_frame(.A)) {
+        engine.log.trace("A was pressed this frame", .{});
+    }
+
+    if (engine.input.key_released_this_frame(.A)) {
+        engine.log.trace("A was released this frame", .{});
+    }
+
+    if (engine.input.is_key_down(.A)) {
+        engine.log.trace("A is being pressed", .{});
+    }
+
+    if (engine.input.is_scroll_down()) {
+        engine.log.trace("Scrolled down!", .{});
+    }
+
+    if (engine.input.is_mouse_moved()) {
+        engine.log.trace("Mouse moved!", .{});
+    }
+
     // core.log.GameLog.err(&engine.log, "Hi ramani", .{});
     // engine.log.warn("Hi ramani", .{});
     return true;
@@ -43,9 +67,9 @@ pub fn render(engine: *core.Fracture, game_state: *anyopaque) bool {
 }
 
 pub fn random_event(event_code: core.event.EventCode, event_data: core.event.EventData) bool {
-    _ = event_code;
-    _ = event_data;
-    // std.debug.print("I am in an event\n", .{});
+    // const key_data: core.event.KeyEventData = @bitCast(event_data);
+    std.debug.print("{s}\n", .{@tagName(event_code)});
+    std.debug.print("{any}\n", .{event_data});
     return true;
 }
 
@@ -57,3 +81,4 @@ pub fn on_resize(engine: *core.Fracture, game_state: *anyopaque, width: u32, hei
 }
 
 const std = @import("std");
+const builtin = @import("builtin");

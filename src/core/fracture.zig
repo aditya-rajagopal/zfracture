@@ -1,6 +1,7 @@
 pub const Fracture = struct {
     memory: mem.Memory,
     event: event,
+    input: input,
     core_log: log.CoreLog,
     log: log.GameLog,
     is_suspended: bool = false,
@@ -49,6 +50,7 @@ pub const log = @import("log.zig");
 pub const defines = @import("defines.zig");
 pub const mem = @import("memory.zig");
 pub const event = @import("event.zig");
+pub const input = @import("input.zig");
 
 pub const MergeEnums = comptime_funcs.MergeEnums;
 pub const Distinct = comptime_funcs.Distinct;

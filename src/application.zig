@@ -61,6 +61,10 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     errdefer app.engine.log.deinit();
     app.engine.log.info("Logging system has been initialized", .{});
 
+    // Event
+    try app.engine.event.init();
+    errdefer app.engine.event.deinit();
+
     // Platform
     try platform.init(
         app,
@@ -97,9 +101,8 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     }
     app.engine.core_log.info("Memory has been initialized", .{});
 
-    // Event
-    try app.engine.event.init();
-    errdefer app.engine.event.deinit();
+    // Input
+    app.engine.input.init();
 
     // Application
     app.game_state = app.api.init(&app.engine) orelse {
@@ -122,9 +125,6 @@ pub fn deinit(self: *Application) void {
     self.api.deinit(&self.engine, self.game_state);
     self.engine.core_log.info("Client application has been shutdown", .{});
 
-    // Event shutdown
-    self.engine.event.deinit();
-
     // Platform shutdown
     platform.deinit(&self.platform_state);
     self.engine.core_log.info("Platform layer has been shutdown", .{});
@@ -137,6 +137,9 @@ pub fn deinit(self: *Application) void {
     self.frame_arena.deinit();
     self.engine.memory.gpa.print_memory_stats(&self.engine.core_log);
     self.engine.core_log.info("Context memory has been shutdown", .{});
+
+    // Event shutdown
+    self.engine.event.deinit();
 
     // Logging shutdown
     self.engine.core_log.info("Logging system is shutting down", .{});
@@ -199,6 +202,7 @@ pub fn run(self: *Application) ApplicationError!void {
             },
             else => {},
         }
+        self.engine.input.update();
         // break;
     }
 
@@ -211,9 +215,18 @@ pub fn run(self: *Application) ApplicationError!void {
 
 pub fn on_event(self: *Application, comptime event_code: core.event.EventCode, event_data: core.event.EventData) void {
     self.engine.core_log.trace("Got an event", .{});
-    if (event_code == .application_quit) {
-        _ = self.engine.event.fire(.application_quit, event_data);
-        self.engine.is_running = false;
+    switch (event_code) {
+        .APPLICATION_QUIT => {
+            _ = self.engine.event.fire(.APPLICATION_QUIT, event_data);
+            self.engine.is_running = false;
+        },
+        .WINDOW_RESIZE => {
+            const window_resize_data: core.event.WindowResizeEventData = @bitCast(event_data);
+            self.engine.width = window_resize_data.size.width;
+            self.engine.height = window_resize_data.size.height;
+            _ = self.engine.event.fire(.WINDOW_RESIZE, event_data);
+        },
+        else => {},
     }
 }
 
