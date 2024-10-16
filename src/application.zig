@@ -14,9 +14,12 @@ const DLL = switch (builtin.mode) {
     else => void,
 };
 
+const Frontend = @import("renderer/frontend.zig");
+
 pub const Application = @This();
 engine: core.Fracture = undefined,
 platform_state: platform.PlatformState = undefined,
+frontend: Frontend = undefined,
 game_state: *anyopaque,
 api: core.API,
 dll: DLL,
@@ -29,7 +32,8 @@ const ApplicationError =
     std.mem.Allocator.Error ||
     core.log.LoggerError ||
     std.fs.File.OpenError ||
-    std.fs.File.StatError;
+    std.fs.File.StatError ||
+    Frontend.FrontendError;
 
 pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
@@ -98,7 +102,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     if (comptime app_config.frame_arena_preheat_bytes != 0) {
         _ = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, app_config.frame_arena_preheat_bytes);
         if (!app.frame_arena.reset(.retain_capacity)) {
-            @setCold(true);
+            // @setCold(true);
             app.engine.core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
         app.engine.core_log.info("Frame arena has been preheated with {d} bytes of memory", .{app_config.frame_arena_preheat_bytes});
@@ -108,9 +112,12 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     // Input
     app.engine.input.init();
 
+    // Renderer
+    try app.frontend.init(app_config.application_name, &app.platform_state);
+
     // Application
     app.game_state = app.api.init(&app.engine) orelse {
-        @setCold(true);
+        @branchHint(.cold);
         app.engine.core_log.fatal("Client application failed to initialize", .{});
         return ApplicationError.ClientAppInit;
     };
@@ -128,6 +135,10 @@ pub fn deinit(self: *Application) void {
     // Application shutdown
     self.api.deinit(&self.engine, self.game_state);
     self.engine.core_log.info("Client application has been shutdown", .{});
+
+    // Renderer shutdown
+    self.frontend.deinit();
+    self.engine.core_log.info("Renderer has been shutdown", .{});
 
     // Platform shutdown
     platform.deinit(&self.platform_state);
@@ -168,25 +179,32 @@ pub fn run(self: *Application) ApplicationError!void {
         // Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
         if (!self.frame_arena.reset(.retain_capacity)) {
-            @setCold(true);
+            // @setCold(true);
             core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
             if (!self.api.update(&self.engine, self.game_state)) {
-                @setCold(true);
+                @branchHint(.cold);
                 core_log.fatal("Client app update failed, shutting down", .{});
                 err = ApplicationError.FailedUpdate;
                 break;
             }
 
             if (!self.api.render(&self.engine, self.game_state)) {
-                @setCold(true);
+                @branchHint(.cold);
                 core_log.fatal("Client app render failed, shutting down", .{});
                 err = ApplicationError.FailedRender;
                 break;
             }
+
+            // Temporary packet passing
+            self.frontend.draw_frame(.{ .delta_time = 0 }) catch |e| {
+                err = e;
+                self.engine.is_running = false;
+                continue;
+            };
         }
 
         switch (builtin.mode) {

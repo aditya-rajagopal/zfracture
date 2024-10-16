@@ -21,8 +21,8 @@ pub const Memory = struct {
 ///! An allocator that allows you to track total allocations and deallocations of the backing allocator
 ///! During release memory stats are not tracked and this essentially becomes a thin wrapper around
 ///! the backing allocator
-pub fn TrackingAllocator(comptime alloc_tag: @Type(.EnumLiteral), comptime MemoryTag: type) type {
-    if (comptime @typeInfo(MemoryTag) != .Enum) {
+pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime MemoryTag: type) type {
+    if (comptime @typeInfo(MemoryTag) != .@"enum") {
         @compileError("Memory Tag must be an enum");
     }
     const memory_tag_len = switch (builtin.mode) {
@@ -43,7 +43,7 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.EnumLiteral), comptime Memor
         const AllocatorTypes: [memory_tag_len]type = blk: {
             if (memory_tag_len != 0) {
                 var alloc_types: [memory_tag_len]type = undefined;
-                for (@typeInfo(MemoryTag).Enum.fields) |field| {
+                for (@typeInfo(MemoryTag).@"enum".fields) |field| {
                     const tag: MemoryTag = @enumFromInt(field.value);
                     alloc_types[field.value] = TypedAllocator(tag);
                 }
@@ -144,7 +144,7 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.EnumLiteral), comptime Memor
                 core_log.debug("=" ** padding, .{});
                 core_log.debug("|\t{s:<16}| {s:^9} | {s:^9}|", .{ "MemoryTag", "Current", "Peak" });
                 core_log.debug("=" ** padding, .{});
-                inline for (@typeInfo(MemoryTag).Enum.fields) |field| {
+                inline for (@typeInfo(MemoryTag).@"enum".fields) |field| {
                     const curr_bytes = defines.parse_bytes(self.memory_stats.current_memory[field.value]);
                     const peak_bytes = defines.parse_bytes(self.memory_stats.peak_memory[field.value]);
                     core_log.debug("|\t{s:<16}| {s} |{s} |", .{ field.name, curr_bytes, peak_bytes });

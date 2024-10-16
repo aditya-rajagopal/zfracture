@@ -5,7 +5,7 @@ pub const GameLog = Logger(default_log, .Game, null);
 
 /// Struct to define log levels of custom scopes defined in the app
 pub const ScopeLevel = struct {
-    scope: @Type(.EnumLiteral),
+    scope: @Type(.enum_literal),
     level: Level,
 };
 
@@ -66,7 +66,7 @@ const scope_levels: []const ScopeLevel = &[_]ScopeLevel{
 };
 
 /// The type of the logging function required
-pub const LogFn = *const fn (*LogConfig, comptime Level, comptime @Type(.EnumLiteral), comptime []const u8, anytype) void;
+pub const LogFn = *const fn (*LogConfig, comptime Level, comptime @Type(.enum_literal), comptime []const u8, anytype) void;
 
 /// The configuration of a logger that is passed to log functions
 pub const LogConfig = struct {
@@ -80,7 +80,7 @@ pub const LogConfig = struct {
 
 pub const LoggerError = error{TTYConfigFailed};
 
-pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.EnumLiteral), comptime log_level: ?Level) type {
+pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal), comptime log_level: ?Level) type {
     const scope_log_level = if (log_level) |level| blk: {
         inline for (scope_levels) |scope_level| {
             if (scope_level.scope == scope) {
@@ -135,7 +135,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.EnumLiteral),
             comptime format: []const u8,
             args: anytype,
         ) void {
-            @setCold(true);
+            @branchHint(.cold);
             self.logging(.fatal, format, args);
         }
 
@@ -147,7 +147,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.EnumLiteral),
             comptime format: []const u8,
             args: anytype,
         ) void {
-            @setCold(true);
+            @branchHint(.cold);
             self.logging(.err, format, args);
         }
 
@@ -216,7 +216,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.EnumLiteral),
         /// ```
         pub fn assert_msg(self: *Self, condition: bool, comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
             if (!condition) {
-                @setCold(true);
+                @branchHint(.cold);
                 self.fatal(
                     "Assertion failed: {s}:{d} in file {s}",
                     .{ src.fn_name, src.line, src.file },
@@ -279,7 +279,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.EnumLiteral),
         /// never_msg(@src(), "I should have never reached this place. The number must not be {d}", .{42});
         /// ```
         pub fn never_msg(self: *Self, comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
-            @setCold(true);
+            @branchHint(.cold);
             self.fatal(
                 "Assertion failed: {s}:{d} in file {s}",
                 .{ src.fn_name, src.line, src.file },
@@ -302,7 +302,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.EnumLiteral),
         /// never(@src());
         /// ```
         pub fn never(comptime src: std.builtin.SourceLocation) void {
-            @setCold(true);
+            @branchHint(.cold);
             never_msg(src, "", .{});
         }
     };
@@ -313,7 +313,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.EnumLiteral),
 pub fn default_log(
     logger: *LogConfig,
     comptime message_level: Level,
-    comptime scope: @Type(.EnumLiteral),
+    comptime scope: @Type(.enum_literal),
     comptime format: []const u8,
     args: anytype,
 ) void {
