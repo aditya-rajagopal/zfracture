@@ -36,11 +36,6 @@ const Device = vk.DeviceProxy(apis);
 
 pub const CommandBuffer = vk.CommandBufferProxy(apis);
 
-// const vkGetInstanceProcAddr = @extern(vk.PfnGetInstanceProcAddr, .{
-//     .name = "vkGetInstanceProcAddr",
-//     .library_name = "vulkan-1",
-// });
-
 vkb: BaseDispatch,
 instance: Instance,
 allocator: std.mem.Allocator,
