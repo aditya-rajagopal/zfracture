@@ -6,18 +6,22 @@ const platform = @import("platform/platform.zig");
 
 const config = @import("config.zig");
 const application_config = config.app_config;
+const DLL = switch (builtin.mode) {
+    .Debug => struct {
+        instance: platform.LibraryHandle,
+        time_stamp: i128 align(8),
+    },
+    else => void,
+};
 
 pub const Application = @This();
-platform_state: platform.PlatformState = undefined,
 engine: core.Fracture = undefined,
-frame_arena: std.heap.ArenaAllocator = undefined,
+platform_state: platform.PlatformState = undefined,
 game_state: *anyopaque,
 api: core.API,
-dll: struct {
-    instance: platform.LibraryHandle,
-    time_stamp: i128,
-},
-buffer: [1024]u8,
+dll: DLL,
+frame_arena: std.heap.ArenaAllocator = undefined,
+// buffer: [1024]u8,
 
 const ApplicationError =
     error{ ClientAppInit, FailedUpdate, FailedRender } ||
@@ -160,7 +164,6 @@ pub fn run(self: *Application) ApplicationError!void {
 
     while (self.engine.is_running) {
         platform.pump_messages(&self.platform_state);
-        _ = self.engine.event.fire(@enumFromInt(50), std.mem.zeroes(core.event.EventData));
 
         // Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
@@ -217,14 +220,14 @@ pub fn on_event(self: *Application, comptime event_code: core.event.EventCode, e
     self.engine.core_log.trace("Got an event", .{});
     switch (event_code) {
         .APPLICATION_QUIT => {
-            _ = self.engine.event.fire(.APPLICATION_QUIT, event_data);
+            _ = self.engine.event.fire(.APPLICATION_QUIT, &self.engine, event_data);
             self.engine.is_running = false;
         },
         .WINDOW_RESIZE => {
             const window_resize_data: core.event.WindowResizeEventData = @bitCast(event_data);
             self.engine.width = window_resize_data.size.width;
             self.engine.height = window_resize_data.size.height;
-            _ = self.engine.event.fire(.WINDOW_RESIZE, event_data);
+            _ = self.engine.event.fire(.WINDOW_RESIZE, &self.engine, event_data);
         },
         else => {},
     }
@@ -251,6 +254,10 @@ fn reload_library(self: *Application) bool {
     self.api.render = render;
     self.api.on_resize = on_resize;
     return true;
+}
+
+test {
+    std.debug.print("Size of: {d}, {d}\n", .{ @sizeOf(Application), @alignOf(Application) });
 }
 
 const std = @import("std");

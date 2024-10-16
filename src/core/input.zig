@@ -1,6 +1,7 @@
 // TODO:
 //      - [ ] Think of using a bit set for the keys instead of an array
 //      - [ ] Are the comptime versions of the functions necessary
+//      - [ ] Remove reference to event system here. The platform/application should handle firing events. Or pass the engine.
 const KeysArray = [std.math.maxInt(u8)]u8;
 const ButtonsArray = [MAX_BUTTONS]u8;
 
@@ -19,11 +20,11 @@ current_mouse_pos: MousePosition = .{},
 
 current_mouse_scroll: i8 = 0,
 
-allow_repeats: bool = true,
+allow_repeats: bool = false,
 
 pub fn init(self: *Input) void {
     self.* = std.mem.zeroes(Input);
-    self.allow_repeats = true;
+    // self.allow_repeats = true;
 }
 
 pub fn update(self: *Input) void {
@@ -125,13 +126,13 @@ pub fn process_key_event(self: *Input, event_system: *event, key: Key, comptime 
         };
 
         if (comptime pressed > 0) {
-            _ = event_system.fire(.KEY_PRESS, @bitCast(data));
+            _ = event_system.fire(.KEY_PRESS, null, @bitCast(data));
         } else {
-            _ = event_system.fire(.KEY_RELEASE, @bitCast(data));
+            _ = event_system.fire(.KEY_RELEASE, null, @bitCast(data));
         }
 
         const event_code: event.EventCode = @enumFromInt(@as(u8, @intFromEnum(key)));
-        _ = event_system.fire(event_code, @bitCast(data));
+        _ = event_system.fire(event_code, null, @bitCast(data));
     }
 }
 
@@ -155,13 +156,13 @@ pub fn process_mouse_event(
         };
 
         if (comptime pressed > 0) {
-            _ = event_system.fire(.MOUSE_BUTTON_PRESS, @bitCast(data));
+            _ = event_system.fire(.MOUSE_BUTTON_PRESS, null, @bitCast(data));
         } else {
-            _ = event_system.fire(.MOUSE_BUTTON_RELEASE, @bitCast(data));
+            _ = event_system.fire(.MOUSE_BUTTON_RELEASE, null, @bitCast(data));
         }
 
         const event_code: event.EventCode = @enumFromInt(@as(u8, @intFromEnum(button)));
-        _ = event_system.fire(event_code, @bitCast(data));
+        _ = event_system.fire(event_code, null, @bitCast(data));
     }
 }
 
@@ -184,13 +185,13 @@ pub fn process_xmouse_event(
         };
 
         if (comptime pressed > 0) {
-            _ = event_system.fire(.MOUSE_BUTTON_PRESS, @bitCast(data));
+            _ = event_system.fire(.MOUSE_BUTTON_PRESS, null, @bitCast(data));
         } else {
-            _ = event_system.fire(.MOUSE_BUTTON_RELEASE, @bitCast(data));
+            _ = event_system.fire(.MOUSE_BUTTON_RELEASE, null, @bitCast(data));
         }
 
         const event_code: event.EventCode = @enumFromInt(@as(u8, @intFromEnum(button)));
-        _ = event_system.fire(event_code, @bitCast(data));
+        _ = event_system.fire(event_code, null, @bitCast(data));
     }
 }
 
@@ -200,7 +201,7 @@ pub fn process_mouse_move(self: *Input, event_system: *event, x: i16, y: i16) vo
     const mouse_move_data: event.MouseMoveEventData = .{
         .mouse_pos = .{ .x = x, .y = y },
     };
-    _ = event_system.fire(.MOUSE_MOVE, @bitCast(mouse_move_data));
+    _ = event_system.fire(.MOUSE_MOVE, null, @bitCast(mouse_move_data));
 }
 
 pub fn process_mouse_wheel(self: *Input, event_system: *event, z_delta: i8, mousepos: i32) void {
@@ -210,7 +211,11 @@ pub fn process_mouse_wheel(self: *Input, event_system: *event, z_delta: i8, mous
         .z_delta = z_delta,
         .mouse_pos = .{ .x = @truncate(mousepos), .y = @truncate(mousepos >> 16) },
     };
-    _ = event_system.fire(.MOUSE_SCROLL, @bitCast(data));
+    _ = event_system.fire(.MOUSE_SCROLL, null, @bitCast(data));
+}
+
+test Input {
+    std.debug.print("Size of: {d}, {d}\n", .{ @sizeOf(Input), @alignOf(Input) });
 }
 
 pub const MAX_BUTTONS = 6;
