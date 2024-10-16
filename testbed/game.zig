@@ -49,17 +49,17 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         engine.log.trace("A was released this frame", .{});
     }
 
-    if (engine.input.is_key_down(.A)) {
-        engine.log.trace("A is being pressed", .{});
-    }
+    // if (engine.input.is_key_down(.A)) {
+    //     engine.log.trace("A is being pressed", .{});
+    // }
 
     if (engine.input.is_scroll_down()) {
         engine.log.trace("Scrolled down!", .{});
     }
 
-    if (engine.input.is_mouse_moved()) {
-        engine.log.trace("Mouse moved!", .{});
-    }
+    // if (engine.input.is_mouse_moved()) {
+    //     engine.log.trace("Mouse moved!", .{});
+    // }
 
     // core.log.GameLog.err(&engine.log, "Hi ramani", .{});
     // engine.log.warn("Hi ramani", .{});

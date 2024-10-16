@@ -20,11 +20,11 @@ current_mouse_pos: MousePosition = .{},
 
 current_mouse_scroll: i8 = 0,
 
-allow_repeats: bool = true,
+allow_repeats: bool = false,
 
 pub fn init(self: *Input) void {
     self.* = std.mem.zeroes(Input);
-    self.allow_repeats = true;
+    // self.allow_repeats = true;
 }
 
 pub fn update(self: *Input) void {

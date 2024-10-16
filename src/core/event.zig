@@ -18,16 +18,11 @@ pub const max_event_types = 1024;
 // TODO: Does this need to be SoA or AoS
 const Listeners = [max_callbacks_per_event * max_event_types]?*anyopaque;
 const CallbackFuncList = [max_callbacks_per_event * max_event_types]EventCallback;
-const EventState = struct {
-    // listeners: [max_event_types]std.ArrayListUnmanaged(?*anyopaque),
-    callbacks: [max_event_types]std.ArrayListUnmanaged(EventCallback),
-};
 
 const Event = @This();
 
 listeners_list: [max_callbacks_per_event * max_event_types]?*anyopaque = undefined,
 callback_list: [max_callbacks_per_event * max_event_types]EventCallback = undefined,
-// event_state: EventState = undefined,
 lens: [max_event_types]usize,
 // local_arena: std.heap.ArenaAllocator = undefined,
 // initialized: bool = false,
@@ -37,16 +32,8 @@ pub fn init(self: *Event) !void {
     // const allocator = ctx.gpa.get_type_allocator(.event);
     // local_arena = std.heap.ArenaAllocator.init(allocator);
 
-    // self.lens = std.mem.zeroes([max_event_types]usize);
     @memset(self.lens[0..max_event_types], 0);
     @memset(self.listeners_list[0 .. max_event_types * max_callbacks_per_event], null);
-
-    // for (0..max_event_types) |i| {
-    //     const start = i * max_callbacks_per_event;
-    //     const end = start + max_callbacks_per_event;
-    //     self.event_state.callbacks[i] = std.ArrayListUnmanaged(EventCallback).initBuffer(self.callback_list[start..end]);
-    //     // self.event_state.listeners[i] = std.ArrayListUnmanaged(?*anyopaque).initBuffer(self.listeners_list[start..end]);
-    // }
 }
 
 /// Cleanup the event system
@@ -62,11 +49,12 @@ pub fn deinit(self: *Event) void {
 ///
 /// Arguments:
 ///     - event_code: code for the type of event that needs to be listened for
+///     - listener: Pointer to data the listener wants to pass to the callback function
 ///     - callback: Function to call when an event is fired
 pub fn register(self: *Event, event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
     const code: usize = @intFromEnum(event_code);
     const len = self.lens[code];
-    assert(len < max_callbacks_per_event);
+    assert(len <= max_callbacks_per_event);
     assert(code < max_event_types);
 
     const start = code * max_callbacks_per_event;
@@ -89,23 +77,39 @@ pub fn register(self: *Event, event_code: EventCode, listener: ?*anyopaque, call
     return true;
 }
 
-// pub fn register_static(self: *Event, comptime event_code: EventCode, callback: EventCallback) bool {
-//     const code: usize = @intFromEnum(event_code);
-//     const array_list = &self.event_state.callbacks[code];
-//     for (array_list.items) |c| {
-//         if (c.listener == callback.listener and c.function == callback.function) {
-//             switch (builtin.mode) {
-//                 .Debug => {
-//                     unreachable;
-//                 },
-//                 else => return false,
-//             }
-//         }
-//     }
-//
-//     array_list.appendAssumeCapacity(callback);
-//     return true;
-// }
+/// Comptime version of the register function. This expects you to know the event_code at compile time.
+/// Not really needed but if you are registering and deregistering events rapidly you might want to use this one.
+///
+/// Arguments:
+///     - event_code: Comptime code for the type of event that needs to be listened for
+///     - listener: Pointer to data the listener wants to pass to the callback function
+///     - callback: Function to call when an event is fired
+pub fn register_static(self: *Event, comptime event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
+    const code: usize = @intFromEnum(event_code);
+    const start = code * max_callbacks_per_event;
+    comptime assert(code < max_event_types);
+
+    const len = self.lens[code];
+    assert(len < max_callbacks_per_event);
+
+    const end = start + len;
+    for (start..end) |i| {
+        if (self.listeners_list[i] == listener and self.callback_list[i] == callback) {
+            switch (builtin.mode) {
+                .Debug => {
+                    unreachable;
+                },
+                else => return false,
+            }
+        }
+    }
+
+    self.listeners_list[end] = listener;
+    self.callback_list[end] = callback;
+    self.lens[code] += 1;
+
+    return true;
+}
 
 /// Deregister an event.
 /// This will check if the function actually exists and will return false if it could not find it. In debug builds
@@ -114,11 +118,11 @@ pub fn register(self: *Event, event_code: EventCode, listener: ?*anyopaque, call
 ///
 /// Arguments:
 ///     - event_code:code for the type of event that the callback was registered for
+///     - listener: Pointer to data the listener wants to pass to the callback function
 ///     - callback: Function pointer that was registered
 pub fn deregister(self: *Event, event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
     const code: usize = @intFromEnum(event_code);
     const len = self.lens[code];
-    assert(len > 0);
     assert(code < max_event_types);
 
     const start = code * max_callbacks_per_event;
@@ -157,15 +161,17 @@ pub fn dispatch_deffered(self: *Event) bool {
 ///
 /// Arguments:
 ///     - event_code: code for the type of event that is being fired
+///     - sender: pointer that the sender wants to send to all the callbacks
 ///     - event_data: the packet that is forwarded to all callbacks
 pub fn fire(self: *Event, event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
     const code: usize = @intFromEnum(event_code);
+    const start = code * max_callbacks_per_event;
+
     const len = self.lens[code];
     assert(code < max_event_types);
 
     if (len == 0) return true;
 
-    const start = code * max_callbacks_per_event;
     const end = start + len;
     for (start..end) |i| {
         if (self.callback_list[i](event_code, event_data, self.listeners_list[i], sender)) {
@@ -175,12 +181,27 @@ pub fn fire(self: *Event, event_code: EventCode, sender: ?*anyopaque, event_data
     return true;
 }
 
+/// Comptime version of the fire function. This is more useful than register_static. You probably are firing events
+/// every frame from many places and if you know the event code at compile time this should save a few clock cycles
+/// and allow the compiler to optimize a bit more.
+///
+/// THough i am not sure if it is truly better as you get a lot of different functions that will hit the icache
+///
+/// Arguments:
+///     - event_code: code for the type of event that is being fired
+///     - sender: pointer that the sender wants to send to all the callbacks
+///     - event_data: the packet that is forwarded to all callbacks
 pub fn fire_static(self: *Event, comptime event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
     const code: usize = @intFromEnum(event_code);
-    const array_list = &self.event_state.callbacks[code];
+    const len = self.lens[code];
+    comptime assert(code < max_event_types);
 
-    for (array_list.items) |callback| {
-        if (callback.function(event_code, event_data, callback.listener, sender)) {
+    if (len == 0) return true;
+
+    const start = code * max_callbacks_per_event;
+    const end = start + len;
+    for (start..end) |i| {
+        if (self.callback_list[i](event_code, event_data, self.listeners_list[i], sender)) {
             return true;
         }
     }
@@ -505,12 +526,12 @@ test "Event" {
 
     const dispatcher = struct {
         pub fn dipatch(e: *Event) bool {
-            return e.fire(EventCode.KEY_PRESS, @bitCast(key_data));
+            return e.fire(EventCode.KEY_PRESS, null, @bitCast(key_data));
         }
     };
 
     const listener = struct {
-        pub fn listen(event_code: EventCode, event_data: EventData) bool {
+        pub fn listen(event_code: EventCode, event_data: EventData, _: ?*anyopaque, _: ?*anyopaque) bool {
             const in_data: KeyEventData = @bitCast(event_data);
             std.testing.expectEqual(event_code, EventCode.KEY_PRESS) catch {
                 std.debug.panic("Not a key press event. Got: {s}", .{@tagName(event_code)});
@@ -522,7 +543,7 @@ test "Event" {
         }
     };
 
-    var success = event.register(.KEY_PRESS, listener.listen);
+    var success = event.register(.KEY_PRESS, null, listener.listen);
     try std.testing.expect(success);
     success = dispatcher.dipatch(event);
     try std.testing.expect(success);
