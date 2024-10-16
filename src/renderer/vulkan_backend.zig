@@ -36,21 +36,31 @@ const Device = vk.DeviceProxy(apis);
 
 pub const CommandBuffer = vk.CommandBufferProxy(apis);
 
-const vkGetInstanceProcAddr = @extern(vk.PfnGetInstanceProcAddr, .{
-    .name = "vkGetInstanceProcAddr",
-    .library_name = "vulkan-1",
-});
+// const vkGetInstanceProcAddr = @extern(vk.PfnGetInstanceProcAddr, .{
+//     .name = "vkGetInstanceProcAddr",
+//     .library_name = "vulkan-1",
+// });
 
 vkb: BaseDispatch,
 instance: Instance,
 allocator: std.mem.Allocator,
+vulkan_lib: std.DynLib,
+vkGetInstanceProcAddr: vk.PfnGetInstanceProcAddr,
+
+pub const vkError = error{FailedProcAddrPFN};
 
 pub fn init(self: *Context, allocator: std.mem.Allocator, application_name: [:0]const u8, plat_state: *anyopaque) !void {
     // _ = backend;
     _ = plat_state;
 
+    self.vulkan_lib = try std.DynLib.open("vulkan-1.dll");
+    self.vkGetInstanceProcAddr = self.vulkan_lib.lookup(
+        vk.PfnGetInstanceProcAddr,
+        "vkGetInstanceProcAddr",
+    ) orelse return vkError.FailedProcAddrPFN;
+
     // const self: Context = undefined;
-    self.vkb = try BaseDispatch.load(vkGetInstanceProcAddr);
+    self.vkb = try BaseDispatch.load(self.vkGetInstanceProcAddr);
     self.allocator = allocator;
 
     // setup vulkan info
@@ -90,6 +100,7 @@ pub fn init(self: *Context, allocator: std.mem.Allocator, application_name: [:0]
 pub fn deinit(self: *Context) void {
     self.instance.destroyInstance(null);
     self.allocator.destroy(self.instance.wrapper);
+    self.vulkan_lib.close();
     std.debug.print("Destroyed Instance\n", .{});
 }
 

@@ -1,6 +1,5 @@
 const config = @import("config.zig");
 const core = @import("fr_core");
-const vulkan = @import("vulkan");
 
 pub const GameState = struct {
     delta_time: f64,

@@ -1,6 +1,5 @@
 const core = @import("fr_core");
 const types = @import("types.zig");
-const vulkan = @import("vulkan");
 const Backend = @import("backend.zig");
 const std = @import("std");
 

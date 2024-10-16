@@ -21,27 +21,24 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const vulkan = b.addModule("vulkan", .{
-        .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vulkan.addLibraryPath(.{ .cwd_relative = "C:/Windows/System32/" });
-    vulkan.addLibraryPath(.{ .cwd_relative = "C:/VulkanSDK/1.3.283.0/Lib/" });
-    vulkan.linkSystemLibrary("vulkan-1", .{});
+    // const vulkan = b.addModule("vulkan", .{
+    //     .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
 
     const entrypoint = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/entrypoint.zig"),
         .imports = &.{
             .{ .name = "fr_core", .module = core_lib },
-            .{ .name = "vulkan", .module = vulkan },
+            // .{ .name = "vulkan", .module = vulkan },
         },
         .target = target,
         .optimize = optimize,
     });
-    // entrypoint.addAnonymousImport("vulkan", .{
-    //     .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
-    // });
+    entrypoint.addAnonymousImport("vulkan", .{
+        .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+    });
     // entrypoint.addLibraryPath(.{ .cwd_relative = "C:/Windows/System32/" });
     // entrypoint.addLibraryPath(.{ .cwd_relative = "C:/VulkanSDK/1.3.283.0/Lib/" });
     // entrypoint.linkSystemLibrary("vulkan-1", .{});
@@ -52,7 +49,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("testbed/app.zig"),
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
+        // .link_libc = true,
     });
     // exe.addLibraryPath(.{ .cwd_relative = "C:/VulkanSDK/1.3.283.0/Lib/" });
     // exe.addLibraryPath(.{ .cwd_relative = "C:/VulkanSDK/1.3.283.0/Include/" });
@@ -113,6 +110,9 @@ pub fn build(b: *std.Build) void {
     // exe.linkSystemLibrary("vulkan");
     exe_check.root_module.addImport("entrypoint", entrypoint);
     exe_check.root_module.addImport("fr_core", core_lib);
+    // exe_check.root_module.addAnonymousImport("vulkan", .{
+    //     .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+    // });
 
     const check_step = b.step("check", "Check if the app compiles");
     check_step.dependOn(&exe_check.step);
