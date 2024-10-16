@@ -24,6 +24,7 @@ game_state: *anyopaque,
 api: core.API,
 dll: DLL,
 frame_arena: std.heap.ArenaAllocator = undefined,
+timer: std.time.Timer,
 // buffer: [1024]u8,
 
 const ApplicationError =
@@ -173,13 +174,18 @@ pub fn run(self: *Application) ApplicationError!void {
     self.engine.memory.gpa.print_memory_stats(&self.engine.core_log);
     const core_log = &self.engine.core_log;
 
+    // NOTE(aditya): This cannot fail on windows
+    self.timer = std.time.Timer.start() catch unreachable;
+    var delta_time: u64 = 0;
+    var frame_count: u64 = 0;
+
     while (self.engine.is_running) {
         platform.pump_messages(&self.platform_state);
 
         // Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
         if (!self.frame_arena.reset(.retain_capacity)) {
-            // @setCold(true);
+            @branchHint(.cold);
             core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
         self.engine.memory.frame_allocator.reset_stats();
@@ -223,9 +229,18 @@ pub fn run(self: *Application) ApplicationError!void {
             },
             else => {},
         }
+
         self.engine.input.update();
+        const end = self.timer.lap();
+        delta_time += end;
+        frame_count += 1;
+
         // break;
     }
+    var dt: f64 = @floatFromInt(delta_time);
+    dt /= std.time.ns_per_s;
+    const float_count: f64 = @floatFromInt(frame_count);
+    self.engine.core_log.trace("Delta_time: {d}s, {d}f/s", .{ dt / float_count, float_count / dt });
 
     // In case the loop exited for some other reason
     self.engine.is_running = false;
