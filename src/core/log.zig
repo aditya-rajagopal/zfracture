@@ -339,7 +339,7 @@ pub fn default_log(
 pub fn nop_log(
     logger: *LogConfig,
     comptime message_level: Level,
-    comptime scope: @Type(.EnumLiteral),
+    comptime scope: @Type(.enum_literal),
     comptime format: []const u8,
     args: anytype,
 ) void {

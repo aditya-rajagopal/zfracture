@@ -25,7 +25,10 @@ pub fn main() !void {
         }
     }
 
-    var app = try application.init(allocator);
+    var app = switch (builtin.mode) {
+        .Debug, .ReleaseSafe => try application.init(allocator),
+        else => try application.init(std.heap.page_allocator),
+    };
     errdefer app.deinit();
 
     try app.run();
@@ -34,3 +37,4 @@ pub fn main() !void {
 }
 
 const std = @import("std");
+const builtin = @import("builtin");

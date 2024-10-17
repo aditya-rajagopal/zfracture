@@ -21,24 +21,24 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // const vulkan = b.addModule("vulkan", .{
-    //     .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
+    const vulkan = b.addModule("vulkan", .{
+        .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const entrypoint = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/entrypoint.zig"),
         .imports = &.{
             .{ .name = "fr_core", .module = core_lib },
-            // .{ .name = "vulkan", .module = vulkan },
+            .{ .name = "vulkan", .module = vulkan },
         },
         .target = target,
         .optimize = optimize,
     });
-    entrypoint.addAnonymousImport("vulkan", .{
-        .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
-    });
+    // entrypoint.addAnonymousImport("vulkan", .{
+    //     .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+    // });
     // entrypoint.addLibraryPath(.{ .cwd_relative = "C:/Windows/System32/" });
     // entrypoint.addLibraryPath(.{ .cwd_relative = "C:/VulkanSDK/1.3.283.0/Lib/" });
     // entrypoint.linkSystemLibrary("vulkan-1", .{});
@@ -116,14 +116,13 @@ pub fn build(b: *std.Build) void {
 
     const check_step = b.step("check", "Check if the app compiles");
     check_step.dependOn(&exe_check.step);
-    // Tests
+
+    // ==================================== TESTS ==================================/
     const core_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/core/fracture.zig"),
         .target = target,
         .optimize = optimize,
     });
-
-    // ==================================== TESTS ==================================/
 
     const run_core_unit_tests = b.addRunArtifact(core_unit_tests);
     run_core_unit_tests.has_side_effects = true;
@@ -134,6 +133,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     engine_unit_tests.root_module.addImport("fr_core", core_lib);
+    engine_unit_tests.root_module.addImport("vulkan", vulkan);
+    // engine_unit_tests.root_module.addAnonymousImport("vulkan", .{
+    //     .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+    // });
 
     const run_engine_unit_tests = b.addRunArtifact(engine_unit_tests);
     run_engine_unit_tests.has_side_effects = true;

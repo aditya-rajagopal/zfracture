@@ -3,6 +3,7 @@
 ///! It owns the engine state and dispatches events
 const core = @import("fr_core");
 const platform = @import("platform/platform.zig");
+const Frontend = @import("renderer/frontend.zig");
 
 const config = @import("config.zig");
 const application_config = config.app_config;
@@ -14,8 +15,6 @@ const DLL = switch (builtin.mode) {
     else => void,
 };
 
-const Frontend = @import("renderer/frontend.zig");
-
 pub const Application = @This();
 engine: core.Fracture = undefined,
 platform_state: platform.PlatformState = undefined,
@@ -25,7 +24,6 @@ api: core.API,
 dll: DLL,
 frame_arena: std.heap.ArenaAllocator = undefined,
 timer: std.time.Timer,
-// buffer: [1024]u8,
 
 const ApplicationError =
     error{ ClientAppInit, FailedUpdate, FailedRender } ||
@@ -114,7 +112,9 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.engine.input.init();
 
     // Renderer
-    try app.frontend.init(app_config.application_name, &app.platform_state);
+    const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
+    try app.frontend.init(renderer_allocator, app_config.application_name, &app.platform_state);
+    app.engine.core_log.info("Renderer initialized", .{});
 
     // Application
     app.game_state = app.api.init(&app.engine) orelse {
@@ -240,7 +240,7 @@ pub fn run(self: *Application) ApplicationError!void {
     var dt: f64 = @floatFromInt(delta_time);
     dt /= std.time.ns_per_s;
     const float_count: f64 = @floatFromInt(frame_count);
-    self.engine.core_log.trace("Delta_time: {d}s, {d}f/s", .{ dt / float_count, float_count / dt });
+    self.engine.core_log.err("Delta_time: {d}s, {d}f/s", .{ dt / float_count, float_count / dt });
 
     // In case the loop exited for some other reason
     self.engine.is_running = false;
