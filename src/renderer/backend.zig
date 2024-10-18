@@ -13,7 +13,7 @@ platform_state: *anyopaque,
 frame_number: u64,
 context: Context,
 
-pub const BackendError = error{UnsupportedBackend};
+pub const BackendError = error{UnsupportedBackend} || Context.vkError;
 
 pub fn create(
     comptime renderer_tag: Tag,

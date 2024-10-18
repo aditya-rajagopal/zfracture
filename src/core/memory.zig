@@ -1,5 +1,5 @@
 pub const EngineMemoryTag = enum(u8) {
-    unknown = 0,
+    untagged = 0,
     event,
     renderer,
     application,
@@ -7,8 +7,12 @@ pub const EngineMemoryTag = enum(u8) {
     frame_arena,
 };
 
+pub const ArenaMemoryTags = enum(u8) {
+    untagged = 0,
+};
+
 pub const GPA = TrackingAllocator(.gpa, EngineMemoryTag);
-pub const FrameArena: type = TrackingAllocator(.frame_arena, EngineMemoryTag);
+pub const FrameArena: type = TrackingAllocator(.frame_arena, ArenaMemoryTags);
 
 /// The memory system passed to the game
 pub const Memory = struct {

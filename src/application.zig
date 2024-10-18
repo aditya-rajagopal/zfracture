@@ -38,6 +38,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Memory
     const app: *Application = try allocator.create(Application);
+    errdefer allocator.destroy(app);
 
     app.engine.is_running = true;
     app.engine.is_suspended = false;
@@ -101,12 +102,13 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     if (comptime app_config.frame_arena_preheat_bytes != 0) {
         _ = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, app_config.frame_arena_preheat_bytes);
         if (!app.frame_arena.reset(.retain_capacity)) {
-            // @setCold(true);
+            @branchHint(.unlikely);
             app.engine.core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
         app.engine.core_log.info("Frame arena has been preheated with {d} bytes of memory", .{app_config.frame_arena_preheat_bytes});
     }
     app.engine.core_log.info("Memory has been initialized", .{});
+    errdefer app.frame_arena.deinit();
 
     // Input
     app.engine.input.init();
@@ -185,7 +187,7 @@ pub fn run(self: *Application) ApplicationError!void {
         // Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
         if (!self.frame_arena.reset(.retain_capacity)) {
-            @branchHint(.cold);
+            @branchHint(.unlikely);
             core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
         self.engine.memory.frame_allocator.reset_stats();

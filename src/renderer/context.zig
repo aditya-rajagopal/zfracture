@@ -2,9 +2,11 @@
 //      - [ ] implement a custom vkAllocatorCallback
 //      - [ ] Try to move all the creations of layers and extensions to be comptime
 //      - [ ] Pass the engine here so that we can use the logger
+//      - [ ] This needs to be configurable from the engine/game
 const vk = @import("vulkan");
 const Backend = @import("backend.zig");
 const platform = @import("platform.zig");
+const dev = @import("device.zig");
 
 const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
 
@@ -17,61 +19,59 @@ const debug_apis = switch (builtin.mode) {
 
 /// To construct base, instance and device wrappers for vulkan-zig, you need to pass a list of 'apis' to it.
 const apis: []const vk.ApiInfo = &(.{
-    // You can either add invidiual functions by manually creating an 'api'
-    // .{
-    //     .base_commands = .{
-    //         .createInstance = true,
-    //         .getInstanceProcAddr = true,
-    //         // .enumerateInstanceLayerProperties = true,
-    //     },
-    //     .instance_commands = .{
-    //         .destroyInstance = true,
-    //         // .createDevice = true,
-    //         // .createXcbSurfaceKHR = true,
-    //     },
-    // },
     vk.features.version_1_0,
     vk.features.version_1_1,
     vk.features.version_1_2,
+    vk.extensions.khr_surface,
     vk.extensions.khr_win_32_surface,
-    // vk.extensions.khr_swapchain,
-    // vk.extensions.ext_debug_utils,
+    vk.extensions.khr_swapchain,
 } ++ debug_apis);
 
 /// Next, pass the `apis` to the wrappers to create dispatch tables.
-const BaseDispatch = vk.BaseWrapper(apis);
-const InstanceDispatch = vk.InstanceWrapper(apis);
-const DeviceDispatch = vk.DeviceWrapper(apis);
+pub const BaseDispatch = vk.BaseWrapper(apis);
+pub const InstanceDispatch = vk.InstanceWrapper(apis);
+pub const DeviceDispatch = vk.DeviceWrapper(apis);
 
 // Also create some proxying wrappers, which also have the respective handles
-const Instance = vk.InstanceProxy(apis);
-const Device = vk.DeviceProxy(apis);
+pub const Instance = vk.InstanceProxy(apis);
+pub const Device = vk.DeviceProxy(apis);
 
 pub const CommandBuffer = vk.CommandBufferProxy(apis);
 
 vkb: BaseDispatch,
-instance: Instance,
 allocator: std.mem.Allocator,
 vulkan_lib: std.DynLib,
 vkGetInstanceProcAddr: vk.PfnGetInstanceProcAddr,
+
+instance: Instance,
 debug_messenger: vk.DebugUtilsMessengerEXT,
+surface: vk.SurfaceKHR,
+device: Device,
+physical_device: dev.PhycialDevice,
 
 pub const vkError =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer } ||
+    error{CommandLoadFailure} ||
+    std.DynLib.Error ||
     BaseDispatch.EnumerateInstanceLayerPropertiesError ||
-    Instance.CreateDebugUtilsMessengerEXTError;
+    Instance.CreateDebugUtilsMessengerEXTError ||
+    Instance.CreateWin32SurfaceKHRError ||
+    BaseDispatch.CreateInstanceError ||
+    dev.Error;
 
 pub fn init(
     self: *Context,
     allocator: std.mem.Allocator,
     application_name: [:0]const u8,
     plat_state: *anyopaque,
-) !void {
+) vkError!void {
     const internal_plat_state: *platform.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     std.debug.print("{any}\n", .{internal_plat_state.h_instance});
     // ========================================== LOAD VULKAN =================================/
 
     self.vulkan_lib = try std.DynLib.open("vulkan-1.dll");
+    errdefer self.vulkan_lib.close();
+
     self.vkGetInstanceProcAddr = self.vulkan_lib.lookup(
         vk.PfnGetInstanceProcAddr,
         "vkGetInstanceProcAddr",
@@ -84,21 +84,47 @@ pub fn init(
 
     // ============================================ INSTANCE ====================================/
     try self.create_instance(application_name);
-    errdefer self.instance.destroyInstance(null);
+    errdefer {
+        self.instance.destroyInstance(null);
+        self.allocator.destroy(self.instance.wrapper);
+    }
     std.debug.print("Instance Created\n", .{});
 
     // ========================================== DEBUGGER ======================================/
     try self.create_debugger();
+    errdefer self.destroy_debugger();
+
+    // ========================================== SURFACE ======================================/
+    self.surface = try platform.create_surface(self.instance, internal_plat_state);
+    errdefer {
+        if (self.surface != .null_handle) {
+            self.instance.destroySurfaceKHR(self.surface, null);
+        }
+    }
+    std.debug.print("Surface Created\n", .{});
+
+    // ====================================== PHYSICAL DEVICE ==================================/
+    try dev.create(self);
+    errdefer dev.destroy(self);
+    std.debug.print("Device created\n", .{});
 }
 
 pub fn deinit(self: *Context) void {
+    dev.destroy(self);
+    if (self.surface != .null_handle) {
+        self.instance.destroySurfaceKHR(self.surface, null);
+    }
+    self.destroy_debugger();
+    self.instance.destroyInstance(null);
+    self.allocator.destroy(self.instance.wrapper);
+    self.vulkan_lib.close();
+}
+
+fn destroy_debugger(self: *Context) void {
     switch (builtin.mode) {
         .Debug => self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null),
         else => {},
     }
-    self.instance.destroyInstance(null);
-    self.allocator.destroy(self.instance.wrapper);
-    self.vulkan_lib.close();
 }
 
 fn create_debugger(self: *Context) !void {
@@ -132,7 +158,7 @@ fn create_debugger(self: *Context) !void {
     }
 }
 
-fn create_instance(self: *Context, application_name: [:0]const u8) !void {
+fn create_instance(self: *Context, application_name: [:0]const u8) vkError!void {
     const info: vk.ApplicationInfo = .{
         .s_type = .application_info,
         .p_application_name = application_name,
@@ -194,7 +220,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) !void {
                 const length = std.mem.len(layer);
                 var found: bool = false;
                 for (available_layers) |avail_layer| {
-                    const alength = std.mem.len(@as([*:0]const u8, @alignCast(avail_layer.layer_name[0..255 :0].ptr)));
+                    const alength = std.mem.len(@as([*:0]const u8, @ptrCast(&avail_layer)));
                     if (alength != length) continue;
                     if (std.mem.eql(u8, layer[0..length], avail_layer.layer_name[0..length])) {
                         found = true;

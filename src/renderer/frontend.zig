@@ -21,11 +21,7 @@ pub fn init(
 ) FrontendError!void {
     // TODO: Make this configurable
     self.backend = try Backend.create(.VULKAN, platform_state);
-
-    self.backend.context.init(allocator, application_name, platform_state) catch {
-        return FrontendError.InitFailed;
-    };
-
+    try self.backend.context.init(allocator, application_name, platform_state);
     return;
 }
 

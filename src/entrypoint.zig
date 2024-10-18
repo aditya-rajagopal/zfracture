@@ -12,12 +12,6 @@ pub fn main() !void {
     // TODO: Get the allocator from somewhere else. Platform?
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    errdefer {
-        const check = gpa.deinit();
-        if (check == .leak) {
-            @panic("memory leak");
-        }
-    }
     defer {
         const check = gpa.deinit();
         if (check == .leak) {

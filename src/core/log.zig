@@ -319,7 +319,7 @@ pub fn default_log(
 ) void {
     // TODO: Can this be more efficient
     const level_txt = comptime message_level.as_text();
-    const prefix2 = @tagName(scope) ++ ": " ++ "(" ++ level_txt ++ "): ";
+    const prefix2 = level_txt ++ " [" ++ @tagName(scope) ++ "]: ";
 
     const writer = logger.buffered_writer.writer();
     std.debug.lockStdErr();
