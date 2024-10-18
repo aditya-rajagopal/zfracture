@@ -40,7 +40,6 @@ pub const PhycialDevice = struct {
     properties: vk.PhysicalDeviceProperties,
     features: vk.PhysicalDeviceFeatures,
     memory_properties: vk.PhysicalDeviceMemoryProperties,
-    // queue_families: QueueFamilies,
     swapchain_support: struct {
         capabilities: vk.SurfaceCapabilitiesKHR,
         formats: []vk.SurfaceFormatKHR,
@@ -53,6 +52,7 @@ pub const PhycialDevice = struct {
         compute_queue: Queue = .{},
     },
     graphics_command_pool: vk.CommandPool = .null_handle,
+    depth_format: vk.Format,
 };
 
 pub const Error =
@@ -81,10 +81,18 @@ pub fn create(ctx: *Context) Error!void {
 
 pub fn destroy(ctx: *Context) void {
     ctx.device.destroyCommandPool(ctx.physical_device.graphics_command_pool, null);
+
+    ctx.physical_device.queues.graphics_queue.handle = .null_handle;
+    ctx.physical_device.queues.present_queue.handle = .null_handle;
+    ctx.physical_device.queues.transfer_queue.handle = .null_handle;
+    ctx.physical_device.queues.compute_queue.handle = .null_handle;
+
     ctx.device.destroyDevice(null);
     ctx.allocator.destroy(ctx.device.wrapper);
     ctx.allocator.free(ctx.physical_device.swapchain_support.formats);
     ctx.allocator.free(ctx.physical_device.swapchain_support.present_modes);
+
+    ctx.physical_device.physical_device = .null_handle;
 }
 
 fn create_graphics_command_pool(ctx: *Context) Error!void {

@@ -50,7 +50,7 @@ device: Device,
 physical_device: dev.PhycialDevice,
 
 pub const vkError =
-    error{ FailedProcAddrPFN, FailedToFindValidationLayer } ||
+    error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat } ||
     error{CommandLoadFailure} ||
     std.DynLib.Error ||
     BaseDispatch.EnumerateInstanceLayerPropertiesError ||
@@ -125,6 +125,28 @@ fn destroy_debugger(self: *Context) void {
         .Debug => self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null),
         else => {},
     }
+}
+
+pub fn detect_depth_format(ctx: *Context) !void {
+    // NOTE: These are the candidate formats that we like in order of preference.
+    // 1. VK_FORMAT_D32_SFLOAT = One component 32bit float depth buffer format that uses all 32 bits for depths
+    // 2. VK_FORMAT_D32_SFLOAT_s8_uint = Combined depth and stencil buffer with 32bit for depth and 8bits for stencil
+    // 3. VK_FORMAT_D24_UNORM_s8_uint = Combined depth and stencil buffer with 24bit for depth and 8bits for stencil
+    const candidates = [_]vk.Format{ .d32_sfloat, .d32_sfloat_s8_uint, .d24_unorm_s8_uint };
+    const flags = vk.FormatFeatureFlags{ .depth_stencil_attachment_bit = true };
+    for (candidates) |candidate| {
+        const properties = ctx.instance.getPhysicalDeviceFormatProperties(
+            ctx.physical_device.physical_device,
+            candidate,
+        );
+
+        if (properties.linear_tiling_features.contains(flags) and properties.optimal_tiling_features.contains(flags)) {
+            ctx.physical_device.depth_format = candidate;
+            return;
+        }
+    }
+
+    return error.FailedToFindDepthFormat;
 }
 
 fn create_debugger(self: *Context) !void {
