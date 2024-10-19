@@ -1,6 +1,9 @@
 ///! The application system contains the main loop of the application
 ///!
 ///! It owns the engine state and dispatches events
+// TODO:
+//      - [ ] Should i replace the frame arena by a fixed buffer allocator that is defined by asking the application
+//            how much memory it needs at startup and give it that much memory to work with forever. Instead of an arena
 const core = @import("fr_core");
 const platform = @import("platform/platform.zig");
 const Frontend = @import("renderer/frontend.zig");
@@ -184,7 +187,7 @@ pub fn run(self: *Application) ApplicationError!void {
     while (self.engine.is_running) {
         platform.pump_messages(&self.platform_state);
 
-        // Clear the arena right before the loop stats but after the events are handled else we might be invalidating
+        // NOTE: Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
         if (!self.frame_arena.reset(.retain_capacity)) {
             @branchHint(.unlikely);
@@ -207,7 +210,7 @@ pub fn run(self: *Application) ApplicationError!void {
                 break;
             }
 
-            // Temporary packet passing
+            // HACK: Temporary packet passing
             self.frontend.draw_frame(.{ .delta_time = 0 }) catch |e| {
                 err = e;
                 self.engine.is_running = false;
@@ -239,11 +242,11 @@ pub fn run(self: *Application) ApplicationError!void {
 
         // break;
     }
+
     var dt: f64 = @floatFromInt(delta_time);
     dt /= std.time.ns_per_s;
     const float_count: f64 = @floatFromInt(frame_count);
-    self.engine.core_log.err("Delta_time: {d}s, {d}f/s", .{ dt / float_count, float_count / dt });
-
+    self.engine.core_log.err("Avg Delta_time: {d}, FPS: {d}f/s", .{ std.fmt.fmtDuration(@divTrunc(delta_time, frame_count)), float_count / dt });
     // In case the loop exited for some other reason
     self.engine.is_running = false;
     if (err) |e| {
@@ -269,9 +272,6 @@ pub fn on_event(self: *Application, comptime event_code: core.event.EventCode, e
 }
 
 fn reload_library(self: *Application) bool {
-    // const new_name = std.fmt.bufPrintZ(&self.buffer, "{s}_{d}", .{ config.dll_name, self.dll.time_stamp }) catch {
-    //     return false;
-    // };
     const new_name = config.dll_name ++ "_tmp";
     if (!platform.copy_file(config.dll_name, new_name, true)) {
         return false;

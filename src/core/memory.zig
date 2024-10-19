@@ -257,8 +257,8 @@ test "allocations" {
     gpa.init(std.testing.allocator);
     defer gpa.deinit();
 
-    const allocator = alloc.get_type_allocator(.unknown);
-    const gallocator = gpa.get_type_allocator(.unknown);
+    const allocator = alloc.get_type_allocator(.untagged);
+    const gallocator = gpa.get_type_allocator(.untagged);
     const data = try allocator.create(i32);
     const gdata = try gallocator.create(f64);
     const allocator2 = alloc.get_type_allocator(.renderer);

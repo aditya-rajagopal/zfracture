@@ -1,3 +1,5 @@
+// TODO:
+//      - [ ] Get all the features from the engine/game
 const vk = @import("vulkan");
 const Context = @import("context.zig");
 const Instance = Context.Instance;
@@ -26,7 +28,7 @@ pub const Queue = struct {
     family: u32 = std.math.maxInt(u32),
 
     pub fn init(self: *Queue, device: Device) void {
-        // assert(self.family != std.math.maxInt(u32));
+        // TODO: We might have more than 1 queueIndices.
         if (self.family != std.math.maxInt(u32)) {
             self.handle = device.getDeviceQueue(self.family, 0);
         } else {
@@ -79,6 +81,43 @@ pub fn create(ctx: *Context) Error!void {
     try create_graphics_command_pool(ctx);
 }
 
+pub fn query_swapchain_support(ctx: *Context, device: vk.PhysicalDevice) Error!?void {
+    ctx.physical_device.swapchain_support.capabilities = try ctx.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
+        device,
+        ctx.surface,
+    );
+
+    const formats = try ctx.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(
+        device,
+        ctx.surface,
+        ctx.allocator,
+    );
+    if (formats.len == 0) {
+        ctx.allocator.free(formats);
+        return null;
+    }
+
+    const present_modes = try ctx.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(
+        device,
+        ctx.surface,
+        ctx.allocator,
+    );
+    if (present_modes.len == 0) {
+        ctx.allocator.free(formats);
+        ctx.allocator.free(present_modes);
+        return null;
+    }
+    if (ctx.physical_device.swapchain_support.formats.len > 0) {
+        ctx.allocator.free(ctx.physical_device.swapchain_support.formats);
+    }
+    ctx.physical_device.swapchain_support.formats = formats;
+
+    if (ctx.physical_device.swapchain_support.present_modes.len > 0) {
+        ctx.allocator.free(ctx.physical_device.swapchain_support.present_modes);
+    }
+    ctx.physical_device.swapchain_support.present_modes = present_modes;
+}
+
 pub fn destroy(ctx: *Context) void {
     ctx.device.destroyCommandPool(ctx.physical_device.graphics_command_pool, null);
 
@@ -89,8 +128,14 @@ pub fn destroy(ctx: *Context) void {
 
     ctx.device.destroyDevice(null);
     ctx.allocator.destroy(ctx.device.wrapper);
-    ctx.allocator.free(ctx.physical_device.swapchain_support.formats);
-    ctx.allocator.free(ctx.physical_device.swapchain_support.present_modes);
+
+    if (ctx.physical_device.swapchain_support.formats.len > 0) {
+        ctx.allocator.free(ctx.physical_device.swapchain_support.formats);
+    }
+
+    if (ctx.physical_device.swapchain_support.present_modes.len > 0) {
+        ctx.allocator.free(ctx.physical_device.swapchain_support.present_modes);
+    }
 
     ctx.physical_device.physical_device = .null_handle;
 }
@@ -306,6 +351,9 @@ fn check_device_requirements(
             },
         );
 
+        ctx.physical_device.swapchain_support.present_modes.len = 0;
+        ctx.physical_device.swapchain_support.formats.len = 0;
+
         if (try query_swapchain_support(ctx, device)) |_| {} else {
             // NOTE: We do not have either enough formats or present modes
             return null;
@@ -347,36 +395,6 @@ fn query_extension_support(ctx: *Context, device: vk.PhysicalDevice, requirement
     }
 
     return true;
-}
-
-fn query_swapchain_support(ctx: *Context, device: vk.PhysicalDevice) Error!?void {
-    ctx.physical_device.swapchain_support.capabilities = try ctx.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
-        device,
-        ctx.surface,
-    );
-
-    const formats = try ctx.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(
-        device,
-        ctx.surface,
-        ctx.allocator,
-    );
-    if (formats.len == 0) {
-        ctx.allocator.free(formats);
-        return null;
-    }
-
-    const present_modes = try ctx.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(
-        device,
-        ctx.surface,
-        ctx.allocator,
-    );
-    if (present_modes.len == 0) {
-        ctx.allocator.free(formats);
-        ctx.allocator.free(present_modes);
-        return null;
-    }
-    ctx.physical_device.swapchain_support.formats = formats;
-    ctx.physical_device.swapchain_support.present_modes = present_modes;
 }
 
 const std = @import("std");

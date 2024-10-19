@@ -7,6 +7,7 @@ const vk = @import("vulkan");
 const Backend = @import("backend.zig");
 const platform = @import("platform.zig");
 const dev = @import("device.zig");
+const Swapchain = @import("swapchain.zig");
 
 const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
 
@@ -48,6 +49,10 @@ debug_messenger: vk.DebugUtilsMessengerEXT,
 surface: vk.SurfaceKHR,
 device: Device,
 physical_device: dev.PhycialDevice,
+framebuffer_extent: vk.Extent2D,
+swapchain: Swapchain,
+recreating_swapchain: bool,
+current_frame: u32,
 
 pub const vkError =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat } ||
@@ -57,7 +62,8 @@ pub const vkError =
     Instance.CreateDebugUtilsMessengerEXTError ||
     Instance.CreateWin32SurfaceKHRError ||
     BaseDispatch.CreateInstanceError ||
-    dev.Error;
+    dev.Error ||
+    Swapchain.Error;
 
 pub fn init(
     self: *Context,
@@ -107,9 +113,13 @@ pub fn init(
     try dev.create(self);
     errdefer dev.destroy(self);
     std.debug.print("Device created\n", .{});
+
+    try Swapchain.init(self, self.framebuffer_extent);
+    errdefer Swapchain.deinit(self);
 }
 
 pub fn deinit(self: *Context) void {
+    Swapchain.deinit(self);
     dev.destroy(self);
     if (self.surface != .null_handle) {
         self.instance.destroySurfaceKHR(self.surface, null);
@@ -140,13 +150,26 @@ pub fn detect_depth_format(ctx: *Context) !void {
             candidate,
         );
 
-        if (properties.linear_tiling_features.contains(flags) and properties.optimal_tiling_features.contains(flags)) {
+        if (properties.linear_tiling_features.contains(flags) or properties.optimal_tiling_features.contains(flags)) {
             ctx.physical_device.depth_format = candidate;
             return;
         }
     }
 
     return error.FailedToFindDepthFormat;
+}
+
+pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: vk.MemoryPropertyFlags) i32 {
+    const memory_properties = self.instance.getPhysicalDeviceMemoryProperties(self.physical_device.physical_device);
+
+    for (0..memory_properties.memory_type_count) |i| {
+        if ((type_filter & (@as(u32, 1) << @truncate(i))) != 0 and (memory_properties.memory_types[i].property_flags.contains(memory_flags))) {
+            return 1;
+        }
+    }
+
+    std.debug.print("WARNING: unable to find memory type\n", .{});
+    return -1;
 }
 
 fn create_debugger(self: *Context) !void {

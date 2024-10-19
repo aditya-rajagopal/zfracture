@@ -1,3 +1,6 @@
+// TODO:
+//      - [ ] Can we have 1 logger that just has different scopes so they share the buffered writer. Rather than having
+//            multiple buffered writers. This way we can also have more scopes than the two.
 const platform = @import("core_platform.zig");
 
 pub const CoreLog = Logger(default_log, .Engine, null);
