@@ -1,9 +1,12 @@
 const config = @import("config.zig");
 const core = @import("fr_core");
 
+const GameLog = core.log.ScopedLogger(core.log.default_log, .game, core.log.default_level);
+
 pub const GameState = struct {
     delta_time: f64,
     testing: bool = false,
+    log: GameLog,
 };
 
 pub fn init(engine: *core.Fracture) ?*anyopaque {
@@ -11,12 +14,13 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     const state = foo_allocator.create(GameState) catch return null;
     state.testing = true;
     state.delta_time = 1.0;
+    state.log = GameLog.init(&engine.log_config);
     // const callback: core.event.EventCallback = .{ .listener = engine, .function = random_event };
-    _ = engine.event.register(.KEY_PRESS, engine, random_event);
-    _ = engine.event.register(.KEY_RELEASE, engine, random_event);
-    _ = engine.event.register(.KEY_ESCAPE, engine, random_event);
-    _ = engine.event.register(.MOUSE_BUTTON_PRESS, engine, random_event);
-    _ = engine.event.register(.MOUSE_BUTTON_RELEASE, engine, random_event);
+    _ = engine.event.register(.KEY_PRESS, state, random_event);
+    _ = engine.event.register(.KEY_RELEASE, state, random_event);
+    _ = engine.event.register(.KEY_ESCAPE, state, random_event);
+    _ = engine.event.register(.MOUSE_BUTTON_PRESS, state, random_event);
+    _ = engine.event.register(.MOUSE_BUTTON_RELEASE, state, random_event);
     return state;
 }
 
@@ -24,11 +28,11 @@ pub fn deinit(engine: *core.Fracture, game_state: *anyopaque) void {
     const state: *GameState = @ptrCast(@alignCast(game_state));
     const foo_allocator = engine.memory.gpa.get_type_allocator(.game);
     foo_allocator.destroy(state);
-    _ = engine.event.deregister(.KEY_PRESS, engine, random_event);
-    _ = engine.event.deregister(.KEY_RELEASE, engine, random_event);
-    _ = engine.event.deregister(.KEY_ESCAPE, engine, random_event);
-    _ = engine.event.deregister(.MOUSE_BUTTON_PRESS, engine, random_event);
-    _ = engine.event.deregister(.MOUSE_BUTTON_RELEASE, engine, random_event);
+    _ = engine.event.deregister(.KEY_PRESS, game_state, random_event);
+    _ = engine.event.deregister(.KEY_RELEASE, game_state, random_event);
+    _ = engine.event.deregister(.KEY_ESCAPE, game_state, random_event);
+    _ = engine.event.deregister(.MOUSE_BUTTON_PRESS, game_state, random_event);
+    _ = engine.event.deregister(.MOUSE_BUTTON_RELEASE, game_state, random_event);
 }
 
 pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
@@ -36,33 +40,33 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
     if (state.testing) {
         const frame_alloc = engine.memory.frame_allocator.get_type_allocator(.untagged);
         const temp_data = frame_alloc.alloc(f32, 16) catch return false;
-        engine.memory.gpa.print_memory_stats(&engine.core_log);
-        engine.memory.frame_allocator.print_memory_stats(&engine.core_log);
+        engine.memory.gpa.print_memory_stats();
+        engine.memory.frame_allocator.print_memory_stats();
         frame_alloc.free(temp_data);
         state.testing = false;
     }
     if (engine.input.key_pressed_this_frame(.A)) {
-        engine.log.trace("A was pressed this frame", .{});
+        state.log.trace("A was pressed this frame", .{});
     }
 
     if (engine.input.key_released_this_frame(.A)) {
-        engine.log.trace("A was released this frame", .{});
+        state.log.trace("A was released this frame", .{});
     }
 
     // if (engine.input.is_key_down(.A)) {
-    //     engine.log.trace("A is being pressed", .{});
+    //     state.log.trace("A is being pressed", .{});
     // }
 
     if (engine.input.is_scroll_down()) {
-        engine.log.trace("Scrolled down!", .{});
+        state.log.trace("Scrolled down!", .{});
     }
 
     // if (engine.input.is_mouse_moved()) {
-    //     engine.log.trace("Mouse moved!", .{});
+    //     state.log.trace("Mouse moved!", .{});
     // }
 
     // core.log.GameLog.err(&engine.log, "Hi ramani", .{});
-    // engine.log.warn("Hi ramani", .{});
+    // state.log.warn("Hi ramani", .{});
     return true;
 }
 
@@ -80,9 +84,9 @@ pub fn random_event(
 ) bool {
     _ = sender;
     if (listener) |l| {
-        const engine: *core.Fracture = @ptrCast(@alignCast(l));
-        engine.log.trace("FROM GAME: {s}", .{@tagName(event_code)});
-        engine.log.trace("FROM GAME: {any}", .{event_data});
+        const game_state: *GameState = @ptrCast(@alignCast(l));
+        game_state.log.trace("FROM GAME: {s}", .{@tagName(event_code)});
+        game_state.log.trace("FROM GAME: {any}", .{event_data});
     }
     return true;
 }

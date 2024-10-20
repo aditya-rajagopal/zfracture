@@ -160,11 +160,6 @@ fn win32_process_message(
             _ = win32.GetClientRect(hwnd, &rect);
             const width: i32 = rect.right - rect.left;
             const height: i32 = rect.bottom - rect.top;
-            // application_state.engine.core_log.trace("W: {d}, H: {d}\n", .{ width, height });
-            // const lparam: i32 = @truncate(l_param);
-            // const w2: i16 = @truncate(lparam);
-            // const h2: i16 = @truncate(lparam >> 16);
-            // application_state.engine.core_log.trace("W2: {d}, H2: {d}\n", .{ w2, h2 });
             const data: core.event.WindowResizeEventData = .{
                 .size = .{ .width = @truncate(width), .height = @truncate(height) },
             };

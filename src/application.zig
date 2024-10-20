@@ -18,8 +18,11 @@ const DLL = switch (builtin.mode) {
     else => void,
 };
 
+const EngineLog = core.log.ScopedLogger(core.log.default_log, .engine, core.log.default_level);
+
 pub const Application = @This();
 engine: core.Fracture = undefined,
+log: EngineLog,
 platform_state: platform.PlatformState = undefined,
 
 frontend: Frontend = undefined,
@@ -63,17 +66,14 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     }
 
     // Logging
-    app.engine.core_log.init();
-    try app.engine.core_log.stderr_init();
-    try app.engine.core_log.file_init();
-    errdefer app.engine.core_log.deinit();
-    app.engine.core_log.info("Logging system has been initialized", .{});
-    app.engine.core_log.info("Logging system has been initialized", .{});
+    app.engine.log_config.init();
+    try app.engine.log_config.stderr_init();
+    try app.engine.log_config.file_init();
+    errdefer app.engine.log_config.deinit();
 
-    app.engine.log.init();
-    try app.engine.log.stderr_init();
-    errdefer app.engine.log.deinit();
-    app.engine.log.info("Logging system has been initialized", .{});
+    app.log = EngineLog.init(&app.engine.log_config);
+
+    app.log.info("Logging system has been initialized", .{});
 
     // Event
     try app.engine.event.init();
@@ -90,10 +90,10 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
         app_config.window_pos.height,
     );
     errdefer platform.deinit(&app.platform_state);
-    app.engine.core_log.info("Platform layer has been initialized", .{});
+    app.log.info("Platform layer has been initialized", .{});
 
     // Memory
-    app.engine.memory.gpa.init(allocator);
+    app.engine.memory.gpa.init(allocator, &app.engine.log_config);
     const arena_allocator = app.engine.memory.gpa.get_type_allocator(.frame_arena);
     if (comptime builtin.mode == .Debug) {
         app.engine.memory.gpa.memory_stats.current_memory[@intFromEnum(core.mem.EngineMemoryTag.application)] = @sizeOf(Application);
@@ -103,17 +103,17 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     }
 
     app.frame_arena = std.heap.ArenaAllocator.init(arena_allocator);
-    app.engine.memory.frame_allocator.init(app.frame_arena.allocator());
+    app.engine.memory.frame_allocator.init(app.frame_arena.allocator(), &app.engine.log_config);
 
     if (comptime app_config.frame_arena_preheat_bytes != 0) {
         _ = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, app_config.frame_arena_preheat_bytes);
         if (!app.frame_arena.reset(.retain_capacity)) {
             @branchHint(.unlikely);
-            app.engine.core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
+            app.log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
-        app.engine.core_log.info("Frame arena has been preheated with {d} bytes of memory", .{app_config.frame_arena_preheat_bytes});
+        app.log.info("Frame arena has been preheated with {d} bytes of memory", .{app_config.frame_arena_preheat_bytes});
     }
-    app.engine.core_log.info("Memory has been initialized", .{});
+    app.log.info("Memory has been initialized", .{});
     errdefer app.frame_arena.deinit();
 
     // Input
@@ -123,19 +123,19 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
     try app.frontend.init(renderer_allocator, app_config.application_name, &app.platform_state);
     errdefer app.frontend.deinit();
-    app.engine.core_log.info("Renderer initialized", .{});
+    app.log.info("Renderer initialized", .{});
 
     // Application
     app.game_state = app.api.init(&app.engine) orelse {
         @branchHint(.cold);
-        app.engine.core_log.fatal("Client application failed to initialize", .{});
+        app.log.fatal("Client application failed to initialize", .{});
         return ApplicationError.ClientAppInit;
     };
 
-    app.engine.core_log.info("Client application has been initialized", .{});
+    app.log.info("Client application has been initialized", .{});
 
     app.api.on_resize(&app.engine, app.game_state, app_config.window_pos.width, app_config.window_pos.height);
-    app.engine.core_log.info("Application has been initialized", .{});
+    app.log.info("Application has been initialized", .{});
 
     return app;
 }
@@ -144,32 +144,31 @@ pub fn deinit(self: *Application) void {
 
     // Application shutdown
     self.api.deinit(&self.engine, self.game_state);
-    self.engine.core_log.info("Client application has been shutdown", .{});
+    self.log.info("Client application has been shutdown", .{});
 
     // Renderer shutdown
     self.frontend.deinit();
-    self.engine.core_log.info("Renderer has been shutdown", .{});
+    self.log.info("Renderer has been shutdown", .{});
 
     // Platform shutdown
     platform.deinit(&self.platform_state);
-    self.engine.core_log.info("Platform layer has been shutdown", .{});
+    self.log.info("Platform layer has been shutdown", .{});
 
     // Memory Shutdown
-    self.engine.memory.frame_allocator.print_memory_stats(&self.engine.core_log);
+    self.engine.memory.frame_allocator.print_memory_stats();
 
     // self.engine.memory.gpa.deinit();
     self.engine.memory.frame_allocator.deinit();
     self.frame_arena.deinit();
-    self.engine.memory.gpa.print_memory_stats(&self.engine.core_log);
-    self.engine.core_log.info("Context memory has been shutdown", .{});
+    self.engine.memory.gpa.print_memory_stats();
+    self.log.info("Context memory has been shutdown", .{});
 
     // Event shutdown
     self.engine.event.deinit();
 
     // Logging shutdown
-    self.engine.core_log.info("Logging system is shutting down", .{});
-    self.engine.log.deinit();
-    self.engine.core_log.deinit();
+    self.log.info("Logging system is shutting down", .{});
+    self.engine.log_config.deinit();
 
     // Free application
     const appliation_allocator: std.mem.Allocator = self.engine.memory.gpa.get_type_allocator(.application);
@@ -180,8 +179,8 @@ pub fn run(self: *Application) ApplicationError!void {
     // debug_assert(initialized, @src(), "Trying to run application when none was created.", .{});
     var err: ?ApplicationError = null;
 
-    self.engine.memory.gpa.print_memory_stats(&self.engine.core_log);
-    const core_log = &self.engine.core_log;
+    self.engine.memory.gpa.print_memory_stats();
+    const core_log = &self.log;
 
     // NOTE(aditya): This cannot fail on windows
     self.timer = std.time.Timer.start() catch unreachable;
@@ -230,7 +229,7 @@ pub fn run(self: *Application) ApplicationError!void {
                 const stats = try file.stat();
                 file.close();
                 if (self.dll.time_stamp != stats.mtime) {
-                    self.engine.core_log.debug("New DLL detected", .{});
+                    self.log.debug("New DLL detected", .{});
                     self.dll.time_stamp = stats.mtime;
                     _ = platform.free_library(self.dll.instance);
                     _ = self.reload_library();
@@ -250,7 +249,7 @@ pub fn run(self: *Application) ApplicationError!void {
     var dt: f64 = @floatFromInt(delta_time);
     dt /= std.time.ns_per_s;
     const float_count: f64 = @floatFromInt(frame_count);
-    self.engine.core_log.err("Avg Delta_time: {d}, FPS: {d}f/s", .{ std.fmt.fmtDuration(@divTrunc(delta_time, frame_count)), float_count / dt });
+    self.log.err("Avg Delta_time: {d}, FPS: {d}f/s", .{ std.fmt.fmtDuration(@divTrunc(delta_time, frame_count)), float_count / dt });
     // In case the loop exited for some other reason
     self.engine.is_running = false;
     if (err) |e| {
@@ -259,7 +258,7 @@ pub fn run(self: *Application) ApplicationError!void {
 }
 
 pub fn on_event(self: *Application, comptime event_code: core.event.EventCode, event_data: core.event.EventData) void {
-    self.engine.core_log.trace("Got an event", .{});
+    self.log.trace("Got an event", .{});
     switch (event_code) {
         .APPLICATION_QUIT => {
             _ = self.engine.event.fire(.APPLICATION_QUIT, &self.engine, event_data);

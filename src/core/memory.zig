@@ -11,8 +11,8 @@ pub const ArenaMemoryTags = enum(u8) {
     untagged = 0,
 };
 
-pub const GPA = TrackingAllocator(.gpa, EngineMemoryTag);
-pub const FrameArena: type = TrackingAllocator(.frame_arena, ArenaMemoryTags);
+pub const GPA = TrackingAllocator(.gpa, EngineMemoryTag, true);
+pub const FrameArena: type = TrackingAllocator(.frame_arena, ArenaMemoryTags, true);
 
 /// The memory system passed to the game
 pub const Memory = struct {
@@ -25,7 +25,7 @@ pub const Memory = struct {
 ///! An allocator that allows you to track total allocations and deallocations of the backing allocator
 ///! During release memory stats are not tracked and this essentially becomes a thin wrapper around
 ///! the backing allocator
-pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime MemoryTag: type) type {
+pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime MemoryTag: type, comptime enable_log: bool) type {
     if (comptime @typeInfo(MemoryTag) != .@"enum") {
         @compileError("Memory Tag must be an enum");
     }
@@ -34,11 +34,14 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
         else => 0,
     };
 
+    const MemoryLog = if (enable_log) log.ScopedLogger(log.default_log, .MEMORY, log.default_level) else void;
+
     return struct {
         backing_allocator: Allocator = undefined,
         type_structs: TypeStructs = undefined,
         type_allocators: TypeAllocators = undefined,
         memory_stats: MemoryStats = std.mem.zeroes(MemoryStats),
+        log: MemoryLog,
 
         const struct_tag = alloc_tag;
         const TypeStructs = [memory_tag_len * num_bytes_type_allocator]u8;
@@ -61,7 +64,7 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
 
         const Self = @This();
 
-        pub fn init(self: *Self, allocator: Allocator) void {
+        pub fn init(self: *Self, allocator: Allocator, log_config: *log.LogConfig) void {
             // debug_assert(
             //     !initialized,
             //     @src(),
@@ -82,6 +85,9 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
                     self.type_allocators[i] = @as(*AllocatorTypes[i], @ptrCast(@alignCast(self.type_structs[start..end].ptr))).allocator();
                 }
                 self.memory_stats = std.mem.zeroes(MemoryStats);
+            }
+            if (comptime enable_log) {
+                self.log = MemoryLog.init(log_config);
             }
             // initialized = true;
         }
@@ -134,31 +140,31 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
             return &self.memory_stats;
         }
 
-        pub fn print_memory_stats(self: *Self, core_log: *log.CoreLog) void {
+        pub fn print_memory_stats(self: *Self) void {
             // debug_assert(
             //     initialized,
             //     @src(),
             //     "Use of {s} allocator before init or after shutdown.",
             //     .{@tagName(struct_tag)},
             // );
-            if (comptime memory_tag_len != 0) {
-                core_log.debug("Memory Subsystem[{s}]: ", .{@tagName(struct_tag)});
+            if (comptime memory_tag_len != 0 or enable_log) {
+                self.log.debug("Memory Subsystem[{s}]: ", .{@tagName(struct_tag)});
                 // magic padding
                 const padding = 8 + 16 + 2 + 9 + 2 + 9 + 1;
-                core_log.debug("=" ** padding, .{});
-                core_log.debug("|\t{s:<16}| {s:^9} | {s:^9}|", .{ "MemoryTag", "Current", "Peak" });
-                core_log.debug("=" ** padding, .{});
+                self.log.debug("=" ** padding, .{});
+                self.log.debug("|\t{s:<16}| {s:^9} | {s:^9}|", .{ "MemoryTag", "Current", "Peak" });
+                self.log.debug("=" ** padding, .{});
                 inline for (@typeInfo(MemoryTag).@"enum".fields) |field| {
                     const curr_bytes = defines.parse_bytes(self.memory_stats.current_memory[field.value]);
                     const peak_bytes = defines.parse_bytes(self.memory_stats.peak_memory[field.value]);
-                    core_log.debug("|\t{s:<16}| {s} |{s} |", .{ field.name, curr_bytes, peak_bytes });
+                    self.log.debug("|\t{s:<16}| {s} |{s} |", .{ field.name, curr_bytes, peak_bytes });
                 }
                 const curr_bytes = defines.parse_bytes(self.memory_stats.current_total_memory);
                 const peak_bytes = defines.parse_bytes(self.memory_stats.peak_total_memory);
-                core_log.debug("=" ** padding, .{});
-                core_log.debug("|\t{s:<16}| {s} |{s} |", .{ "TOTAL", curr_bytes, peak_bytes });
-                core_log.debug("=" ** padding, .{});
-                core_log.debug("\n", .{});
+                self.log.debug("=" ** padding, .{});
+                self.log.debug("|\t{s:<16}| {s} |{s} |", .{ "TOTAL", curr_bytes, peak_bytes });
+                self.log.debug("=" ** padding, .{});
+                self.log.debug("\n", .{});
             }
         }
 

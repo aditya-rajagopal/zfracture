@@ -3,9 +3,6 @@
 //            multiple buffered writers. This way we can also have more scopes than the two.
 const platform = @import("core_platform.zig");
 
-pub const CoreLog = Logger(default_log, .Engine, null);
-pub const GameLog = Logger(default_log, .Game, null);
-
 /// Struct to define log levels of custom scopes defined in the app
 pub const ScopeLevel = struct {
     scope: @Type(.enum_literal),
@@ -62,12 +59,6 @@ pub const default_level: Level = switch (builtin.mode) {
     .ReleaseFast, .ReleaseSmall => .err,
 };
 
-/// The scope levels defined by the engine
-const scope_levels: []const ScopeLevel = &[_]ScopeLevel{
-    .{ .scope = .Engine, .level = default_level },
-    .{ .scope = .Game, .level = default_level },
-};
-
 /// The type of the logging function required
 pub const LogFn = *const fn (*LogConfig, comptime Level, comptime @Type(.enum_literal), comptime []const u8, anytype) void;
 
@@ -81,88 +72,74 @@ pub const LogConfig = struct {
     tty_config: std.io.tty.Config = undefined,
     /// The buffered writer to which to write to in the LogFn
     buffered_writer: std.io.BufferedWriter(8192, std.fs.File.Writer) = undefined,
+
+    pub fn init(self: *LogConfig) void {
+        self.* = LogConfig{};
+    }
+
+    /// Initializes the logger to print to stderr
+    pub fn stderr_init(self: *LogConfig) LoggerError!void {
+        const stderr = std.io.getStdErr();
+        self.tty_config = platform.get_tty_config(stderr) catch return LoggerError.TTYConfigFailed;
+
+        const stdwrite = stderr.writer();
+        self.buffered_writer = .{ .unbuffered_writer = stdwrite };
+    }
+
+    /// Initialize the logger to print to a file
+    pub fn file_init(self: *LogConfig) LoggerError!void {
+        self.log_file = std.fs.cwd().openFile("./Logs/debug_log.txt", .{ .mode = .write_only }) catch |e| switch (e) {
+            std.fs.File.OpenError.FileNotFound => blk: {
+                @branchHint(.cold);
+                try std.fs.cwd().makePath("./Logs/");
+                break :blk try std.fs.cwd().createFile("./Logs/debug_log.txt", .{});
+            },
+            else => |overflow| return overflow,
+        };
+        self.log_file.?.seekFromEnd(0) catch unreachable;
+        const writer = self.log_file.?.writer();
+        self.file_writer = .{ .unbuffered_writer = writer };
+    }
+
+    pub fn deinit(self: *LogConfig) void {
+        if (self.log_file) |file| {
+            self.file_writer.flush() catch unreachable;
+            file.close();
+        }
+        self.buffered_writer.flush() catch unreachable;
+    }
 };
 
 pub const LoggerError = error{TTYConfigFailed} || std.fs.File.OpenError || std.fs.Dir.MakeError || std.fs.Dir.StatFileError;
 
-pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal), comptime log_level: ?Level) type {
-    const scope_log_level = if (log_level) |level| blk: {
-        inline for (scope_levels) |scope_level| {
-            if (scope_level.scope == scope) {
-                @compileError(
-                    "When creating scoped for Engine or game dont pass a log level. That is handled automatically",
-                );
-            }
-        }
-        break :blk level;
-    } else blk: {
-        inline for (scope_levels) |scope_level| {
-            if (scope_level.scope == scope) break :blk scope_level.level;
-        }
-        @compileError(
-            "Calling scoped without providing log_level. The logger only supports scopes Engine and Game",
-        );
-    };
-
+pub fn ScopedLogger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal), comptime log_level: Level) type {
     return struct {
         const Self = @This();
-        config: LogConfig = .{},
+        config: *LogConfig,
 
-        pub fn init(self: *Self) void {
-            self.* = Self{};
-        }
-
-        /// Initializes the logger to print to stderr
-        pub fn stderr_init(self: *Self) LoggerError!void {
-            const stderr = std.io.getStdErr();
-            self.config.tty_config = platform.get_tty_config(stderr) catch return LoggerError.TTYConfigFailed;
-
-            const stdwrite = stderr.writer();
-            self.config.buffered_writer = .{ .unbuffered_writer = stdwrite };
-        }
-
-        pub fn file_init(self: *Self) LoggerError!void {
-            self.config.log_file = std.fs.cwd().openFile("./Logs/debug_log.txt", .{ .mode = .write_only }) catch |e| switch (e) {
-                std.fs.File.OpenError.FileNotFound => blk: {
-                    @branchHint(.cold);
-                    try std.fs.cwd().makePath("./Logs/");
-                    break :blk try std.fs.cwd().createFile("./Logs/debug_log.txt", .{});
-                },
-                else => |overflow| return overflow,
-            };
-            self.config.log_file.?.seekFromEnd(0) catch unreachable;
-            const writer = self.config.log_file.?.writer();
-            self.config.file_writer = .{ .unbuffered_writer = writer };
-        }
-
-        pub fn deinit(self: *Self) void {
-            if (self.config.log_file) |file| {
-                self.config.file_writer.flush() catch unreachable;
-                file.close();
-            }
-            self.config.buffered_writer.flush() catch unreachable;
+        pub fn init(config: *LogConfig) Self {
+            return .{ .config = config };
         }
 
         inline fn logging(
-            self: *Self,
+            self: Self,
             comptime message_level: Level,
             comptime format: []const u8,
             args: anytype,
         ) void {
-            if (comptime @intFromEnum(message_level) > @intFromEnum(scope_log_level)) return;
+            if (comptime @intFromEnum(message_level) > @intFromEnum(log_level)) return;
 
-            log_function(&self.config, message_level, scope, format, args);
+            log_function(self.config, message_level, scope, format, args);
         }
 
         /// Log an fatal error message. This log level is intended to be used
         /// when something has gone VERY wrong. This is usually an irrecoverable
         /// error and the program is most likely going to exit.
         pub fn fatal(
-            self: *Self,
+            self: Self,
             comptime format: []const u8,
             args: anytype,
         ) void {
-            @branchHint(.cold);
             self.logging(.fatal, format, args);
         }
 
@@ -170,11 +147,10 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// when something has gone wrong. This might be recoverable or might
         /// be followed by the program exiting.
         pub fn err(
-            self: *Self,
+            self: Self,
             comptime format: []const u8,
             args: anytype,
         ) void {
-            @branchHint(.cold);
             self.logging(.err, format, args);
         }
 
@@ -182,7 +158,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// it is uncertain whether something has gone wrong or not, but the
         /// circumstances would be worth investigating.
         pub fn warn(
-            self: *Self,
+            self: Self,
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -192,7 +168,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// Log an info message. This log level is intended to be used for
         /// general messages about the state of the program.
         pub fn info(
-            self: *Self,
+            self: Self,
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -202,7 +178,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// Log a debug message. This log level is intended to be used for
         /// messages which are only useful for debugging.
         pub fn debug(
-            self: *Self,
+            self: Self,
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -213,7 +189,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// messages which are useful for step by step debugging in specific parts
         /// of the application during debugging.
         pub fn trace(
-            self: *Self,
+            self: Self,
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -222,7 +198,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
 
         /// Log current stack trace. This is only correct in debug builds. In non debug builds this will be incorrect due to
         /// optimizations
-        pub fn dump_stack_trace(self: *Self) void {
+        pub fn dump_stack_trace(self: Self) void {
             const debug_info = std.debug.getSelfDebugInfo() catch |e| {
                 self.fatal("\n Unable to print stack trace: {s}\n", .{@errorName(e)});
                 return;
@@ -241,7 +217,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// ```
         /// assert_msg(1 == 0, @src(), "Number system is consistent: {d} != {d}", .{1, 0});
         /// ```
-        pub fn assert_msg(self: *Self, condition: bool, comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
+        pub fn assert_msg(self: Self, condition: bool, comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
             if (!condition) {
                 @branchHint(.cold);
                 self.fatal(
@@ -266,7 +242,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// ```
         /// assert(1 == 0, @src());
         /// ```
-        pub fn assert(self: *Self, condition: bool, comptime src: std.builtin.SourceLocation) void {
+        pub fn assert(self: Self, condition: bool, comptime src: std.builtin.SourceLocation) void {
             self.assert_msg(condition, src, "", .{});
         }
 
@@ -275,7 +251,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// ```
         /// debug_assert(1 == 0, @src());
         /// ```
-        pub fn debug_assert(self: *Self, condition: bool, comptime src: std.builtin.SourceLocation) void {
+        pub fn debug_assert(self: Self, condition: bool, comptime src: std.builtin.SourceLocation) void {
             switch (builtin.mode) {
                 .Debug, .ReleaseSafe => self.assert_msg(condition, src, "", .{}),
                 else => {},
@@ -288,7 +264,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// debug_assert_msg(1 == 0, @src(), "Number system is consistent: {d} != {d}", .{1, 0});
         /// ```
         pub fn debug_assert_msg(
-            self: *Self,
+            self: Self,
             condition: bool,
             comptime src: std.builtin.SourceLocation,
             comptime fmt: []const u8,
@@ -305,7 +281,7 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         /// ```
         /// never_msg(@src(), "I should have never reached this place. The number must not be {d}", .{42});
         /// ```
-        pub fn never_msg(self: *Self, comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
+        pub fn never_msg(self: Self, comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
             @branchHint(.cold);
             self.fatal(
                 "Assertion failed: {s}:{d} in file {s}",

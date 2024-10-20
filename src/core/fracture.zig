@@ -1,11 +1,10 @@
 pub const Fracture = struct {
     is_suspended: bool = false,
     is_running: bool = false,
+    log_config: log.LogConfig,
     memory: mem.Memory,
     event: event,
     input: input,
-    core_log: log.CoreLog,
-    log: log.GameLog,
     width: i32 = 1280,
     height: i32 = 720,
     last_time: f64 = 0,
