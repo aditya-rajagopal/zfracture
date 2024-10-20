@@ -28,16 +28,16 @@ pub const OnResizeFn = *const fn (engine: *Fracture, game_state: *anyopaque, wid
 /// The GameData is passed to these functions as context
 pub const API = struct {
     /// The function to initialize the game's internal state if it has been reloaded
-    init: *const fn (engine: *Fracture) ?*anyopaque,
+    init: InitFn,
     /// Function called when the application shuts down
-    deinit: *const fn (engine: *Fracture, game_state: *anyopaque) void,
+    deinit: DeinitFn,
     /// Function called each frame by the engine
     /// delta_time: the frame time of the last frame
-    update: *const fn (engine: *Fracture, game_state: *anyopaque) bool,
+    update: UpdateFn,
     /// Function called each fraom by the engine to do rendering tasks
-    render: *const fn (engine: *Fracture, game_state: *anyopaque) bool,
+    render: RenderFn,
     /// Function called by the engine on update events
-    on_resize: *const fn (engine: *Fracture, game_state: *anyopaque, width: u32, height: u32) void,
+    on_resize: OnResizeFn,
 };
 
 /// The configuration of the application that must be defined by the client
@@ -61,8 +61,6 @@ pub const input = @import("input.zig");
 
 pub const MergeEnums = comptime_funcs.MergeEnums;
 pub const Distinct = comptime_funcs.Distinct;
-
-pub const StaticArrayList = static_array_list.StaticArrayList;
 
 pub fn not_implemented(comptime src: std.builtin.SourceLocation) void {
     @compileError("NOT IMPLEMENTED: " ++ src.fn_name ++ " - " ++ src.file);

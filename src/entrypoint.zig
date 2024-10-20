@@ -12,12 +12,6 @@ pub fn main() !void {
     // TODO: Get the allocator from somewhere else. Platform?
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    errdefer {
-        const check = gpa.deinit();
-        if (check == .leak) {
-            @panic("memory leak");
-        }
-    }
     defer {
         const check = gpa.deinit();
         if (check == .leak) {
@@ -25,7 +19,10 @@ pub fn main() !void {
         }
     }
 
-    var app = try application.init(allocator);
+    var app = switch (builtin.mode) {
+        .Debug, .ReleaseSafe => try application.init(allocator),
+        else => try application.init(std.heap.page_allocator),
+    };
     errdefer app.deinit();
 
     try app.run();
@@ -34,3 +31,4 @@ pub fn main() !void {
 }
 
 const std = @import("std");
+const builtin = @import("builtin");

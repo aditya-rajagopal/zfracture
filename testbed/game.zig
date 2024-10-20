@@ -34,7 +34,7 @@ pub fn deinit(engine: *core.Fracture, game_state: *anyopaque) void {
 pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
     const state: *GameState = @ptrCast(@alignCast(game_state));
     if (state.testing) {
-        const frame_alloc = engine.memory.frame_allocator.get_type_allocator(.application);
+        const frame_alloc = engine.memory.frame_allocator.get_type_allocator(.untagged);
         const temp_data = frame_alloc.alloc(f32, 16) catch return false;
         engine.memory.gpa.print_memory_stats(&engine.core_log);
         engine.memory.frame_allocator.print_memory_stats(&engine.core_log);

@@ -520,7 +520,6 @@ test "Event" {
     const event: *Event = try std.testing.allocator.create(Event);
     defer std.testing.allocator.destroy(event);
     try init(event);
-    errdefer event.deinit();
     defer event.deinit();
     const key_data: KeyEventData = .{ .key = .A, .pressed = 1, .mouse_pos = .{ .x = 69, .y = 420 }, .is_repeated = 1 };
 

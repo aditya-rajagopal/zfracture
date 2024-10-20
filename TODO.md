@@ -9,6 +9,8 @@
     - [x] Create basic logging functionality
     - [x] Make logs coloured based on log level
     - [x] Move logging to the core library 
+    - [ ] Can we have 1 logger that just has different scopes so they share the buffered writer. Rather than having
+          multiple buffered writers. This way we can also have more scopes than the two.
     - [ ] Fix all the missing debug asserts removed when log was moved to core
     - [ ] Change the log function to also optionally write to a log file in addition to console
     - [ ] Seperate log thread? job?
@@ -18,6 +20,7 @@
     - [x] Add allocators to the context passed to the game. One GPA and one FrameArena
     - [x] Move memory into core
     - [x] Remove merge enums from memory and let the game handle it's own memory
+    - [ ] Should the FrameArena be replaced by a FixedBufferAllocator (i.e a bump allocator)
     - [ ] Create a custom allocator for Fracture that allows larger virtual space allocations for expanding allocations
 - [ ] windows platform layer
     - [x] Create a window

@@ -1,8 +1,12 @@
 ///! The application system contains the main loop of the application
 ///!
 ///! It owns the engine state and dispatches events
+// TODO:
+//      - [ ] Should i replace the frame arena by a fixed buffer allocator that is defined by asking the application
+//            how much memory it needs at startup and give it that much memory to work with forever. Instead of an arena
 const core = @import("fr_core");
 const platform = @import("platform/platform.zig");
+const Frontend = @import("renderer/frontend.zig");
 
 const config = @import("config.zig");
 const application_config = config.app_config;
@@ -17,11 +21,13 @@ const DLL = switch (builtin.mode) {
 pub const Application = @This();
 engine: core.Fracture = undefined,
 platform_state: platform.PlatformState = undefined,
+
+frontend: Frontend = undefined,
 game_state: *anyopaque,
 api: core.API,
 dll: DLL,
 frame_arena: std.heap.ArenaAllocator = undefined,
-// buffer: [1024]u8,
+timer: std.time.Timer,
 
 const ApplicationError =
     error{ ClientAppInit, FailedUpdate, FailedRender } ||
@@ -29,12 +35,14 @@ const ApplicationError =
     std.mem.Allocator.Error ||
     core.log.LoggerError ||
     std.fs.File.OpenError ||
-    std.fs.File.StatError;
+    std.fs.File.StatError ||
+    Frontend.FrontendError;
 
 pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Memory
     const app: *Application = try allocator.create(Application);
+    errdefer allocator.destroy(app);
 
     app.engine.is_running = true;
     app.engine.is_suspended = false;
@@ -98,19 +106,26 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     if (comptime app_config.frame_arena_preheat_bytes != 0) {
         _ = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, app_config.frame_arena_preheat_bytes);
         if (!app.frame_arena.reset(.retain_capacity)) {
-            @setCold(true);
+            @branchHint(.unlikely);
             app.engine.core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
         app.engine.core_log.info("Frame arena has been preheated with {d} bytes of memory", .{app_config.frame_arena_preheat_bytes});
     }
     app.engine.core_log.info("Memory has been initialized", .{});
+    errdefer app.frame_arena.deinit();
 
     // Input
     app.engine.input.init();
 
+    // Renderer
+    const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
+    try app.frontend.init(renderer_allocator, app_config.application_name, &app.platform_state);
+    errdefer app.frontend.deinit();
+    app.engine.core_log.info("Renderer initialized", .{});
+
     // Application
     app.game_state = app.api.init(&app.engine) orelse {
-        @setCold(true);
+        @branchHint(.cold);
         app.engine.core_log.fatal("Client application failed to initialize", .{});
         return ApplicationError.ClientAppInit;
     };
@@ -128,6 +143,10 @@ pub fn deinit(self: *Application) void {
     // Application shutdown
     self.api.deinit(&self.engine, self.game_state);
     self.engine.core_log.info("Client application has been shutdown", .{});
+
+    // Renderer shutdown
+    self.frontend.deinit();
+    self.engine.core_log.info("Renderer has been shutdown", .{});
 
     // Platform shutdown
     platform.deinit(&self.platform_state);
@@ -162,31 +181,43 @@ pub fn run(self: *Application) ApplicationError!void {
     self.engine.memory.gpa.print_memory_stats(&self.engine.core_log);
     const core_log = &self.engine.core_log;
 
+    // NOTE(aditya): This cannot fail on windows
+    self.timer = std.time.Timer.start() catch unreachable;
+    var delta_time: u64 = 0;
+    var frame_count: u64 = 0;
+
     while (self.engine.is_running) {
         platform.pump_messages(&self.platform_state);
 
-        // Clear the arena right before the loop stats but after the events are handled else we might be invalidating
+        // NOTE: Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
         if (!self.frame_arena.reset(.retain_capacity)) {
-            @setCold(true);
+            @branchHint(.unlikely);
             core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
             if (!self.api.update(&self.engine, self.game_state)) {
-                @setCold(true);
+                @branchHint(.cold);
                 core_log.fatal("Client app update failed, shutting down", .{});
                 err = ApplicationError.FailedUpdate;
                 break;
             }
 
             if (!self.api.render(&self.engine, self.game_state)) {
-                @setCold(true);
+                @branchHint(.cold);
                 core_log.fatal("Client app render failed, shutting down", .{});
                 err = ApplicationError.FailedRender;
                 break;
             }
+
+            // HACK: Temporary packet passing
+            self.frontend.draw_frame(.{ .delta_time = 0 }) catch |e| {
+                err = e;
+                self.engine.is_running = false;
+                continue;
+            };
         }
 
         switch (builtin.mode) {
@@ -205,10 +236,19 @@ pub fn run(self: *Application) ApplicationError!void {
             },
             else => {},
         }
+
         self.engine.input.update();
+        const end = self.timer.lap();
+        delta_time += end;
+        frame_count += 1;
+
         // break;
     }
 
+    var dt: f64 = @floatFromInt(delta_time);
+    dt /= std.time.ns_per_s;
+    const float_count: f64 = @floatFromInt(frame_count);
+    self.engine.core_log.err("Avg Delta_time: {d}, FPS: {d}f/s", .{ std.fmt.fmtDuration(@divTrunc(delta_time, frame_count)), float_count / dt });
     // In case the loop exited for some other reason
     self.engine.is_running = false;
     if (err) |e| {
@@ -234,9 +274,6 @@ pub fn on_event(self: *Application, comptime event_code: core.event.EventCode, e
 }
 
 fn reload_library(self: *Application) bool {
-    // const new_name = std.fmt.bufPrintZ(&self.buffer, "{s}_{d}", .{ config.dll_name, self.dll.time_stamp }) catch {
-    //     return false;
-    // };
     const new_name = config.dll_name ++ "_tmp";
     if (!platform.copy_file(config.dll_name, new_name, true)) {
         return false;

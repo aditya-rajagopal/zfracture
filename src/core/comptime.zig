@@ -2,7 +2,7 @@
 /// Passing the same type and different tags will create different types. However passing the same type and tag will
 /// return the same type.
 /// This does add some overhead to syntax since you will have to explicitly call .val on everything.
-pub fn Distinct(T: type, tag: @Type(.EnumLiteral)) type {
+pub fn Distinct(T: type, tag: @Type(.enum_literal)) type {
     return struct {
         val: T,
         pub const name = @tagName(tag);
@@ -38,7 +38,7 @@ test Distinct {
 /// The backing_int_type provided must be an unsigned integer and should be able to accomodate the combined enums.
 pub fn MergeEnums(comptime enums: []const type, comptime backing_int_type: type) type {
     const int_type_info = @typeInfo(backing_int_type);
-    if (int_type_info != .Int and int_type_info.Int.signedness != .unsigned) {
+    if (int_type_info != .int and int_type_info.Int.signedness != .unsigned) {
         @compileError("Expected an unsigned integer as backing_int_type got " ++ @typeName(backing_int_type));
     }
 
@@ -47,7 +47,7 @@ pub fn MergeEnums(comptime enums: []const type, comptime backing_int_type: type)
     inline for (enums) |element| {
         const field_type_info = @typeInfo(element);
         switch (field_type_info) {
-            .Enum => |e| {
+            .@"enum" => |e| {
                 if (!e.is_exhaustive) {
                     @compileError("Recieved an exhaustive enum. This function does not support them");
                 }
@@ -66,7 +66,7 @@ pub fn MergeEnums(comptime enums: []const type, comptime backing_int_type: type)
     var i: usize = 0;
     inline for (enums) |element| {
         const field_type_info = @typeInfo(element);
-        inline for (field_type_info.Enum.fields) |f| {
+        inline for (field_type_info.@"enum".fields) |f| {
             enum_fields[i].name = f.name;
             enum_fields[i].value = i;
             i += 1;
@@ -79,7 +79,7 @@ pub fn MergeEnums(comptime enums: []const type, comptime backing_int_type: type)
     enum_type.decls = &[0]std.builtin.Type.Declaration{};
     enum_type.is_exhaustive = false;
 
-    return @Type(std.builtin.Type{ .Enum = enum_type });
+    return @Type(std.builtin.Type{ .@"enum" = enum_type });
 }
 
 test MergeEnums {
@@ -98,10 +98,10 @@ test MergeEnums {
 
     const enum_out = MergeEnums(&[_]type{ enum1, enum2, enum3 }, u8);
     const enum_info = @typeInfo(enum_out);
-    try testing.expect(enum_info == .Enum);
-    try testing.expect(!enum_info.Enum.is_exhaustive);
-    try testing.expect(enum_info.Enum.tag_type == u8);
-    try testing.expect(enum_info.Enum.fields.len == 6);
+    try testing.expect(enum_info == .@"enum");
+    try testing.expect(!enum_info.@"enum".is_exhaustive);
+    try testing.expect(enum_info.@"enum".tag_type == u8);
+    try testing.expect(enum_info.@"enum".fields.len == 6);
 }
 
 const std = @import("std");
