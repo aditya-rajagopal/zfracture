@@ -30,7 +30,7 @@ frame_arena: std.heap.ArenaAllocator = undefined,
 timer: std.time.Timer,
 
 const ApplicationError =
-    error{ ClientAppInit, FailedUpdate, FailedRender } ||
+    error{ ClientAppInit, FailedUpdate, FailedRender, DLLLoadFailed } ||
     platform.PlatformError ||
     std.mem.Allocator.Error ||
     core.log.LoggerError ||
@@ -54,7 +54,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
             file.close();
             app.dll.time_stamp = stats.mtime;
             if (!app.reload_library()) {
-                return app;
+                return error.DLLLoadFailed;
             }
         },
         else => {
