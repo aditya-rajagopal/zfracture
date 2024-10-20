@@ -21,6 +21,7 @@ const DLL = switch (builtin.mode) {
 pub const Application = @This();
 engine: core.Fracture = undefined,
 platform_state: platform.PlatformState = undefined,
+
 frontend: Frontend = undefined,
 game_state: *anyopaque,
 api: core.API,
