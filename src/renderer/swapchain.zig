@@ -5,6 +5,8 @@ const image = @import("image.zig");
 
 const Swapchain = @This();
 
+/// Reference to the context
+ctx: *const Context,
 /// The handle to the swapchain
 handle: vk.SwapchainKHR,
 /// Format of the image we are going to render to
@@ -18,7 +20,9 @@ images: []SwapImage,
 next_image_acquired: vk.Semaphore,
 /// Current image index
 current_image_index: u32,
+
 depth_attachement: image.Image,
+depth_format: vk.Format,
 
 pub const Error =
     error{ ImageAcquiredFailed, FailedToPresentSwapchain } ||
@@ -30,26 +34,25 @@ pub const Error =
     Context.Instance.GetPhysicalDeviceSurfaceFormatsAllocKHRError ||
     Context.Instance.GetPhysicalDeviceSurfacePresentModesKHRError;
 
-pub fn init(ctx: *Context, extent: vk.Extent2D) !void {
-    ctx.swapchain.handle = .null_handle;
-    try create(ctx, extent);
+pub fn init(ctx: *const Context, extent: vk.Extent2D) !Swapchain {
+    return create(ctx, extent, .null_handle);
 }
 
-pub fn deinit(ctx: *Context) void {
-    destroy_all_but_swapchain(ctx);
-    ctx.device.destroySwapchainKHR(ctx.swapchain.handle, null);
+pub fn deinit(self: Swapchain) void {
+    self.destroy_all_but_swapchain();
+    self.ctx.device.destroySwapchainKHR(self.handle, null);
 }
 
-fn create(ctx: *Context, extent: vk.Extent2D) !void {
-    const max_frames_in_flight = 2;
-    _ = max_frames_in_flight;
+fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR) !Swapchain {
+    var swapchain: Swapchain = undefined;
 
-    const swapchain = &ctx.swapchain;
     swapchain.image_format = try find_surface_format(ctx);
     swapchain.present_mode = try find_present_mode(ctx);
 
-    _ = try device.query_swapchain_support(ctx, ctx.physical_device.physical_device);
-    const capabilities = &ctx.physical_device.swapchain_support.capabilities;
+    const capabilities = try ctx.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
+        ctx.physical_device.handle,
+        ctx.surface,
+    );
 
     var actual_extent = extent;
 
@@ -72,8 +75,8 @@ fn create(ctx: *Context, extent: vk.Extent2D) !void {
         image_count = capabilities.max_image_count;
     }
 
-    const graphics_family = ctx.physical_device.queues.graphics_queue.family;
-    const present_family = ctx.physical_device.queues.present_queue.family;
+    const graphics_family = ctx.physical_device.queues.graphics.family;
+    const present_family = ctx.physical_device.queues.present.family;
     const queue_family_indices = [_]u32{ graphics_family, present_family };
 
     const sharing_mode: vk.SharingMode = if (graphics_family != present_family) .concurrent else .exclusive;
@@ -97,22 +100,21 @@ fn create(ctx: *Context, extent: vk.Extent2D) !void {
         .present_mode = swapchain.present_mode,
         .clipped = vk.TRUE,
         // TODO: SHould this always be null? according to kohi tutorial it is?
-        .old_swapchain = swapchain.handle,
+        .old_swapchain = old_handle,
     };
     const handle = try ctx.device.createSwapchainKHR(&create_info, null);
     errdefer ctx.device.destroySwapchainKHR(handle, null);
 
-    if (swapchain.handle != .null_handle) {
+    if (old_handle != .null_handle) {
         // NOTE: We must destroy the old swapchain
-        ctx.device.destroySwapchainKHR(swapchain.handle, null);
+        ctx.device.destroySwapchainKHR(old_handle, null);
     }
 
     swapchain.handle = handle;
-
-    ctx.current_frame = 0;
+    swapchain.max_frames_in_flight = @truncate(image_count - 1);
 
     swapchain.current_image_index = 0;
-    swapchain.images = try init_swapchain_images(ctx);
+    swapchain.images = try init_swapchain_images(ctx, swapchain.handle, swapchain.image_format.format);
     errdefer {
         for (swapchain.images) |swap_image| {
             swap_image.deinit(ctx);
@@ -120,13 +122,13 @@ fn create(ctx: *Context, extent: vk.Extent2D) !void {
         ctx.allocator.free(swapchain.images);
     }
     // TODO: Is this something we can recover from?
-    try ctx.detect_depth_format();
+    swapchain.depth_format = try ctx.detect_depth_format();
 
     swapchain.depth_attachement = try image.create_image(
         ctx,
         .@"2d",
         actual_extent,
-        ctx.physical_device.depth_format,
+        swapchain.depth_format,
         .optimal,
         .{ .depth_stencil_attachment_bit = true },
         .{ .device_local_bit = true },
@@ -134,20 +136,22 @@ fn create(ctx: *Context, extent: vk.Extent2D) !void {
         .{ .depth_bit = true },
     );
     std.debug.print("Swapchain Created Successfully!\n", .{});
+    swapchain.ctx = ctx;
+    return swapchain;
 }
 
-fn destroy_all_but_swapchain(ctx: *Context) void {
-    const swapchain = &ctx.swapchain;
-    image.destroy_image(ctx, &swapchain.depth_attachement);
-    for (swapchain.images) |swap_image| {
-        swap_image.deinit(ctx);
+fn destroy_all_but_swapchain(self: Swapchain) void {
+    image.destroy_image(self.ctx, self.depth_attachement);
+    for (self.images) |swap_image| {
+        swap_image.deinit(self.ctx);
     }
-    ctx.allocator.free(swapchain.images);
+    self.ctx.allocator.free(self.images);
 }
 
-pub fn recreate(ctx: *Context, new_extent: vk.Extent2D) !void {
-    destroy_all_but_swapchain(ctx);
-    create(ctx, new_extent);
+pub fn recreate(self: *Swapchain, new_extent: vk.Extent2D) !void {
+    const old_handle = self.handle;
+    self.destroy_all_but_swapchain();
+    self.* = create(self.ctx, new_extent, old_handle);
 }
 
 pub fn present(ctx: *Context) Context.Device.QueuePresentKHRError!void {
@@ -253,11 +257,9 @@ const SwapImage = struct {
     }
 };
 
-fn init_swapchain_images(ctx: *const Context) ![]SwapImage {
-    const swapchain = &ctx.swapchain;
-
+fn init_swapchain_images(ctx: *const Context, swapchain: vk.SwapchainKHR, format: vk.Format) ![]SwapImage {
     // NOTE: Swapchain images are not created but gotten handles for
-    const images = try ctx.device.getSwapchainImagesAllocKHR(swapchain.handle, ctx.allocator);
+    const images = try ctx.device.getSwapchainImagesAllocKHR(swapchain, ctx.allocator);
     defer ctx.allocator.free(images);
 
     const swap_images = try ctx.allocator.alloc(SwapImage, images.len);
@@ -267,7 +269,7 @@ fn init_swapchain_images(ctx: *const Context) ![]SwapImage {
     errdefer for (swap_images[0..i]) |si| si.deinit(ctx);
 
     for (images) |image_handle| {
-        swap_images[i] = try SwapImage.init(ctx, image_handle, ctx.swapchain.image_format.format);
+        swap_images[i] = try SwapImage.init(ctx, image_handle, format);
         i += 1;
     }
 
@@ -282,7 +284,7 @@ fn find_surface_format(ctx: *const Context) !vk.SurfaceFormatKHR {
     };
 
     const surface_formats = try ctx.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(
-        ctx.physical_device.physical_device,
+        ctx.physical_device.handle,
         ctx.surface,
         ctx.allocator,
     );
@@ -304,7 +306,7 @@ fn find_surface_format(ctx: *const Context) !vk.SurfaceFormatKHR {
 
 fn find_present_mode(ctx: *const Context) !vk.PresentModeKHR {
     const present_modes = try ctx.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(
-        ctx.physical_device.physical_device,
+        ctx.physical_device.handle,
         ctx.surface,
         ctx.allocator,
     );

@@ -16,13 +16,6 @@ const Requirements = struct {
     device_extension_names: std.ArrayList([*:0]const u8),
 };
 
-pub const QueueFamilies = struct {
-    graphics_family_index: u32 = std.math.maxInt(u32),
-    present_family_index: u32 = std.math.maxInt(u32),
-    compute_family_index: u32 = std.math.maxInt(u32),
-    transfer_family_index: u32 = std.math.maxInt(u32),
-};
-
 pub const Queue = struct {
     handle: vk.Queue = .null_handle,
     family: u32 = std.math.maxInt(u32),
@@ -38,23 +31,17 @@ pub const Queue = struct {
 };
 
 pub const PhycialDevice = struct {
-    physical_device: vk.PhysicalDevice,
-    properties: vk.PhysicalDeviceProperties,
-    features: vk.PhysicalDeviceFeatures,
-    memory_properties: vk.PhysicalDeviceMemoryProperties,
-    swapchain_support: struct {
-        capabilities: vk.SurfaceCapabilitiesKHR,
-        formats: []vk.SurfaceFormatKHR,
-        present_modes: []vk.PresentModeKHR,
-    },
+    handle: vk.PhysicalDevice,
+    // properties: vk.PhysicalDeviceProperties,
+    // features: vk.PhysicalDeviceFeatures,
+    // memory_properties: vk.PhysicalDeviceMemoryProperties,
     queues: struct {
-        graphics_queue: Queue = .{},
-        present_queue: Queue = .{},
-        transfer_queue: Queue = .{},
-        compute_queue: Queue = .{},
+        graphics: Queue = .{},
+        present: Queue = .{},
+        transfer: Queue = .{},
+        compute: Queue = .{},
     },
     graphics_command_pool: vk.CommandPool = .null_handle,
-    depth_format: vk.Format,
 };
 
 pub const Error =
@@ -81,19 +68,14 @@ pub fn create(ctx: *Context) Error!void {
     try create_graphics_command_pool(ctx);
 }
 
-pub fn query_swapchain_support(ctx: *Context, device: vk.PhysicalDevice) Error!?void {
-    ctx.physical_device.swapchain_support.capabilities = try ctx.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
-        device,
-        ctx.surface,
-    );
-
+pub fn query_swapchain_support(ctx: *const Context, device: vk.PhysicalDevice) Error!?void {
     const formats = try ctx.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(
         device,
         ctx.surface,
         ctx.allocator,
     );
+    defer ctx.allocator.free(formats);
     if (formats.len == 0) {
-        ctx.allocator.free(formats);
         return null;
     }
 
@@ -102,47 +84,29 @@ pub fn query_swapchain_support(ctx: *Context, device: vk.PhysicalDevice) Error!?
         ctx.surface,
         ctx.allocator,
     );
+    defer ctx.allocator.free(present_modes);
     if (present_modes.len == 0) {
-        ctx.allocator.free(formats);
-        ctx.allocator.free(present_modes);
         return null;
     }
-    if (ctx.physical_device.swapchain_support.formats.len > 0) {
-        ctx.allocator.free(ctx.physical_device.swapchain_support.formats);
-    }
-    ctx.physical_device.swapchain_support.formats = formats;
-
-    if (ctx.physical_device.swapchain_support.present_modes.len > 0) {
-        ctx.allocator.free(ctx.physical_device.swapchain_support.present_modes);
-    }
-    ctx.physical_device.swapchain_support.present_modes = present_modes;
 }
 
 pub fn destroy(ctx: *Context) void {
     ctx.device.destroyCommandPool(ctx.physical_device.graphics_command_pool, null);
 
-    ctx.physical_device.queues.graphics_queue.handle = .null_handle;
-    ctx.physical_device.queues.present_queue.handle = .null_handle;
-    ctx.physical_device.queues.transfer_queue.handle = .null_handle;
-    ctx.physical_device.queues.compute_queue.handle = .null_handle;
+    ctx.physical_device.queues.graphics.handle = .null_handle;
+    ctx.physical_device.queues.present.handle = .null_handle;
+    ctx.physical_device.queues.transfer.handle = .null_handle;
+    ctx.physical_device.queues.compute.handle = .null_handle;
 
     ctx.device.destroyDevice(null);
     ctx.allocator.destroy(ctx.device.wrapper);
 
-    if (ctx.physical_device.swapchain_support.formats.len > 0) {
-        ctx.allocator.free(ctx.physical_device.swapchain_support.formats);
-    }
-
-    if (ctx.physical_device.swapchain_support.present_modes.len > 0) {
-        ctx.allocator.free(ctx.physical_device.swapchain_support.present_modes);
-    }
-
-    ctx.physical_device.physical_device = .null_handle;
+    ctx.physical_device.handle = .null_handle;
 }
 
 fn create_graphics_command_pool(ctx: *Context) Error!void {
     const create_info = vk.CommandPoolCreateInfo{
-        .queue_family_index = ctx.physical_device.queues.graphics_queue.family,
+        .queue_family_index = ctx.physical_device.queues.graphics.family,
         // NOTE: This flag indicates that we can reset the command buffers from this pool.
         // with either vkResetCommandBuffer or implictly within the vkBeginCommandBuffer calls.
         // If this flag is not set we must not call vkResetCommandBuffer. This is useful for performance reasons as
@@ -153,35 +117,35 @@ fn create_graphics_command_pool(ctx: *Context) Error!void {
 }
 
 fn create_queue_handles(ctx: *Context) Error!void {
-    ctx.physical_device.queues.graphics_queue.init(ctx.device);
-    ctx.physical_device.queues.present_queue.init(ctx.device);
-    ctx.physical_device.queues.graphics_queue.init(ctx.device);
-    ctx.physical_device.queues.graphics_queue.init(ctx.device);
+    ctx.physical_device.queues.graphics.init(ctx.device);
+    ctx.physical_device.queues.present.init(ctx.device);
+    ctx.physical_device.queues.transfer.init(ctx.device);
+    ctx.physical_device.queues.compute.init(ctx.device);
 }
 
 fn create_logical_device(ctx: *Context) Error!void {
     const queue_families = &ctx.physical_device.queues;
 
-    const p_shares_g = queue_families.present_queue.family == queue_families.graphics_queue.family;
-    const t_shares_g = queue_families.transfer_queue.family == queue_families.graphics_queue.family;
-    const c_shares_p = queue_families.compute_queue.family == queue_families.present_queue.family;
+    const p_shares_g = queue_families.present.family == queue_families.graphics.family;
+    const t_shares_g = queue_families.transfer.family == queue_families.graphics.family;
+    const c_shares_p = queue_families.compute.family == queue_families.present.family;
 
     var buffer: [4]u32 = undefined;
     var unique_queue_indices = std.ArrayListUnmanaged(u32).initBuffer(buffer[0..4]);
     // NOTE: We always need a graphics queue
     var index_count: u32 = 1;
-    unique_queue_indices.appendAssumeCapacity(queue_families.graphics_queue.family);
+    unique_queue_indices.appendAssumeCapacity(queue_families.graphics.family);
     if (!p_shares_g) {
         index_count += 1;
-        unique_queue_indices.appendAssumeCapacity(queue_families.present_queue.family);
+        unique_queue_indices.appendAssumeCapacity(queue_families.present.family);
     }
     if (!t_shares_g) {
         index_count += 1;
-        unique_queue_indices.appendAssumeCapacity(queue_families.transfer_queue.family);
+        unique_queue_indices.appendAssumeCapacity(queue_families.transfer.family);
     }
     if (!c_shares_p) {
         index_count += 1;
-        unique_queue_indices.appendAssumeCapacity(queue_families.compute_queue.family);
+        unique_queue_indices.appendAssumeCapacity(queue_families.compute.family);
     }
 
     const queue_create_info = try ctx.allocator.alloc(vk.DeviceQueueCreateInfo, index_count);
@@ -225,7 +189,7 @@ fn create_logical_device(ctx: *Context) Error!void {
 
     // NOTE: Create logical device. Phycial devices are not created directly, instead you request for a handle.
     // We create a logical device with queue familes. In most cases we work with the logical device.
-    const device = try ctx.instance.createDevice(ctx.physical_device.physical_device, &device_create_info, null);
+    const device = try ctx.instance.createDevice(ctx.physical_device.handle, &device_create_info, null);
     const vkd = try ctx.allocator.create(DeviceDipatch);
     errdefer ctx.allocator.destroy(vkd);
 
@@ -251,17 +215,13 @@ fn select_physical_device(ctx: *Context) Error!void {
     defer requirements.device_extension_names.deinit();
 
     for (physical_devices) |candidate| {
-        ctx.physical_device.properties = ctx.instance.getPhysicalDeviceProperties(candidate);
-        ctx.physical_device.features = ctx.instance.getPhysicalDeviceFeatures(candidate);
-        ctx.physical_device.memory_properties = ctx.instance.getPhysicalDeviceMemoryProperties(candidate);
-
         if (try check_device_requirements(
             ctx,
             candidate,
             &requirements,
         )) |_| {
             std.debug.print("FOUND\n", .{});
-            ctx.physical_device.physical_device = candidate;
+            ctx.physical_device.handle = candidate;
             return;
         }
     }
@@ -274,12 +234,15 @@ fn check_device_requirements(
     device: vk.PhysicalDevice,
     requirements: *const Requirements,
 ) !?void {
+    const properties = ctx.instance.getPhysicalDeviceProperties(device);
+    const features = ctx.instance.getPhysicalDeviceFeatures(device);
+    // const memory_properties = ctx.instance.getPhysicalDeviceMemoryProperties(device);
     const uint32_max = std.math.maxInt(u32);
-    ctx.physical_device.queues.graphics_queue.family = uint32_max;
-    ctx.physical_device.queues.present_queue.family = uint32_max;
-    ctx.physical_device.queues.compute_queue.family = uint32_max;
-    ctx.physical_device.queues.transfer_queue.family = uint32_max;
-    const properties = &ctx.physical_device.properties;
+    ctx.physical_device.queues.graphics.family = uint32_max;
+    ctx.physical_device.queues.present.family = uint32_max;
+    ctx.physical_device.queues.compute.family = uint32_max;
+    ctx.physical_device.queues.transfer.family = uint32_max;
+    // const properties = &ctx.physical_device.properties;
     const dqfamilies = &ctx.physical_device.queues;
 
     if (requirements.discrete_gpu and properties.device_type != .discrete_gpu) {
@@ -297,14 +260,14 @@ fn check_device_requirements(
         var current_tranfer_score: u8 = 0;
         if (family.queue_flags.contains(.{ .graphics_bit = true })) {
             if (requirements.graphics) {
-                dqfamilies.graphics_queue.family = @intCast(i);
+                dqfamilies.graphics.family = @intCast(i);
                 current_tranfer_score += 1;
             }
         }
 
         if (family.queue_flags.contains(.{ .compute_bit = true })) {
             if (requirements.graphics) {
-                dqfamilies.compute_queue.family = @intCast(i);
+                dqfamilies.compute.family = @intCast(i);
                 current_tranfer_score += 1;
             }
         }
@@ -314,7 +277,7 @@ fn check_device_requirements(
                 if (current_tranfer_score < min_transfer_score) {
                     // NOTE: For the transfer queue we want to choose the family with the lowest number of collisions
                     min_transfer_score = current_tranfer_score;
-                    dqfamilies.transfer_queue.family = @intCast(i);
+                    dqfamilies.transfer.family = @intCast(i);
                 }
             }
         }
@@ -322,37 +285,34 @@ fn check_device_requirements(
         const present_support = try ctx.instance.getPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), ctx.surface);
         if (present_support != 0) {
             if (requirements.present) {
-                dqfamilies.present_queue.family = @intCast(i);
+                dqfamilies.present.family = @intCast(i);
             }
         }
     }
 
     std.debug.print("{d} | {d} | {d} | {d} | {s}\n", .{
-        @intFromBool(dqfamilies.graphics_queue.family != uint32_max),
-        @intFromBool(dqfamilies.present_queue.family != uint32_max),
-        @intFromBool(dqfamilies.compute_queue.family != uint32_max),
-        @intFromBool(dqfamilies.transfer_queue.family != uint32_max),
-        std.mem.sliceTo(&ctx.physical_device.properties.device_name, 0),
+        @intFromBool(dqfamilies.graphics.family != uint32_max),
+        @intFromBool(dqfamilies.present.family != uint32_max),
+        @intFromBool(dqfamilies.compute.family != uint32_max),
+        @intFromBool(dqfamilies.transfer.family != uint32_max),
+        std.mem.sliceTo(&properties.device_name, 0),
     });
 
-    if ((!requirements.graphics or (requirements.graphics and dqfamilies.graphics_queue.family != uint32_max)) and
-        (!requirements.present or (requirements.present and dqfamilies.present_queue.family != uint32_max)) and
-        (!requirements.compute or (requirements.compute and dqfamilies.compute_queue.family != uint32_max)) and
-        (!requirements.transfer or (requirements.transfer and dqfamilies.transfer_queue.family != uint32_max)))
+    if ((!requirements.graphics or (requirements.graphics and dqfamilies.graphics.family != uint32_max)) and
+        (!requirements.present or (requirements.present and dqfamilies.present.family != uint32_max)) and
+        (!requirements.compute or (requirements.compute and dqfamilies.compute.family != uint32_max)) and
+        (!requirements.transfer or (requirements.transfer and dqfamilies.transfer.family != uint32_max)))
     {
         std.debug.print("Device meets all requirements\n", .{});
         std.debug.print(
             "Queue family indicies: G: {d}, P: {d}, C: {d}, T: {d}\n",
             .{
-                dqfamilies.graphics_queue.family,
-                dqfamilies.present_queue.family,
-                dqfamilies.compute_queue.family,
-                dqfamilies.transfer_queue.family,
+                dqfamilies.graphics.family,
+                dqfamilies.present.family,
+                dqfamilies.compute.family,
+                dqfamilies.transfer.family,
             },
         );
-
-        ctx.physical_device.swapchain_support.present_modes.len = 0;
-        ctx.physical_device.swapchain_support.formats.len = 0;
 
         if (try query_swapchain_support(ctx, device)) |_| {} else {
             // NOTE: We do not have either enough formats or present modes
@@ -364,7 +324,7 @@ fn check_device_requirements(
             return null;
         }
 
-        if (requirements.sample_anisotropy and (ctx.physical_device.features.sampler_anisotropy == vk.FALSE)) {
+        if (requirements.sample_anisotropy and (features.sampler_anisotropy == vk.FALSE)) {
             return null;
         }
 
@@ -386,8 +346,8 @@ fn query_extension_support(ctx: *Context, device: vk.PhysicalDevice, requirement
                 }
             } else {
                 std.debug.print(
-                    "Device: {s} does not support the required extnsion: {s}\n",
-                    .{ ctx.physical_device.properties.device_name, req_ext },
+                    "Device: does not support the required extnsion: {s}\n",
+                    .{req_ext},
                 );
                 return false;
             }
@@ -395,6 +355,10 @@ fn query_extension_support(ctx: *Context, device: vk.PhysicalDevice, requirement
     }
 
     return true;
+}
+
+test Device {
+    std.debug.print("Size of pdev: {d}\n", .{@sizeOf(PhycialDevice)});
 }
 
 const std = @import("std");

@@ -81,20 +81,20 @@ pub fn create_image(
     return image;
 }
 
-pub fn destroy_image(ctx: *const Context, image: *Image) void {
+pub fn destroy_image(ctx: *const Context, image: Image) void {
     if (image.view != .null_handle) {
         ctx.device.destroyImageView(image.view, null);
-        image.view = .null_handle;
+        // image.view = .null_handle;
     }
 
     if (image.memory != .null_handle) {
         ctx.device.freeMemory(image.memory, null);
-        image.memory = .null_handle;
+        // image.memory = .null_handle;
     }
 
     if (image.handle != .null_handle) {
         ctx.device.destroyImage(image.handle, null);
-        image.handle = .null_handle;
+        // image.handle = .null_handle;
     }
 }
 

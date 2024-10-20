@@ -36,7 +36,6 @@ pub const DeviceDispatch = vk.DeviceWrapper(apis);
 // Also create some proxying wrappers, which also have the respective handles
 pub const Instance = vk.InstanceProxy(apis);
 pub const Device = vk.DeviceProxy(apis);
-
 pub const CommandBuffer = vk.CommandBufferProxy(apis);
 
 vkb: BaseDispatch,
@@ -87,6 +86,7 @@ pub fn init(
 
     self.vkb = try BaseDispatch.load(self.vkGetInstanceProcAddr);
     self.allocator = allocator;
+    self.framebuffer_extent = .{ .width = 1280, .height = 720 };
 
     // ============================================ INSTANCE ====================================/
     try self.create_instance(application_name);
@@ -114,19 +114,26 @@ pub fn init(
     errdefer dev.destroy(self);
     std.debug.print("Device created\n", .{});
 
-    try Swapchain.init(self, self.framebuffer_extent);
-    errdefer Swapchain.deinit(self);
+    // ====================================== SWAPCHAIN ========================================/
+    self.swapchain = try Swapchain.init(self, self.framebuffer_extent);
+    self.current_frame = 0;
+    errdefer self.swapchain.deinit();
 }
 
 pub fn deinit(self: *Context) void {
-    Swapchain.deinit(self);
+    self.swapchain.deinit();
+
     dev.destroy(self);
+
     if (self.surface != .null_handle) {
         self.instance.destroySurfaceKHR(self.surface, null);
     }
+
     self.destroy_debugger();
+
     self.instance.destroyInstance(null);
     self.allocator.destroy(self.instance.wrapper);
+
     self.vulkan_lib.close();
 }
 
@@ -137,7 +144,7 @@ fn destroy_debugger(self: *Context) void {
     }
 }
 
-pub fn detect_depth_format(ctx: *Context) !void {
+pub fn detect_depth_format(ctx: *const Context) !vk.Format {
     // NOTE: These are the candidate formats that we like in order of preference.
     // 1. VK_FORMAT_D32_SFLOAT = One component 32bit float depth buffer format that uses all 32 bits for depths
     // 2. VK_FORMAT_D32_SFLOAT_s8_uint = Combined depth and stencil buffer with 32bit for depth and 8bits for stencil
@@ -146,13 +153,12 @@ pub fn detect_depth_format(ctx: *Context) !void {
     const flags = vk.FormatFeatureFlags{ .depth_stencil_attachment_bit = true };
     for (candidates) |candidate| {
         const properties = ctx.instance.getPhysicalDeviceFormatProperties(
-            ctx.physical_device.physical_device,
+            ctx.physical_device.handle,
             candidate,
         );
 
         if (properties.linear_tiling_features.contains(flags) or properties.optimal_tiling_features.contains(flags)) {
-            ctx.physical_device.depth_format = candidate;
-            return;
+            return candidate;
         }
     }
 
@@ -160,7 +166,7 @@ pub fn detect_depth_format(ctx: *Context) !void {
 }
 
 pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: vk.MemoryPropertyFlags) i32 {
-    const memory_properties = self.instance.getPhysicalDeviceMemoryProperties(self.physical_device.physical_device);
+    const memory_properties = self.instance.getPhysicalDeviceMemoryProperties(self.physical_device.handle);
 
     for (0..memory_properties.memory_type_count) |i| {
         if ((type_filter & (@as(u32, 1) << @truncate(i))) != 0 and (memory_properties.memory_types[i].property_flags.contains(memory_flags))) {
