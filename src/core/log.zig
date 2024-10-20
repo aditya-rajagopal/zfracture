@@ -75,13 +75,15 @@ pub const LogFn = *const fn (*LogConfig, comptime Level, comptime @Type(.enum_li
 pub const LogConfig = struct {
     /// UNUSED RIGHT NOW
     // log_file: ?[]const u8 = null,
+    log_file: ?std.fs.File = null,
+    file_writer: std.io.BufferedWriter(4096, std.fs.File.Writer) = undefined,
     /// Terminal configuration for colouring
     tty_config: std.io.tty.Config = undefined,
     /// The buffered writer to which to write to in the LogFn
     buffered_writer: std.io.BufferedWriter(8192, std.fs.File.Writer) = undefined,
 };
 
-pub const LoggerError = error{TTYConfigFailed};
+pub const LoggerError = error{TTYConfigFailed} || std.fs.File.OpenError || std.fs.Dir.MakeError || std.fs.Dir.StatFileError;
 
 pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal), comptime log_level: ?Level) type {
     const scope_log_level = if (log_level) |level| blk: {
@@ -106,6 +108,10 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
         const Self = @This();
         config: LogConfig = .{},
 
+        pub fn init(self: *Self) void {
+            self.* = Self{};
+        }
+
         /// Initializes the logger to print to stderr
         pub fn stderr_init(self: *Self) LoggerError!void {
             const stderr = std.io.getStdErr();
@@ -115,7 +121,25 @@ pub fn Logger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal)
             self.config.buffered_writer = .{ .unbuffered_writer = stdwrite };
         }
 
+        pub fn file_init(self: *Self) LoggerError!void {
+            self.config.log_file = std.fs.cwd().openFile("./Logs/debug_log.txt", .{ .mode = .write_only }) catch |e| switch (e) {
+                std.fs.File.OpenError.FileNotFound => blk: {
+                    @branchHint(.cold);
+                    try std.fs.cwd().makePath("./Logs/");
+                    break :blk try std.fs.cwd().createFile("./Logs/debug_log.txt", .{});
+                },
+                else => |overflow| return overflow,
+            };
+            self.config.log_file.?.seekFromEnd(0) catch unreachable;
+            const writer = self.config.log_file.?.writer();
+            self.config.file_writer = .{ .unbuffered_writer = writer };
+        }
+
         pub fn deinit(self: *Self) void {
+            if (self.config.log_file) |file| {
+                self.config.file_writer.flush() catch unreachable;
+                file.close();
+            }
             self.config.buffered_writer.flush() catch unreachable;
         }
 
@@ -323,6 +347,12 @@ pub fn default_log(
     // TODO: Can this be more efficient
     const level_txt = comptime message_level.as_text();
     const prefix2 = level_txt ++ " [" ++ @tagName(scope) ++ "]: ";
+
+    if (logger.log_file) |_| {
+        const writer = logger.file_writer.writer();
+        writer.print(prefix2 ++ format ++ "\n", args) catch return;
+        // logger.buffered_writer.flush() catch return;
+    }
 
     const writer = logger.buffered_writer.writer();
     std.debug.lockStdErr();

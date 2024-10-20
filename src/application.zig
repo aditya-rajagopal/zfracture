@@ -65,10 +65,14 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     }
 
     // Logging
+    app.engine.core_log.init();
     try app.engine.core_log.stderr_init();
+    try app.engine.core_log.file_init();
     errdefer app.engine.core_log.deinit();
     app.engine.core_log.info("Logging system has been initialized", .{});
+    app.engine.core_log.info("Logging system has been initialized", .{});
 
+    app.engine.log.init();
     try app.engine.log.stderr_init();
     errdefer app.engine.log.deinit();
     app.engine.log.info("Logging system has been initialized", .{});
