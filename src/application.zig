@@ -49,9 +49,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     const app_config = application_config;
     switch (builtin.mode) {
         .Debug => {
-            const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
-                return app;
-            };
+            const file: std.fs.File = try std.fs.cwd().openFile(config.dll_name, .{});
             const stats = try file.stat();
             file.close();
             app.dll.time_stamp = stats.mtime;
