@@ -120,6 +120,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     // Renderer
     const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
     try app.frontend.init(renderer_allocator, app_config.application_name, &app.platform_state);
+    errdefer app.frontend.deinit();
     app.engine.core_log.info("Renderer initialized", .{});
 
     // Application
