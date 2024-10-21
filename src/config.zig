@@ -3,7 +3,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const core = @import("fr_core");
 
-pub const dll_name = "./zig-out/bin/game.dll";
+pub const dll_name = "./zig-out/bin/dynamic_game.dll";
 
 pub const app_api: core.API = if (@hasDecl(root, "config") and @hasDecl(root.config, "app_api"))
     root.config.app_api

@@ -66,8 +66,8 @@ pub fn render(engine: *core.Fracture, game_state: *anyopaque) bool {
 }
 
 pub fn random_event(
-    event_code: core.event.EventCode,
-    event_data: core.event.EventData,
+    event_code: core.Event.EventCode,
+    event_data: core.Event.EventData,
     listener: ?*anyopaque,
     sender: ?*anyopaque,
 ) bool {

@@ -1,8 +1,21 @@
+pub const KB: u64 = 1024;
+pub const MB: u64 = 1024 * 1024;
+pub const GB: u64 = 1024 * 1024 * 1024;
+
 pub const BytesRepr = union(enum) {
     B: u64,
     KB: f64,
     MB: f64,
     GB: f64,
+
+    pub fn as_bytes(self: BytesRepr) u64 {
+        return switch (self) {
+            .B => |b| return b,
+            .KB => |kb| return @intFromFloat(@trunc(kb * 1024)),
+            .MB => |mb| return @intFromFloat(@trunc(mb * 1024 * 1024)),
+            .GB => |gb| return @intFromFloat(@trunc(gb * 1024 * 1024 * 1024)),
+        };
+    }
 
     pub fn format(self: BytesRepr, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         return switch (self) {
@@ -15,20 +28,7 @@ pub const BytesRepr = union(enum) {
             .GB => |gb| writer.print("{d:>7.3}Gb", .{gb}),
         };
     }
-
-    pub fn as_bytes(self: BytesRepr) u64 {
-        return switch (self) {
-            .B => |b| return b,
-            .KB => |kb| return @intFromFloat(kb * 1024),
-            .MB => |mb| return @intFromFloat(mb * 1024 * 1024),
-            .GB => |gb| return @intFromFloat(gb * 1024 * 1024 * 1024),
-        };
-    }
 };
-
-pub const KB: u64 = 1024;
-pub const MB: u64 = 1024 * 1024;
-pub const GB: u64 = 1024 * 1024 * 1024;
 
 pub fn parse_bytes(bytes: u64) BytesRepr {
     switch (bytes) {

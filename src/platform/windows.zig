@@ -160,7 +160,7 @@ fn win32_process_message(
             _ = win32.GetClientRect(hwnd, &rect);
             const width: i32 = rect.right - rect.left;
             const height: i32 = rect.bottom - rect.top;
-            const data: core.event.WindowResizeEventData = .{
+            const data: core.Event.WindowResizeEventData = .{
                 .size = .{ .width = @truncate(width), .height = @truncate(height) },
             };
             application_state.on_event(.WINDOW_RESIZE, @bitCast(data));
@@ -169,7 +169,7 @@ fn win32_process_message(
         win32.WM_KEYUP,
         win32.WM_SYSKEYUP,
         => {
-            var key: core.input.Key = @enumFromInt(w_param);
+            var key: core.Input.Key = @enumFromInt(w_param);
             const lparam: usize = @bitCast(l_param);
             const is_extended = @as(u32, @truncate(lparam)) & 0x01000000 != 0;
 
@@ -192,7 +192,7 @@ fn win32_process_message(
         win32.WM_KEYDOWN,
         win32.WM_SYSKEYDOWN,
         => {
-            var key: core.input.Key = @enumFromInt(w_param);
+            var key: core.Input.Key = @enumFromInt(w_param);
             const lparam: u32 = @truncate(@as(usize, @bitCast(l_param)));
             const is_extended = lparam & 0x01000000 != 0;
 
@@ -242,7 +242,7 @@ fn win32_process_message(
 
         win32.WM_XBUTTONDOWN => {
             const lparam: i32 = @truncate(l_param);
-            const x1: core.input.Button = if (w_param & 0x100000000 != 0) .X1 else .X2;
+            const x1: core.Input.Button = if (w_param & 0x100000000 != 0) .X1 else .X2;
             application_state.engine.input.process_xmouse_event(&application_state.engine.event, x1, lparam, 1);
             return 1;
         },
@@ -271,7 +271,7 @@ fn win32_process_message(
         },
         win32.WM_XBUTTONUP => {
             const lparam: i32 = @truncate(l_param);
-            const x1: core.input.Button = if (w_param & 0x100000000 != 0) .X1 else .X2;
+            const x1: core.Input.Button = if (w_param & 0x100000000 != 0) .X1 else .X2;
             application_state.engine.input.process_xmouse_event(&application_state.engine.event, x1, lparam, 0);
             return 1;
         },

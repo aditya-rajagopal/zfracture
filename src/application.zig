@@ -98,10 +98,10 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     const arena_allocator = app.engine.memory.gpa.get_type_allocator(.frame_arena);
     if (comptime builtin.mode == .Debug) {
         // NOTE: Tracking the allocation of the application
-        app.engine.memory.gpa.memory_stats.current_memory[@intFromEnum(core.mem.EngineMemoryTag.application)] = @sizeOf(Application);
+        app.engine.memory.gpa.memory_stats.current_memory[@intFromEnum(core.EngineMemoryTag.application)] = @sizeOf(Application);
         app.engine.memory.gpa.memory_stats.current_total_memory = @sizeOf(Application);
         app.engine.memory.gpa.memory_stats.peak_total_memory = @sizeOf(Application);
-        app.engine.memory.gpa.memory_stats.peak_memory[@intFromEnum(core.mem.EngineMemoryTag.application)] = @sizeOf(Application);
+        app.engine.memory.gpa.memory_stats.peak_memory[@intFromEnum(core.EngineMemoryTag.application)] = @sizeOf(Application);
     }
 
     app.frame_arena = std.heap.ArenaAllocator.init(arena_allocator);
@@ -261,7 +261,7 @@ pub fn run(self: *Application) ApplicationError!void {
     }
 }
 
-pub fn on_event(self: *Application, comptime event_code: core.event.EventCode, event_data: core.event.EventData) void {
+pub fn on_event(self: *Application, comptime event_code: core.Event.EventCode, event_data: core.Event.EventData) void {
     self.log.trace("Got an event", .{});
     switch (event_code) {
         .APPLICATION_QUIT => {
@@ -269,7 +269,7 @@ pub fn on_event(self: *Application, comptime event_code: core.event.EventCode, e
             self.engine.is_running = false;
         },
         .WINDOW_RESIZE => {
-            const window_resize_data: core.event.WindowResizeEventData = @bitCast(event_data);
+            const window_resize_data: core.Event.WindowResizeEventData = @bitCast(event_data);
             self.engine.width = window_resize_data.size.width;
             self.engine.height = window_resize_data.size.height;
             _ = self.engine.event.fire(.WINDOW_RESIZE, &self.engine, event_data);
@@ -298,9 +298,9 @@ fn reload_library(self: *Application) bool {
     return true;
 }
 
-test {
-    std.debug.print("Size of: {d}, {d}\n", .{ @sizeOf(Application), @alignOf(Application) });
-}
+// test {
+//     std.debug.print("Size of: {d}, {d}\n", .{ @sizeOf(Application), @alignOf(Application) });
+// }
 
 const std = @import("std");
 const builtin = @import("builtin");

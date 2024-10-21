@@ -1,21 +1,48 @@
 pub const Fracture = struct {
-    is_suspended: bool = false,
-    is_running: bool = false,
+    memory: Memory,
+    event: Event,
+    input: Input,
     log_config: log.LogConfig,
-    memory: mem.Memory,
-    event: event,
-    input: input,
     width: i32 = 1280,
     height: i32 = 720,
     last_time: f64 = 0,
+    delta_time: f64 = 0,
+    is_suspended: bool = false,
+    is_running: bool = false,
 };
 
-test {
-    std.debug.print("Size of Fracture: {d}, {d}\n", .{ @sizeOf(Fracture), @alignOf(Fracture) });
-    // std.debug.print("Size of log: {d}, {d}\n", .{ @sizeOf(log.GameLog), @alignOf(log.GameLog) });
-    std.debug.print("Size of input: {d}, {d}\n", .{ @sizeOf(input), @alignOf(input) });
-    std.debug.print("Size of event: {d}, {d}\n", .{ @sizeOf(event), @alignOf(event) });
-}
+pub const log = @import("log.zig");
+pub const defines = @import("defines.zig");
+pub const mem = @import("memory.zig");
+pub const Event = @import("event.zig");
+pub const Input = @import("input.zig");
+
+// pub const MergeEnums = comptime_funcs.MergeEnums;
+// pub const Distinct = comptime_funcs.Distinct;
+
+pub const GPA = mem.TrackingAllocator(.gpa, EngineMemoryTag, true);
+pub const FrameArena: type = mem.TrackingAllocator(.frame_arena, ArenaMemoryTags, true);
+
+/// The memory system passed to the game
+pub const Memory = struct {
+    /// The general allocator used to allocate permanent data
+    gpa: GPA = undefined,
+    /// Temporary Allocator that is cleared each frame. Used for storing transient frame data.
+    frame_allocator: FrameArena = undefined,
+};
+
+pub const EngineMemoryTag = enum(u8) {
+    untagged = 0,
+    event,
+    renderer,
+    application,
+    game,
+    frame_arena,
+};
+
+pub const ArenaMemoryTags = enum(u8) {
+    untagged = 0,
+};
 
 pub const InitFn = *const fn (engine: *Fracture) ?*anyopaque;
 pub const DeinitFn = *const fn (engine: *Fracture, game_state: *anyopaque) void;
@@ -51,15 +78,6 @@ pub const AppConfig = struct {
     /// The log function to use instead of the engine provided default one
     log_fn: log.LogFn = log.default_log,
 };
-
-pub const log = @import("log.zig");
-pub const defines = @import("defines.zig");
-pub const mem = @import("memory.zig");
-pub const event = @import("event.zig");
-pub const input = @import("input.zig");
-
-pub const MergeEnums = comptime_funcs.MergeEnums;
-pub const Distinct = comptime_funcs.Distinct;
 
 pub fn not_implemented(comptime src: std.builtin.SourceLocation) void {
     @compileError("NOT IMPLEMENTED: " ++ src.fn_name ++ " - " ++ src.file);

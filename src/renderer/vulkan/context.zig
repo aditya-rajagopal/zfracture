@@ -48,13 +48,14 @@ instance: Instance,
 debug_messenger: vk.DebugUtilsMessengerEXT,
 surface: vk.SurfaceKHR,
 device: Device,
+mem_props: vk.PhysicalDeviceMemoryProperties,
 framebuffer_extent: vk.Extent2D,
 swapchain: Swapchain,
 recreating_swapchain: bool,
 current_frame: u32,
 
 pub const Error =
-    error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat } ||
+    error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
     error{CommandLoadFailure} ||
     std.DynLib.Error ||
     BaseDispatch.EnumerateInstanceLayerPropertiesError ||
@@ -116,6 +117,7 @@ pub fn init(
     self.device = try Device.create(self);
     errdefer self.device.destroy(self);
     self.log.debug("Device created", .{});
+    self.mem_props = self.instance.getPhysicalDeviceMemoryProperties(self.device.pdev);
 
     // ====================================== SWAPCHAIN ========================================/
     self.swapchain = try Swapchain.init(self, self.framebuffer_extent);
@@ -157,16 +159,6 @@ pub fn end_frame(self: *Context, delta_time: f32) bool {
     return true;
 }
 
-fn destroy_debugger(self: *Context) void {
-    switch (builtin.mode) {
-        .Debug => {
-            self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
-            self.log.debug("Debugger Destroyed", .{});
-        },
-        else => {},
-    }
-}
-
 pub fn detect_depth_format(ctx: *const Context) !vk.Format {
     // NOTE: These are the candidate formats that we like in order of preference.
     // 1. VK_FORMAT_D32_SFLOAT = One component 32bit float depth buffer format that uses all 32 bits for depths
@@ -188,17 +180,25 @@ pub fn detect_depth_format(ctx: *const Context) !vk.Format {
     return error.FailedToFindDepthFormat;
 }
 
-pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: vk.MemoryPropertyFlags) i32 {
-    const memory_properties = self.instance.getPhysicalDeviceMemoryProperties(self.device.pdev);
-
-    for (0..memory_properties.memory_type_count) |i| {
-        if ((type_filter & (@as(u32, 1) << @truncate(i))) != 0 and (memory_properties.memory_types[i].property_flags.contains(memory_flags))) {
-            return 1;
+pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: vk.MemoryPropertyFlags) error{NotSuitableMemoryType}!u32 {
+    for (0..self.mem_props.memory_type_count) |i| {
+        if ((type_filter & (@as(u32, 1) << @truncate(i))) != 0 and (self.mem_props.memory_types[i].property_flags.contains(memory_flags))) {
+            return @truncate(i);
         }
     }
 
     self.log.debug("WARNING: unable to find memory type", .{});
-    return -1;
+    return error.NotSuitableMemoryType;
+}
+
+fn destroy_debugger(self: *Context) void {
+    switch (builtin.mode) {
+        .Debug => {
+            self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
+            self.log.debug("Debugger Destroyed", .{});
+        },
+        else => {},
+    }
 }
 
 fn create_debugger(self: *Context) !void {
@@ -215,7 +215,7 @@ fn create_debugger(self: *Context) !void {
                 .general_bit_ext = true,
                 .validation_bit_ext = true,
                 .performance_bit_ext = true,
-                // .device_address_binding_bit_ext = true,
+                .device_address_binding_bit_ext = true,
             };
             const debug_info = vk.DebugUtilsMessengerCreateInfoEXT{
                 .s_type = .debug_utils_messenger_create_info_ext,

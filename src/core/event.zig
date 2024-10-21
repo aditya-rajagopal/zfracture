@@ -163,7 +163,7 @@ pub fn dispatch_deffered(self: *Event) bool {
 ///     - event_code: code for the type of event that is being fired
 ///     - sender: pointer that the sender wants to send to all the callbacks
 ///     - event_data: the packet that is forwarded to all callbacks
-pub fn fire(self: *Event, event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
+pub fn fire(self: *const Event, event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
     const code: usize = @intFromEnum(event_code);
     const start = code * max_callbacks_per_event;
 
@@ -191,7 +191,7 @@ pub fn fire(self: *Event, event_code: EventCode, sender: ?*anyopaque, event_data
 ///     - event_code: code for the type of event that is being fired
 ///     - sender: pointer that the sender wants to send to all the callbacks
 ///     - event_data: the packet that is forwarded to all callbacks
-pub fn fire_static(self: *Event, comptime event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
+pub fn fire_static(self: *const Event, comptime event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
     const code: usize = @intFromEnum(event_code);
     const len = self.lens[code];
     comptime assert(code < max_event_types);

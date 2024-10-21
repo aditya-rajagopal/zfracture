@@ -34,91 +34,91 @@ pub fn update(self: *Input) void {
     self.current_mouse_scroll = 0;
 }
 
-pub fn is_key_down(self: *Input, key: Key) bool {
+pub fn is_key_down(self: *const Input, key: Key) bool {
     return self.keys_current_state[@intFromEnum(key)] != 0;
 }
 
-pub fn was_key_down(self: *Input, key: Key) bool {
+pub fn was_key_down(self: *const Input, key: Key) bool {
     return self.keys_previous_state[@intFromEnum(key)] != 0;
 }
 
-pub fn is_key_up(self: *Input, key: Key) bool {
+pub fn is_key_up(self: *const Input, key: Key) bool {
     return self.keys_current_state[@intFromEnum(key)] == 0;
 }
 
-pub fn was_key_up(self: *Input, key: Key) bool {
+pub fn was_key_up(self: *const Input, key: Key) bool {
     return self.keys_previous_state[@intFromEnum(key)] == 0;
 }
 
-pub fn key_pressed_this_frame(self: *Input, key: Key) bool {
+pub fn key_pressed_this_frame(self: *const Input, key: Key) bool {
     return self.keys_current_state[@intFromEnum(key)] != 0 and self.keys_previous_state[@intFromEnum(key)] == 0;
 }
 
-pub fn key_released_this_frame(self: *Input, key: Key) bool {
+pub fn key_released_this_frame(self: *const Input, key: Key) bool {
     return self.keys_current_state[@intFromEnum(key)] == 0 and self.keys_previous_state[@intFromEnum(key)] != 0;
 }
 
-pub fn is_button_down(self: *Input, button: Button) bool {
+pub fn is_button_down(self: *const Input, button: Button) bool {
     return self.buttons_current_state[@intFromEnum(button)] != 0;
 }
 
-pub fn was_button_down(self: *Input, button: Button) bool {
+pub fn was_button_down(self: *const Input, button: Button) bool {
     return self.buttons_previous_state[@intFromEnum(button)] != 0;
 }
 
-pub fn is_button_up(self: *Input, button: Button) bool {
+pub fn is_button_up(self: *const Input, button: Button) bool {
     return self.buttons_current_state[@intFromEnum(button)] == 0;
 }
 
-pub fn was_button_up(self: *Input, button: Button) bool {
+pub fn was_button_up(self: *const Input, button: Button) bool {
     return self.buttons_previous_state[@intFromEnum(button)] == 0;
 }
 
-pub fn button_pressed_this_frame(self: *Input, button: Button) bool {
+pub fn button_pressed_this_frame(self: *const Input, button: Button) bool {
     return (self.buttons_current_state[@intFromEnum(button)] != 0 and self.buttons_previous_state[@intFromEnum(button)] == 0);
 }
 
-pub fn button_released_this_frame(self: *Input, button: Button) bool {
+pub fn button_released_this_frame(self: *const Input, button: Button) bool {
     return self.buttons_current_state[@intFromEnum(button)] == 0 and self.buttons_previous_state[@intFromEnum(button)] != 0;
 }
 
-pub fn mouse_pos(self: *Input) MousePosition {
+pub fn mouse_pos(self: *const Input) MousePosition {
     return self.current_mouse_pos;
 }
 
-pub fn prev_mouse_pos(self: *Input) MousePosition {
+pub fn prev_mouse_pos(self: *const Input) MousePosition {
     return self.previous_mouse_pos;
 }
 
-pub fn is_mouse_moved(self: *Input) bool {
+pub fn is_mouse_moved(self: *const Input) bool {
     return self.current_mouse_pos.x != self.previous_mouse_pos.x or self.current_mouse_pos.y != self.previous_mouse_pos.y;
 }
 
-pub fn mouse_pos_delta(self: *Input) struct { x_delta: i16, y_delta: i16 } {
+pub fn mouse_pos_delta(self: *const Input) struct { x_delta: i16, y_delta: i16 } {
     return .{
         .x_delta = self.current_mouse_pos.x - self.previous_mouse_pos.x,
         .y_delta = self.current_mouse_pos.y - self.previous_mouse_pos.y,
     };
 }
 
-pub fn is_scroll_down(self: *Input) bool {
+pub fn is_scroll_down(self: *const Input) bool {
     return self.current_mouse_scroll < 0;
 }
 
-pub fn is_scroll_up(self: *Input) bool {
+pub fn is_scroll_up(self: *const Input) bool {
     return self.current_mouse_scroll > 0;
 }
 
-pub fn is_scroll(self: *Input) bool {
+pub fn is_scroll(self: *const Input) bool {
     return self.current_mouse_scroll != 0;
 }
 
-pub fn process_key_event(self: *Input, event_system: *event, key: Key, comptime pressed: u8) void {
+pub fn process_key_event(self: *Input, event_system: *Event, key: Key, comptime pressed: u8) void {
     const is_repeated = pressed & self.keys_current_state[@intFromEnum(key)];
     const key_state_change = pressed != self.keys_current_state[@intFromEnum(key)];
     if (self.allow_repeats or key_state_change) {
         self.keys_current_state[@intFromEnum(key)] = pressed;
-        const data: event.KeyEventData = .{
+        const data: Event.KeyEventData = .{
             .key = key,
             .is_repeated = is_repeated,
             .pressed = pressed,
@@ -131,7 +131,7 @@ pub fn process_key_event(self: *Input, event_system: *event, key: Key, comptime 
             _ = event_system.fire(.KEY_RELEASE, null, @bitCast(data));
         }
 
-        const event_code: event.EventCode = @enumFromInt(@as(u8, @intFromEnum(key)));
+        const event_code: Event.EventCode = @enumFromInt(@as(u8, @intFromEnum(key)));
         _ = event_system.fire(event_code, null, @bitCast(data));
     }
 }
@@ -139,7 +139,7 @@ pub fn process_key_event(self: *Input, event_system: *event, key: Key, comptime 
 // Is it possible that we need to process cntrl or shift key here?
 pub fn process_mouse_event(
     self: *Input,
-    event_system: *event,
+    event_system: *Event,
     comptime button: Button,
     mousepos: i32,
     comptime pressed: u8,
@@ -148,7 +148,7 @@ pub fn process_mouse_event(
     const key_state_change = pressed != self.buttons_current_state[@intFromEnum(button)];
     if ((self.allow_repeats and is_repeated != 0) or key_state_change) {
         self.buttons_current_state[@intFromEnum(button)] = pressed;
-        const data: event.MouseButtonEventData = .{
+        const data: Event.MouseButtonEventData = .{
             .button_code = button,
             .is_repeated = is_repeated,
             .pressed = pressed,
@@ -161,14 +161,14 @@ pub fn process_mouse_event(
             _ = event_system.fire(.MOUSE_BUTTON_RELEASE, null, @bitCast(data));
         }
 
-        const event_code: event.EventCode = @enumFromInt(@as(u8, @intFromEnum(button)));
+        const event_code: Event.EventCode = @enumFromInt(@as(u8, @intFromEnum(button)));
         _ = event_system.fire(event_code, null, @bitCast(data));
     }
 }
 
 pub fn process_xmouse_event(
     self: *Input,
-    event_system: *event,
+    event_system: *Event,
     button: Button,
     mousepos: i32,
     comptime pressed: u8,
@@ -177,7 +177,7 @@ pub fn process_xmouse_event(
     const key_state_change = pressed != self.buttons_current_state[@intFromEnum(button)];
     if ((self.allow_repeats and is_repeated != 0) or key_state_change) {
         self.buttons_current_state[@intFromEnum(button)] = pressed;
-        const data: event.MouseButtonEventData = .{
+        const data: Event.MouseButtonEventData = .{
             .button_code = button,
             .is_repeated = is_repeated,
             .pressed = pressed,
@@ -190,32 +190,28 @@ pub fn process_xmouse_event(
             _ = event_system.fire(.MOUSE_BUTTON_RELEASE, null, @bitCast(data));
         }
 
-        const event_code: event.EventCode = @enumFromInt(@as(u8, @intFromEnum(button)));
+        const event_code: Event.EventCode = @enumFromInt(@as(u8, @intFromEnum(button)));
         _ = event_system.fire(event_code, null, @bitCast(data));
     }
 }
 
-pub fn process_mouse_move(self: *Input, event_system: *event, x: i16, y: i16) void {
+pub fn process_mouse_move(self: *Input, event_system: *Event, x: i16, y: i16) void {
     self.current_mouse_pos.x = x;
     self.current_mouse_pos.y = y;
-    const mouse_move_data: event.MouseMoveEventData = .{
+    const mouse_move_data: Event.MouseMoveEventData = .{
         .mouse_pos = .{ .x = x, .y = y },
     };
     _ = event_system.fire(.MOUSE_MOVE, null, @bitCast(mouse_move_data));
 }
 
-pub fn process_mouse_wheel(self: *Input, event_system: *event, z_delta: i8, mousepos: i32) void {
+pub fn process_mouse_wheel(self: *Input, event_system: *Event, z_delta: i8, mousepos: i32) void {
     std.debug.print("z_delta: {d}\n", .{z_delta});
     self.current_mouse_scroll = z_delta;
-    const data: event.MouseScrollEventData = .{
+    const data: Event.MouseScrollEventData = .{
         .z_delta = z_delta,
         .mouse_pos = .{ .x = @truncate(mousepos), .y = @truncate(mousepos >> 16) },
     };
     _ = event_system.fire(.MOUSE_SCROLL, null, @bitCast(data));
-}
-
-test Input {
-    std.debug.print("Size of: {d}, {d}\n", .{ @sizeOf(Input), @alignOf(Input) });
 }
 
 pub const MAX_BUTTONS = 6;
@@ -415,4 +411,4 @@ pub const Key = enum(u8) {
 };
 
 const std = @import("std");
-const event = @import("event.zig");
+const Event = @import("event.zig");

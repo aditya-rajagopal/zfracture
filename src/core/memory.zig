@@ -1,27 +1,3 @@
-pub const EngineMemoryTag = enum(u8) {
-    untagged = 0,
-    event,
-    renderer,
-    application,
-    game,
-    frame_arena,
-};
-
-pub const ArenaMemoryTags = enum(u8) {
-    untagged = 0,
-};
-
-pub const GPA = TrackingAllocator(.gpa, EngineMemoryTag, true);
-pub const FrameArena: type = TrackingAllocator(.frame_arena, ArenaMemoryTags, true);
-
-/// The memory system passed to the game
-pub const Memory = struct {
-    /// The general allocator used to allocate permanent data
-    gpa: GPA = undefined,
-    /// Temporary Allocator that is cleared each frame. Used for storing transient frame data.
-    frame_allocator: FrameArena = undefined,
-};
-
 ///! An allocator that allows you to track total allocations and deallocations of the backing allocator
 ///! During release memory stats are not tracked and this essentially becomes a thin wrapper around
 ///! the backing allocator
@@ -288,3 +264,4 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const log = @import("log.zig");
 const defines = @import("defines.zig");
+const EngineMemoryTag = @import("fracture.zig").EngineMemoryTag;

@@ -43,7 +43,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("testbed/app.zig"),
         .target = target,
         .optimize = optimize,
-        // .link_libc = true,
     });
     exe.root_module.addImport("entrypoint", entrypoint);
     exe.root_module.addImport("fr_core", core_lib);
@@ -72,7 +71,7 @@ pub fn build(b: *std.Build) void {
 
     // ==================================== GAME DLL ==================================/
     const game_dll = b.addSharedLibrary(.{
-        .name = "game",
+        .name = "dynamic_game",
         .root_source_file = b.path("testbed/app.zig"),
         .target = target,
         .optimize = optimize,
@@ -127,6 +126,7 @@ pub fn build(b: *std.Build) void {
 
     const run_game_unit_tests = b.addRunArtifact(game_unit_tests);
     run_game_unit_tests.has_side_effects = true;
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_engine_unit_tests.step);
     test_step.dependOn(&run_game_unit_tests.step);

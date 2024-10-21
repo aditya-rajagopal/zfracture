@@ -9,6 +9,7 @@ pub const Image = struct {
 };
 
 pub const Error =
+    error{NotSuitableMemoryType} ||
     Context.LogicalDevice.CreateImageViewError ||
     Context.LogicalDevice.CreateImageError ||
     Context.LogicalDevice.BindImageMemoryError ||
@@ -55,15 +56,11 @@ pub fn create_image(
 
     const memory_requirements = ctx.device.handle.getImageMemoryRequirements(image.handle);
 
-    const memory_type = ctx.find_memory_index(memory_requirements.memory_type_bits, memory_flags);
-    if (memory_type == -1) {
-        //TODO: ERROR
-        std.debug.print("Required memory type not found\n", .{});
-    }
+    const memory_type = try ctx.find_memory_index(memory_requirements.memory_type_bits, memory_flags);
 
     const allocate_info = vk.MemoryAllocateInfo{
         .allocation_size = memory_requirements.size,
-        .memory_type_index = @bitCast(memory_type),
+        .memory_type_index = memory_type,
     };
 
     image.memory = try ctx.device.handle.allocateMemory(&allocate_info, null);
