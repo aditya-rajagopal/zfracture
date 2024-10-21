@@ -15,7 +15,6 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     state.testing = true;
     state.delta_time = 1.0;
     state.log = GameLog.init(&engine.log_config);
-    // const callback: core.event.EventCallback = .{ .listener = engine, .function = random_event };
     _ = engine.event.register(.KEY_PRESS, state, random_event);
     _ = engine.event.register(.KEY_RELEASE, state, random_event);
     _ = engine.event.register(.KEY_ESCAPE, state, random_event);
@@ -37,12 +36,12 @@ pub fn deinit(engine: *core.Fracture, game_state: *anyopaque) void {
 
 pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
     const state: *GameState = @ptrCast(@alignCast(game_state));
+    const frame_alloc = engine.memory.frame_allocator.get_type_allocator(.untagged);
+    const temp_data = frame_alloc.alloc(f32, 16) catch return false;
+    _ = temp_data;
     if (state.testing) {
-        const frame_alloc = engine.memory.frame_allocator.get_type_allocator(.untagged);
-        const temp_data = frame_alloc.alloc(f32, 16) catch return false;
         engine.memory.gpa.print_memory_stats();
         engine.memory.frame_allocator.print_memory_stats();
-        frame_alloc.free(temp_data);
         state.testing = false;
     }
     if (engine.input.key_pressed_this_frame(.A)) {

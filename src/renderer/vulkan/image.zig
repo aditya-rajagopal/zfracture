@@ -9,10 +9,10 @@ pub const Image = struct {
 };
 
 pub const Error =
-    Context.Device.CreateImageViewError ||
-    Context.Device.CreateImageError ||
-    Context.Device.BindImageMemoryError ||
-    Context.Device.AllocateMemoryError;
+    Context.LogicalDevice.CreateImageViewError ||
+    Context.LogicalDevice.CreateImageError ||
+    Context.LogicalDevice.BindImageMemoryError ||
+    Context.LogicalDevice.AllocateMemoryError;
 
 pub fn create_image(
     ctx: *const Context,
@@ -50,10 +50,10 @@ pub fn create_image(
         .sharing_mode = .exclusive,
     };
 
-    image.handle = try ctx.device.createImage(&create_info, null);
-    errdefer ctx.device.destroyImage(image.handle, null);
+    image.handle = try ctx.device.handle.createImage(&create_info, null);
+    errdefer ctx.device.handle.destroyImage(image.handle, null);
 
-    const memory_requirements = ctx.device.getImageMemoryRequirements(image.handle);
+    const memory_requirements = ctx.device.handle.getImageMemoryRequirements(image.handle);
 
     const memory_type = ctx.find_memory_index(memory_requirements.memory_type_bits, memory_flags);
     if (memory_type == -1) {
@@ -66,11 +66,11 @@ pub fn create_image(
         .memory_type_index = @bitCast(memory_type),
     };
 
-    image.memory = try ctx.device.allocateMemory(&allocate_info, null);
-    errdefer ctx.device.freeMemory(image.memory, null);
+    image.memory = try ctx.device.handle.allocateMemory(&allocate_info, null);
+    errdefer ctx.device.handle.freeMemory(image.memory, null);
 
     // TODO: Configurable memory offset when using image pools
-    try ctx.device.bindImageMemory(image.handle, image.memory, 0);
+    try ctx.device.handle.bindImageMemory(image.handle, image.memory, 0);
 
     if (create_view) {
         image.view = try create_image_view(ctx, image.handle, format, view_aspects);
@@ -81,20 +81,20 @@ pub fn create_image(
     return image;
 }
 
-pub fn destroy_image(ctx: *const Context, image: Image) void {
+pub fn destroy_image(ctx: *const Context, image: *Image) void {
     if (image.view != .null_handle) {
-        ctx.device.destroyImageView(image.view, null);
-        // image.view = .null_handle;
+        ctx.device.handle.destroyImageView(image.view, null);
+        image.view = .null_handle;
     }
 
     if (image.memory != .null_handle) {
-        ctx.device.freeMemory(image.memory, null);
-        // image.memory = .null_handle;
+        ctx.device.handle.freeMemory(image.memory, null);
+        image.memory = .null_handle;
     }
 
     if (image.handle != .null_handle) {
-        ctx.device.destroyImage(image.handle, null);
-        // image.handle = .null_handle;
+        ctx.device.handle.destroyImage(image.handle, null);
+        image.handle = .null_handle;
     }
 }
 
@@ -103,7 +103,7 @@ pub fn create_image_view(
     image: vk.Image,
     format: vk.Format,
     aspect_mask: vk.ImageAspectFlags,
-) Context.Device.CreateImageViewError!vk.ImageView {
+) Context.LogicalDevice.CreateImageViewError!vk.ImageView {
     const create_info = vk.ImageViewCreateInfo{
         .image = image,
         .view_type = .@"2d",
@@ -117,7 +117,7 @@ pub fn create_image_view(
             .layer_count = 1,
         },
     };
-    return ctx.device.createImageView(&create_info, null);
+    return ctx.device.handle.createImageView(&create_info, null);
 }
 
 const std = @import("std");

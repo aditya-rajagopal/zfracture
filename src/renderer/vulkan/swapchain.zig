@@ -26,11 +26,11 @@ depth_format: vk.Format,
 
 pub const Error =
     error{ ImageAcquiredFailed, FailedToPresentSwapchain } ||
-    Context.Device.AcquireNextImageKHRError ||
-    Context.Device.CreateSemaphoreError ||
+    Context.LogicalDevice.AcquireNextImageKHRError ||
+    Context.LogicalDevice.CreateSemaphoreError ||
     image.Error ||
-    Context.Device.CreateSwapchainKHRError ||
-    Context.Device.GetSwapchainImagesAllocKHRError ||
+    Context.LogicalDevice.CreateSwapchainKHRError ||
+    Context.LogicalDevice.GetSwapchainImagesAllocKHRError ||
     Context.Instance.GetPhysicalDeviceSurfaceFormatsAllocKHRError ||
     Context.Instance.GetPhysicalDeviceSurfacePresentModesKHRError;
 
@@ -38,9 +38,9 @@ pub fn init(ctx: *const Context, extent: vk.Extent2D) !Swapchain {
     return create(ctx, extent, .null_handle);
 }
 
-pub fn deinit(self: Swapchain) void {
+pub fn deinit(self: *Swapchain) void {
     self.destroy_all_but_swapchain();
-    self.ctx.device.destroySwapchainKHR(self.handle, null);
+    self.ctx.device.handle.destroySwapchainKHR(self.handle, null);
 }
 
 fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR) !Swapchain {
@@ -50,7 +50,7 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
     swapchain.present_mode = try find_present_mode(ctx);
 
     const capabilities = try ctx.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(
-        ctx.physical_device.handle,
+        ctx.device.pdev,
         ctx.surface,
     );
 
@@ -75,8 +75,8 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
         image_count = capabilities.max_image_count;
     }
 
-    const graphics_family = ctx.physical_device.queues.graphics.family;
-    const present_family = ctx.physical_device.queues.present.family;
+    const graphics_family = ctx.device.queues.graphics.family;
+    const present_family = ctx.device.queues.present.family;
     const queue_family_indices = [_]u32{ graphics_family, present_family };
 
     const sharing_mode: vk.SharingMode = if (graphics_family != present_family) .concurrent else .exclusive;
@@ -102,12 +102,12 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
         // TODO: SHould this always be null? according to kohi tutorial it is?
         .old_swapchain = old_handle,
     };
-    const handle = try ctx.device.createSwapchainKHR(&create_info, null);
-    errdefer ctx.device.destroySwapchainKHR(handle, null);
+    const handle = try ctx.device.handle.createSwapchainKHR(&create_info, null);
+    errdefer ctx.device.handle.destroySwapchainKHR(handle, null);
 
     if (old_handle != .null_handle) {
         // NOTE: We must destroy the old swapchain
-        ctx.device.destroySwapchainKHR(old_handle, null);
+        ctx.device.handle.destroySwapchainKHR(old_handle, null);
     }
 
     swapchain.handle = handle;
@@ -140,8 +140,8 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
     return swapchain;
 }
 
-fn destroy_all_but_swapchain(self: Swapchain) void {
-    image.destroy_image(self.ctx, self.depth_attachement);
+fn destroy_all_but_swapchain(self: *Swapchain) void {
+    image.destroy_image(self.ctx, &self.depth_attachement);
     for (self.images) |swap_image| {
         swap_image.deinit(self.ctx);
     }
@@ -227,13 +227,13 @@ const SwapImage = struct {
 
     pub fn init(ctx: *const Context, image_handle: vk.Image, format: vk.Format) !SwapImage {
         const view = try image.create_image_view(ctx, image_handle, format, .{ .color_bit = true });
-        errdefer ctx.device.destroyImageView(view, null);
+        errdefer ctx.device.handle.destroyImageView(view, null);
 
-        const image_available_sem = try ctx.device.createSemaphore(&.{}, null);
-        errdefer ctx.device.destroySemaphore(image_available_sem, null);
+        const image_available_sem = try ctx.device.handle.createSemaphore(&.{}, null);
+        errdefer ctx.device.handle.destroySemaphore(image_available_sem, null);
 
-        const render_complete_sem = try ctx.device.createSemaphore(&.{}, null);
-        errdefer ctx.device.destroySemaphore(render_complete_sem, null);
+        const render_complete_sem = try ctx.device.handle.createSemaphore(&.{}, null);
+        errdefer ctx.device.handle.destroySemaphore(render_complete_sem, null);
 
         return SwapImage{
             .image = image_handle,
@@ -246,9 +246,9 @@ const SwapImage = struct {
 
     pub fn deinit(self: SwapImage, ctx: *const Context) void {
         // self.waitForFence(ctx);
-        ctx.device.destroyImageView(self.view, null);
-        ctx.device.destroySemaphore(self.image_available_semephore, null);
-        ctx.device.destroySemaphore(self.render_complete_semephore, null);
+        ctx.device.handle.destroyImageView(self.view, null);
+        ctx.device.handle.destroySemaphore(self.image_available_semephore, null);
+        ctx.device.handle.destroySemaphore(self.render_complete_semephore, null);
         // ctx.device.destroyFence(self.fence, null);
     }
 
@@ -259,7 +259,7 @@ const SwapImage = struct {
 
 fn init_swapchain_images(ctx: *const Context, swapchain: vk.SwapchainKHR, format: vk.Format) ![]SwapImage {
     // NOTE: Swapchain images are not created but gotten handles for
-    const images = try ctx.device.getSwapchainImagesAllocKHR(swapchain, ctx.allocator);
+    const images = try ctx.device.handle.getSwapchainImagesAllocKHR(swapchain, ctx.allocator);
     defer ctx.allocator.free(images);
 
     const swap_images = try ctx.allocator.alloc(SwapImage, images.len);
@@ -284,7 +284,7 @@ fn find_surface_format(ctx: *const Context) !vk.SurfaceFormatKHR {
     };
 
     const surface_formats = try ctx.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(
-        ctx.physical_device.handle,
+        ctx.device.pdev,
         ctx.surface,
         ctx.allocator,
     );
@@ -306,7 +306,7 @@ fn find_surface_format(ctx: *const Context) !vk.SurfaceFormatKHR {
 
 fn find_present_mode(ctx: *const Context) !vk.PresentModeKHR {
     const present_modes = try ctx.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(
-        ctx.physical_device.handle,
+        ctx.device.pdev,
         ctx.surface,
         ctx.allocator,
     );

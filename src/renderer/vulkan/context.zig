@@ -6,7 +6,7 @@ const vk = @import("vulkan");
 
 const RendererLog = @import("../frontend.zig").RendererLog;
 const platform = @import("platform.zig");
-const dev = @import("device.zig");
+const Device = @import("device.zig");
 const Swapchain = @import("swapchain.zig");
 
 const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
@@ -31,11 +31,11 @@ const apis: []const vk.ApiInfo = &(.{
 /// Next, pass the `apis` to the wrappers to create dispatch tables.
 pub const BaseDispatch = vk.BaseWrapper(apis);
 pub const InstanceDispatch = vk.InstanceWrapper(apis);
-pub const DeviceDispatch = vk.DeviceWrapper(apis);
+pub const LogicalDeviceDispatch = vk.DeviceWrapper(apis);
 
 // Also create some proxying wrappers, which also have the respective handles
 pub const Instance = vk.InstanceProxy(apis);
-pub const Device = vk.DeviceProxy(apis);
+pub const LogicalDevice = vk.DeviceProxy(apis);
 pub const CommandBuffer = vk.CommandBufferProxy(apis);
 
 vkb: BaseDispatch,
@@ -48,7 +48,6 @@ instance: Instance,
 debug_messenger: vk.DebugUtilsMessengerEXT,
 surface: vk.SurfaceKHR,
 device: Device,
-physical_device: dev.PhycialDevice,
 framebuffer_extent: vk.Extent2D,
 swapchain: Swapchain,
 recreating_swapchain: bool,
@@ -62,7 +61,7 @@ pub const Error =
     Instance.CreateDebugUtilsMessengerEXTError ||
     Instance.CreateWin32SurfaceKHRError ||
     BaseDispatch.CreateInstanceError ||
-    dev.Error ||
+    Device.Error ||
     Swapchain.Error;
 
 pub fn init(
@@ -113,9 +112,9 @@ pub fn init(
     }
     self.log.debug("Surface Created", .{});
 
-    // ====================================== PHYSICAL DEVICE ==================================/
-    try dev.create(self);
-    errdefer dev.destroy(self);
+    // ====================================== DEVICE ==========================================/
+    self.device = try Device.create(self);
+    errdefer self.device.destroy(self);
     self.log.debug("Device created", .{});
 
     // ====================================== SWAPCHAIN ========================================/
@@ -128,7 +127,7 @@ pub fn deinit(self: *Context) void {
     self.swapchain.deinit();
     self.log.debug("Swapchain Destroyed", .{});
 
-    dev.destroy(self);
+    self.device.destroy(self);
     self.log.debug("Device Destroyed", .{});
 
     if (self.surface != .null_handle) {
@@ -177,7 +176,7 @@ pub fn detect_depth_format(ctx: *const Context) !vk.Format {
     const flags = vk.FormatFeatureFlags{ .depth_stencil_attachment_bit = true };
     for (candidates) |candidate| {
         const properties = ctx.instance.getPhysicalDeviceFormatProperties(
-            ctx.physical_device.handle,
+            ctx.device.pdev,
             candidate,
         );
 
@@ -190,7 +189,7 @@ pub fn detect_depth_format(ctx: *const Context) !vk.Format {
 }
 
 pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: vk.MemoryPropertyFlags) i32 {
-    const memory_properties = self.instance.getPhysicalDeviceMemoryProperties(self.physical_device.handle);
+    const memory_properties = self.instance.getPhysicalDeviceMemoryProperties(self.device.pdev);
 
     for (0..memory_properties.memory_type_count) |i| {
         if ((type_filter & (@as(u32, 1) << @truncate(i))) != 0 and (memory_properties.memory_types[i].property_flags.contains(memory_flags))) {
