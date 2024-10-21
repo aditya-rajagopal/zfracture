@@ -107,13 +107,14 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.frame_arena = std.heap.ArenaAllocator.init(arena_allocator);
     app.engine.memory.frame_allocator.init(app.frame_arena.allocator(), &app.engine.log_config);
 
-    if (comptime app_config.frame_arena_preheat_bytes != 0) {
-        _ = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, app_config.frame_arena_preheat_bytes);
+    const preheat_bytes = comptime app_config.frame_arena_preheat_size.as_bytes();
+    if (comptime preheat_bytes != 0) {
+        _ = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, preheat_bytes);
         if (!app.frame_arena.reset(.retain_capacity)) {
             @branchHint(.unlikely);
             app.log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
-        app.log.info("Frame arena has been preheated with {d} bytes of memory", .{app_config.frame_arena_preheat_bytes});
+        app.log.info("Frame arena has been preheated with {d} bytes of memory", .{preheat_bytes});
     }
     app.log.info("Memory has been initialized", .{});
     errdefer app.frame_arena.deinit();
@@ -138,8 +139,8 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     app.api.on_resize(&app.engine, app.game_state, app_config.window_pos.width, app_config.window_pos.height);
     const end = start.read();
-    app.log.info("Engine has been initialized in {s}", .{std.fmt.fmtDuration(end)});
 
+    app.log.info("Engine has been initialized in {s}", .{std.fmt.fmtDuration(end)});
     return app;
 }
 

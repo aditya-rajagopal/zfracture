@@ -47,7 +47,7 @@ pub const AppConfig = struct {
     window_pos: struct { x: i32 = 0, y: i32 = 0, width: i32 = 1280, height: i32 = 720 } = .{},
     /// The value to start the frame_arena at. It can still grow after but this can be set by the
     /// application to a reasonable upper bound to prevent reallocations
-    frame_arena_preheat_bytes: u64 = 0,
+    frame_arena_preheat_size: defines.BytesRepr = .{ .B = 0 },
     /// The log function to use instead of the engine provided default one
     log_fn: log.LogFn = log.default_log,
 };
