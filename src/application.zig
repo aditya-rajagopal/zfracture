@@ -96,6 +96,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.engine.memory.gpa.init(allocator, &app.engine.log_config);
     const arena_allocator = app.engine.memory.gpa.get_type_allocator(.frame_arena);
     if (comptime builtin.mode == .Debug) {
+        // NOTE: Tracking the allocation of the application
         app.engine.memory.gpa.memory_stats.current_memory[@intFromEnum(core.mem.EngineMemoryTag.application)] = @sizeOf(Application);
         app.engine.memory.gpa.memory_stats.current_total_memory = @sizeOf(Application);
         app.engine.memory.gpa.memory_stats.peak_total_memory = @sizeOf(Application);
@@ -121,7 +122,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Renderer
     const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
-    try app.frontend.init(renderer_allocator, app_config.application_name, &app.platform_state);
+    try app.frontend.init(renderer_allocator, app_config.application_name, &app.platform_state, &app.engine.log_config);
     errdefer app.frontend.deinit();
     app.log.info("Renderer initialized", .{});
 

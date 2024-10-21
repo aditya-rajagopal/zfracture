@@ -4,7 +4,8 @@
 //      - [ ] Pass the engine here so that we can use the logger
 //      - [ ] This needs to be configurable from the engine/game
 const vk = @import("vulkan");
-const Backend = @import("backend.zig");
+
+const RendererLog = @import("frontend.zig").RendererLog;
 const platform = @import("platform.zig");
 const dev = @import("device.zig");
 const Swapchain = @import("swapchain.zig");
@@ -40,6 +41,7 @@ pub const CommandBuffer = vk.CommandBufferProxy(apis);
 
 vkb: BaseDispatch,
 allocator: std.mem.Allocator,
+log: RendererLog,
 vulkan_lib: std.DynLib,
 vkGetInstanceProcAddr: vk.PfnGetInstanceProcAddr,
 
@@ -53,7 +55,7 @@ swapchain: Swapchain,
 recreating_swapchain: bool,
 current_frame: u32,
 
-pub const vkError =
+pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat } ||
     error{CommandLoadFailure} ||
     std.DynLib.Error ||
@@ -69,9 +71,10 @@ pub fn init(
     allocator: std.mem.Allocator,
     application_name: [:0]const u8,
     plat_state: *anyopaque,
-) vkError!void {
+    log: RendererLog,
+) Error!void {
     const internal_plat_state: *platform.VulkanPlatform = @ptrCast(@alignCast(plat_state));
-    std.debug.print("{any}\n", .{internal_plat_state.h_instance});
+    self.log = log;
     // ========================================== LOAD VULKAN =================================/
 
     self.vulkan_lib = try std.DynLib.open("vulkan-1.dll");
@@ -80,13 +83,15 @@ pub fn init(
     self.vkGetInstanceProcAddr = self.vulkan_lib.lookup(
         vk.PfnGetInstanceProcAddr,
         "vkGetInstanceProcAddr",
-    ) orelse return vkError.FailedProcAddrPFN;
+    ) orelse return Error.FailedProcAddrPFN;
+    self.log.debug("Vulkan Library Opened Successfully", .{});
 
     // ========================================== SETUP BASICS =================================/
 
     self.vkb = try BaseDispatch.load(self.vkGetInstanceProcAddr);
     self.allocator = allocator;
     self.framebuffer_extent = .{ .width = 1280, .height = 720 };
+    self.log.debug("Loaded Base Dispatch", .{});
 
     // ============================================ INSTANCE ====================================/
     try self.create_instance(application_name);
@@ -94,7 +99,7 @@ pub fn init(
         self.instance.destroyInstance(null);
         self.allocator.destroy(self.instance.wrapper);
     }
-    std.debug.print("Instance Created\n", .{});
+    self.log.debug("Instance Created", .{});
 
     // ========================================== DEBUGGER ======================================/
     try self.create_debugger();
@@ -107,12 +112,12 @@ pub fn init(
             self.instance.destroySurfaceKHR(self.surface, null);
         }
     }
-    std.debug.print("Surface Created\n", .{});
+    self.log.debug("Surface Created", .{});
 
     // ====================================== PHYSICAL DEVICE ==================================/
     try dev.create(self);
     errdefer dev.destroy(self);
-    std.debug.print("Device created\n", .{});
+    self.log.debug("Device created", .{});
 
     // ====================================== SWAPCHAIN ========================================/
     self.swapchain = try Swapchain.init(self, self.framebuffer_extent);
@@ -122,24 +127,44 @@ pub fn init(
 
 pub fn deinit(self: *Context) void {
     self.swapchain.deinit();
+    self.log.debug("Swapchain Destroyed", .{});
 
     dev.destroy(self);
+    self.log.debug("Device Destroyed", .{});
 
     if (self.surface != .null_handle) {
         self.instance.destroySurfaceKHR(self.surface, null);
+        self.log.debug("Surface Destroyed", .{});
     }
 
     self.destroy_debugger();
 
     self.instance.destroyInstance(null);
     self.allocator.destroy(self.instance.wrapper);
+    self.log.debug("Instance Destroyed", .{});
 
     self.vulkan_lib.close();
+    self.log.debug("Vulkan Library Closed", .{});
+}
+
+pub fn begin_frame(self: *Context, delta_time: f32) bool {
+    _ = self;
+    _ = delta_time;
+    return true;
+}
+
+pub fn end_frame(self: *Context, delta_time: f32) bool {
+    _ = self;
+    _ = delta_time;
+    return true;
 }
 
 fn destroy_debugger(self: *Context) void {
     switch (builtin.mode) {
-        .Debug => self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null),
+        .Debug => {
+            self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
+            self.log.debug("Debugger Destroyed", .{});
+        },
         else => {},
     }
 }
@@ -174,7 +199,7 @@ pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: v
         }
     }
 
-    std.debug.print("WARNING: unable to find memory type\n", .{});
+    self.log.debug("WARNING: unable to find memory type", .{});
     return -1;
 }
 
@@ -200,7 +225,7 @@ fn create_debugger(self: *Context) !void {
                 .message_type = message_type,
                 .pfn_user_callback = debug_callback,
                 // TODO: Pass the engine pointer/logger pointer here.
-                .p_user_data = null,
+                .p_user_data = &self.log,
             };
 
             self.debug_messenger = try self.instance.createDebugUtilsMessengerEXT(&debug_info, null);
@@ -209,7 +234,7 @@ fn create_debugger(self: *Context) !void {
     }
 }
 
-fn create_instance(self: *Context, application_name: [:0]const u8) vkError!void {
+fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
     const info: vk.ApplicationInfo = .{
         .s_type = .application_info,
         .p_application_name = application_name,
@@ -238,9 +263,9 @@ fn create_instance(self: *Context, application_name: [:0]const u8) vkError!void 
         .Debug => {
             required_extensions.appendAssumeCapacity("VK_EXT_debug_utils");
             // TODO: Replace this with core_log
-            std.debug.print("Required Extensions: \n", .{});
+            self.log.debug("Required Extensions: ", .{});
             for (required_extensions.items, 0..) |ext, i| {
-                std.debug.print("\t{d}. {s}\n", .{ i, ext });
+                self.log.debug("\t{d}. {s}", .{ i, ext });
             }
         },
         else => {},
@@ -256,7 +281,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) vkError!void 
     switch (builtin.mode) {
         .Debug => {
             // TODO: replace the prints with core_log somehow
-            std.debug.print("Enabled validations\n", .{});
+            self.log.debug("Enabled validations", .{});
 
             layers.appendAssumeCapacity("VK_LAYER_KHRONOS_validation");
 
@@ -267,7 +292,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) vkError!void 
             _ = try self.vkb.enumerateInstanceLayerProperties(&available_count, available_layers.ptr);
 
             for (layers.items) |layer| {
-                std.debug.print("\tSearching for: {s}...", .{layer});
+                self.log.debug("\tSearching for: {s}...", .{layer});
                 const length = std.mem.len(layer);
                 var found: bool = false;
                 for (available_layers) |avail_layer| {
@@ -275,7 +300,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) vkError!void 
                     if (alength != length) continue;
                     if (std.mem.eql(u8, layer[0..length], avail_layer.layer_name[0..length])) {
                         found = true;
-                        std.debug.print("FOUND!\n", .{});
+                        self.log.debug("FOUND!", .{});
                         break;
                     }
                 }
@@ -306,7 +331,6 @@ fn debug_callback(
     p_user_data: ?*anyopaque,
 ) callconv(vk.vulkan_call_conv) vk.Bool32 {
     _ = message_types;
-    _ = p_user_data;
     const severity: u32 = @bitCast(message_severity);
     const debug_flag = vk.DebugUtilsMessageSeverityFlagsEXT;
     const err: u32 = @bitCast(debug_flag{ .error_bit_ext = true });
@@ -315,12 +339,15 @@ fn debug_callback(
     const verbose: u32 = @bitCast(debug_flag{ .verbose_bit_ext = true });
     if (p_callback_data) |data| {
         if (data.p_message) |message| {
-            switch (severity) {
-                err => std.debug.print("VULKAN ERROR: {s}\n", .{message}),
-                warn => std.debug.print("VULKAN WARN: {s}\n", .{message}),
-                info => std.debug.print("VULKAN INFO: {s}\n", .{message}),
-                verbose => std.debug.print("VULKAN VERBOS: {s}\n", .{message}),
-                else => std.debug.print("VULKAN UNKOWN: {s}\n", .{message}),
+            if (p_user_data) |user_data| {
+                const log: *RendererLog = @ptrCast(@alignCast(user_data));
+                switch (severity) {
+                    err => log.err("{s}", .{message}),
+                    warn => log.warn("{s}", .{message}),
+                    info => log.info("{s}", .{message}),
+                    verbose => log.debug("{s}", .{message}),
+                    else => log.err("{s}", .{message}),
+                }
             }
         }
     }

@@ -1,6 +1,5 @@
 const core = @import("fr_core");
-const Backend = @import("backend.zig");
-const platform = @import("../platform/platform.zig");
+const Context = @import("context.zig");
 const std = @import("std");
 
 const Frontend = @This();
@@ -9,24 +8,27 @@ pub const Packet = struct {
     delta_time: f32,
 };
 
-backend: Backend,
+pub const RendererLog = core.log.ScopedLogger(core.log.default_log, .RENDERER, core.log.default_level);
 
-pub const FrontendError = error{ InitFailed, EndFrameFailed } || Backend.BackendError;
+backend: Context,
+log: RendererLog,
+
+pub const FrontendError = error{ InitFailed, EndFrameFailed } || Context.Error;
 
 pub fn init(
     self: *Frontend,
     allocator: std.mem.Allocator,
     application_name: [:0]const u8,
     platform_state: *anyopaque,
+    log_config: *core.log.LogConfig,
 ) FrontendError!void {
     // TODO: Make this configurable
-    self.backend = try Backend.create(.VULKAN, platform_state);
-    try self.backend.context.init(allocator, application_name, platform_state);
-    return;
+    self.log = RendererLog.init(log_config);
+    try self.backend.init(allocator, application_name, platform_state, self.log);
 }
 
 pub fn deinit(self: *Frontend) void {
-    self.backend.context.deinit();
+    self.backend.deinit();
 }
 
 pub fn begin_frame(self: *Frontend, delta_time: f32) bool {
@@ -34,7 +36,7 @@ pub fn begin_frame(self: *Frontend, delta_time: f32) bool {
 }
 
 pub fn end_frame(self: *Frontend, delta_time: f32) bool {
-    self.backend.frame_number += 1;
+    self.backend.current_frame += 1;
     return self.backend.end_frame(delta_time);
 }
 

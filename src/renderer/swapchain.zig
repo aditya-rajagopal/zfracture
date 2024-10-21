@@ -135,7 +135,7 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
         true,
         .{ .depth_bit = true },
     );
-    std.debug.print("Swapchain Created Successfully!\n", .{});
+    ctx.log.debug("Swapchain Created Successfully!", .{});
     swapchain.ctx = ctx;
     return swapchain;
 }
@@ -296,7 +296,7 @@ fn find_surface_format(ctx: *const Context) !vk.SurfaceFormatKHR {
         }
     }
 
-    std.debug.print(
+    ctx.log.debug(
         "WARNING: Could not find the preffered format. Going with {s} and hoping for the best",
         .{@tagName(surface_formats[0].format)},
     );

@@ -220,7 +220,7 @@ fn select_physical_device(ctx: *Context) Error!void {
             candidate,
             &requirements,
         )) |_| {
-            std.debug.print("FOUND\n", .{});
+            ctx.log.debug("FOUND", .{});
             ctx.physical_device.handle = candidate;
             return;
         }
@@ -246,15 +246,15 @@ fn check_device_requirements(
     const dqfamilies = &ctx.physical_device.queues;
 
     if (requirements.discrete_gpu and properties.device_type != .discrete_gpu) {
-        std.debug.print("GPU found is not discrete. Skipping\n", .{});
+        ctx.log.debug("GPU found is not discrete. Skipping", .{});
         return null;
     }
 
     const queue_families = try ctx.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(device, ctx.allocator);
     defer ctx.allocator.free(queue_families);
 
-    std.debug.print("Queue family count: {d}\n", .{queue_families.len});
-    std.debug.print("G | P | C | T | Name\n", .{});
+    ctx.log.debug("Queue family count: {d}", .{queue_families.len});
+    ctx.log.debug("G | P | C | T | Name", .{});
     var min_transfer_score: u8 = 255;
     for (queue_families, 0..) |family, i| {
         var current_tranfer_score: u8 = 0;
@@ -290,7 +290,7 @@ fn check_device_requirements(
         }
     }
 
-    std.debug.print("{d} | {d} | {d} | {d} | {s}\n", .{
+    ctx.log.debug("{d} | {d} | {d} | {d} | {s}", .{
         @intFromBool(dqfamilies.graphics.family != uint32_max),
         @intFromBool(dqfamilies.present.family != uint32_max),
         @intFromBool(dqfamilies.compute.family != uint32_max),
@@ -303,9 +303,9 @@ fn check_device_requirements(
         (!requirements.compute or (requirements.compute and dqfamilies.compute.family != uint32_max)) and
         (!requirements.transfer or (requirements.transfer and dqfamilies.transfer.family != uint32_max)))
     {
-        std.debug.print("Device meets all requirements\n", .{});
-        std.debug.print(
-            "Queue family indicies: G: {d}, P: {d}, C: {d}, T: {d}\n",
+        ctx.log.debug("Device meets all requirements", .{});
+        ctx.log.debug(
+            "Queue family indicies: G: {d}, P: {d}, C: {d}, T: {d}",
             .{
                 dqfamilies.graphics.family,
                 dqfamilies.present.family,
@@ -345,8 +345,8 @@ fn query_extension_support(ctx: *Context, device: vk.PhysicalDevice, requirement
                     break;
                 }
             } else {
-                std.debug.print(
-                    "Device: does not support the required extnsion: {s}\n",
+                ctx.log.debug(
+                    "Device: does not support the required extnsion: {s}",
                     .{req_ext},
                 );
                 return false;
@@ -355,10 +355,6 @@ fn query_extension_support(ctx: *Context, device: vk.PhysicalDevice, requirement
     }
 
     return true;
-}
-
-test Device {
-    std.debug.print("Size of pdev: {d}\n", .{@sizeOf(PhycialDevice)});
 }
 
 const std = @import("std");
