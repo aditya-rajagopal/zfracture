@@ -1,6 +1,3 @@
-// TODO:
-//      - [ ] Can we have 1 logger that just has different scopes so they share the buffered writer. Rather than having
-//            multiple buffered writers. This way we can also have more scopes than the two.
 const platform = @import("core_platform.zig");
 
 /// Struct to define log levels of custom scopes defined in the app

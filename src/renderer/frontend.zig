@@ -1,5 +1,6 @@
 const core = @import("fr_core");
-const Context = @import("context.zig");
+// TODO: Make this configurable from build or other means. TO allow different contexts
+const Context = @import("vulkan/context.zig");
 const std = @import("std");
 
 const Frontend = @This();

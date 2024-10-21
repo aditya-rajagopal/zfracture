@@ -24,7 +24,7 @@ pub fn create_image(
     memory_flags: vk.MemoryPropertyFlags,
     create_view: bool,
     view_aspects: vk.ImageAspectFlags,
-) !Image {
+) Error!Image {
     var image: Image = undefined;
     image.extent = extent;
 

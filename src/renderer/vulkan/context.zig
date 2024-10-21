@@ -1,11 +1,10 @@
 // TODO:
 //      - [ ] implement a custom vkAllocatorCallback
 //      - [ ] Try to move all the creations of layers and extensions to be comptime
-//      - [ ] Pass the engine here so that we can use the logger
 //      - [ ] This needs to be configurable from the engine/game
 const vk = @import("vulkan");
 
-const RendererLog = @import("frontend.zig").RendererLog;
+const RendererLog = @import("../frontend.zig").RendererLog;
 const platform = @import("platform.zig");
 const dev = @import("device.zig");
 const Swapchain = @import("swapchain.zig");

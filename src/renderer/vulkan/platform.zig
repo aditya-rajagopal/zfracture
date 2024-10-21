@@ -1,6 +1,7 @@
 // TODO(aditya): Figure out a better way to handle this. I dont want to have platform here.
 const vk = @import("vulkan");
 const Instance = @import("context.zig").Instance;
+
 pub const VulkanPlatform = struct {
     /// Handel to the instance of the application
     h_instance: windows.HINSTANCE,
