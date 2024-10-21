@@ -10,12 +10,12 @@ pub const Fracture = struct {
     last_time: f64 = 0,
 };
 
-// test {
-//     std.debug.print("Size of Fracture: {d}, {d}\n", .{ @sizeOf(Fracture), @alignOf(Fracture) });
-//     std.debug.print("Size of log: {d}, {d}\n", .{ @sizeOf(log.GameLog), @alignOf(log.GameLog) });
-//     std.debug.print("Size of input: {d}, {d}\n", .{ @sizeOf(input), @alignOf(input) });
-//     std.debug.print("Size of event: {d}, {d}\n", .{ @sizeOf(event), @alignOf(event) });
-// }
+test {
+    std.debug.print("Size of Fracture: {d}, {d}\n", .{ @sizeOf(Fracture), @alignOf(Fracture) });
+    // std.debug.print("Size of log: {d}, {d}\n", .{ @sizeOf(log.GameLog), @alignOf(log.GameLog) });
+    std.debug.print("Size of input: {d}, {d}\n", .{ @sizeOf(input), @alignOf(input) });
+    std.debug.print("Size of event: {d}, {d}\n", .{ @sizeOf(event), @alignOf(event) });
+}
 
 pub const InitFn = *const fn (engine: *Fracture) ?*anyopaque;
 pub const DeinitFn = *const fn (engine: *Fracture, game_state: *anyopaque) void;

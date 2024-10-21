@@ -41,7 +41,7 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
         type_structs: TypeStructs = undefined,
         type_allocators: TypeAllocators = undefined,
         memory_stats: MemoryStats = std.mem.zeroes(MemoryStats),
-        log: MemoryLog,
+        log: MemoryLog = undefined,
 
         const struct_tag = alloc_tag;
         const TypeStructs = [memory_tag_len * num_bytes_type_allocator]u8;
@@ -147,24 +147,26 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
             //     "Use of {s} allocator before init or after shutdown.",
             //     .{@tagName(struct_tag)},
             // );
-            if (comptime memory_tag_len != 0 or enable_log) {
-                self.log.debug("Memory Subsystem[{s}]: ", .{@tagName(struct_tag)});
-                // magic padding
-                const padding = 8 + 16 + 2 + 9 + 2 + 9 + 1;
-                self.log.debug("=" ** padding, .{});
-                self.log.debug("|\t{s:<16}| {s:^9} | {s:^9}|", .{ "MemoryTag", "Current", "Peak" });
-                self.log.debug("=" ** padding, .{});
-                inline for (@typeInfo(MemoryTag).@"enum".fields) |field| {
-                    const curr_bytes = defines.parse_bytes(self.memory_stats.current_memory[field.value]);
-                    const peak_bytes = defines.parse_bytes(self.memory_stats.peak_memory[field.value]);
-                    self.log.debug("|\t{s:<16}| {s} |{s} |", .{ field.name, curr_bytes, peak_bytes });
+            if (comptime memory_tag_len != 0) {
+                if (enable_log) {
+                    self.log.debug("Memory Subsystem[{s}]: ", .{@tagName(struct_tag)});
+                    // magic padding
+                    const padding = 8 + 16 + 2 + 9 + 2 + 9 + 1;
+                    self.log.debug("=" ** padding, .{});
+                    self.log.debug("|\t{s:<16}| {s:^9} | {s:^9}|", .{ "MemoryTag", "Current", "Peak" });
+                    self.log.debug("=" ** padding, .{});
+                    inline for (@typeInfo(MemoryTag).@"enum".fields) |field| {
+                        const curr_bytes = defines.parse_bytes(self.memory_stats.current_memory[field.value]);
+                        const peak_bytes = defines.parse_bytes(self.memory_stats.peak_memory[field.value]);
+                        self.log.debug("|\t{s:<16}| {s} |{s} |", .{ field.name, curr_bytes, peak_bytes });
+                    }
+                    const curr_bytes = defines.parse_bytes(self.memory_stats.current_total_memory);
+                    const peak_bytes = defines.parse_bytes(self.memory_stats.peak_total_memory);
+                    self.log.debug("=" ** padding, .{});
+                    self.log.debug("|\t{s:<16}| {s} |{s} |", .{ "TOTAL", curr_bytes, peak_bytes });
+                    self.log.debug("=" ** padding, .{});
+                    self.log.debug("", .{});
                 }
-                const curr_bytes = defines.parse_bytes(self.memory_stats.current_total_memory);
-                const peak_bytes = defines.parse_bytes(self.memory_stats.peak_total_memory);
-                self.log.debug("=" ** padding, .{});
-                self.log.debug("|\t{s:<16}| {s} |{s} |", .{ "TOTAL", curr_bytes, peak_bytes });
-                self.log.debug("=" ** padding, .{});
-                self.log.debug("\n", .{});
             }
         }
 
@@ -241,26 +243,28 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
 }
 
 test "type consistency" {
-    const allocType = TrackingAllocator(.testing, EngineMemoryTag);
-    const allocType2 = TrackingAllocator(.testing, EngineMemoryTag);
-    const gpa = TrackingAllocator(.gpa, EngineMemoryTag);
+    const allocType = TrackingAllocator(.testing, EngineMemoryTag, true);
+    const allocType2 = TrackingAllocator(.testing, EngineMemoryTag, true);
+    const gpa = TrackingAllocator(.gpa, EngineMemoryTag, true);
     try std.testing.expect(allocType != gpa);
     try std.testing.expect(allocType == allocType2);
+    var config: log.LogConfig = undefined;
     var alloc: allocType = allocType{};
-    alloc.init(std.testing.allocator);
+    alloc.init(std.testing.allocator, &config);
     defer alloc.deinit();
 }
 
 test "allocations" {
-    const allocType = TrackingAllocator(.testing, EngineMemoryTag);
-    const gpaType = TrackingAllocator(.gpa, EngineMemoryTag);
+    var config: log.LogConfig = undefined;
+    const allocType = TrackingAllocator(.testing, EngineMemoryTag, true);
+    const gpaType = TrackingAllocator(.gpa, EngineMemoryTag, true);
 
     var alloc: allocType = allocType{};
-    alloc.init(std.testing.allocator);
+    alloc.init(std.testing.allocator, &config);
     defer alloc.deinit();
 
     var gpa: gpaType = gpaType{};
-    gpa.init(std.testing.allocator);
+    gpa.init(std.testing.allocator, &config);
     defer gpa.deinit();
 
     const allocator = alloc.get_type_allocator(.untagged);

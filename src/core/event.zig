@@ -12,7 +12,7 @@
 const Memory = @import("fracture.zig").mem.Memory;
 
 pub const max_callbacks_per_event = 512;
-pub const max_event_types = 1024;
+pub const max_event_types = 512;
 
 // const EventCallbackList = core.StaticArrayList(EventCallback, max_callbacks_per_event);
 // TODO: Does this need to be SoA or AoS

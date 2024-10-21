@@ -42,6 +42,7 @@ const ApplicationError =
     Frontend.FrontendError;
 
 pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
+    var start = std.time.Timer.start() catch unreachable;
 
     // Memory
     const app: *Application = try allocator.create(Application);
@@ -136,7 +137,8 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.log.info("Client application has been initialized", .{});
 
     app.api.on_resize(&app.engine, app.game_state, app_config.window_pos.width, app_config.window_pos.height);
-    app.log.info("Application has been initialized", .{});
+    const end = start.read();
+    app.log.info("Engine has been initialized in {s}", .{std.fmt.fmtDuration(end)});
 
     return app;
 }
