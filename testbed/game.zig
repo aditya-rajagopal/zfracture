@@ -1,7 +1,7 @@
 const config = @import("config.zig");
 const core = @import("fr_core");
 
-const GameLog = core.log.ScopedLogger(core.log.default_log, .game, core.log.default_level);
+const GameLog = core.log.ScopedLogger(core.log.default_log, .GAME, core.log.default_level);
 
 pub const GameState = struct {
     delta_time: f64,

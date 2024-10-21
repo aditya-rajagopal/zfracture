@@ -56,7 +56,7 @@ pub const Error =
     Instance.GetPhysicalDeviceSurfacePresentModesKHRError ||
     std.mem.Allocator.Error;
 
-pub fn create(ctx: *Context) Error!Device {
+pub fn create(ctx: *const Context) Error!Device {
     var device = try select_physical_device(ctx);
     device.handle = try device.create_logical_device(ctx);
     errdefer {

@@ -1,10 +1,10 @@
 const platform = @import("core_platform.zig");
 
 /// Struct to define log levels of custom scopes defined in the app
-pub const ScopeLevel = struct {
-    scope: @Type(.enum_literal),
-    level: Level,
-};
+// pub const ScopeLevel = struct {
+//     scope: @Type(.enum_literal),
+//     level: Level,
+// };
 
 /// The levels of logging that are avilable within the engine
 pub const Level = enum {
@@ -27,12 +27,12 @@ pub const Level = enum {
     /// Returns a string literal of the given level in full text form.
     pub fn as_text(comptime self: Level) []const u8 {
         return switch (self) {
-            .fatal => "fatal",
-            .err => "error",
-            .warn => "warning",
-            .info => "info",
-            .debug => "debug",
-            .trace => "trace",
+            .fatal => "FATAL",
+            .err => "ERROR",
+            .warn => "WARNING",
+            .info => "INFO",
+            .debug => "DEBUG",
+            .trace => "TRACE",
         };
     }
 

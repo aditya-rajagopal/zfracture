@@ -18,7 +18,7 @@ const DLL = switch (builtin.mode) {
     else => void,
 };
 
-const EngineLog = core.log.ScopedLogger(core.log.default_log, .engine, core.log.default_level);
+const EngineLog = core.log.ScopedLogger(core.log.default_log, .ENGINE, core.log.default_level);
 
 pub const Application = @This();
 engine: core.Fracture = undefined,
