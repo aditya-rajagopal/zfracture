@@ -1,6 +1,6 @@
 const vk = @import("vulkan");
+const T = @import("types.zig");
 const Context = @import("context.zig");
-const device = @import("device.zig");
 const image = @import("image.zig");
 
 const Swapchain = @This();
@@ -26,13 +26,13 @@ depth_format: vk.Format,
 
 pub const Error =
     error{ ImageAcquiredFailed, FailedToPresentSwapchain } ||
-    Context.LogicalDevice.AcquireNextImageKHRError ||
-    Context.LogicalDevice.CreateSemaphoreError ||
+    T.LogicalDevice.AcquireNextImageKHRError ||
+    T.LogicalDevice.CreateSemaphoreError ||
     image.Error ||
-    Context.LogicalDevice.CreateSwapchainKHRError ||
-    Context.LogicalDevice.GetSwapchainImagesAllocKHRError ||
-    Context.Instance.GetPhysicalDeviceSurfaceFormatsAllocKHRError ||
-    Context.Instance.GetPhysicalDeviceSurfacePresentModesKHRError;
+    T.LogicalDevice.CreateSwapchainKHRError ||
+    T.LogicalDevice.GetSwapchainImagesAllocKHRError ||
+    T.Instance.GetPhysicalDeviceSurfaceFormatsAllocKHRError ||
+    T.Instance.GetPhysicalDeviceSurfacePresentModesKHRError;
 
 pub fn init(ctx: *const Context, extent: vk.Extent2D) !Swapchain {
     return create(ctx, extent, .null_handle);

@@ -4,10 +4,9 @@
 //      - [ ] Remove reference to event system here. The platform/application should handle firing events. Or pass the engine.
 const KeysArray = [std.math.maxInt(u8)]u8;
 const ButtonsArray = [MAX_BUTTONS]u8;
+const MousePosition = struct { x: i16 = 0, y: i16 = 0 };
 
 const Input = @This();
-
-const MousePosition = struct { x: i16 = 0, y: i16 = 0 };
 
 buttons_previous_state: ButtonsArray = std.mem.zeroes(ButtonsArray),
 keys_previous_state: KeysArray = std.mem.zeroes(KeysArray),

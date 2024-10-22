@@ -2,25 +2,14 @@
 //      - [ ] Get all the features from the engine/game
 const vk = @import("vulkan");
 const Context = @import("context.zig");
-const Instance = Context.Instance;
-const LogicalDeviceDipatch = Context.LogicalDeviceDispatch;
-const LogicalDevice = Context.LogicalDevice;
 
-const Requirements = struct {
-    graphics: bool,
-    present: bool,
-    compute: bool,
-    transfer: bool,
-    sample_anisotropy: bool,
-    discrete_gpu: bool,
-    device_extension_names: std.ArrayList([*:0]const u8),
-};
+const T = @import("types.zig");
 
 pub const Queue = struct {
     handle: vk.Queue = .null_handle,
     family: u32 = std.math.maxInt(u32),
 
-    pub fn init(self: *Queue, device: LogicalDevice) void {
+    pub fn init(self: *Queue, device: T.LogicalDevice) void {
         // TODO: We might have more than 1 queueIndices.
         if (self.family != std.math.maxInt(u32)) {
             self.handle = device.getDeviceQueue(self.family, 0);
@@ -42,18 +31,18 @@ const Device = @This();
 pdev: vk.PhysicalDevice,
 queues: QueueGroup,
 graphics_command_pool: vk.CommandPool = .null_handle,
-handle: LogicalDevice = undefined,
+handle: T.LogicalDevice = undefined,
 
 pub const Error =
     error{ NoPhysicalDeviceFound, CommandLoadFailure } ||
-    LogicalDevice.CreateCommandPoolError ||
-    Instance.CreateDeviceError ||
-    Instance.EnumeratePhysicalDevicesError ||
-    Instance.EnumerateDeviceExtensionPropertiesError ||
-    Instance.GetPhysicalDeviceSurfaceSupportKHRError ||
-    Instance.GetPhysicalDeviceSurfaceCapabilitiesKHRError ||
-    Instance.GetPhysicalDeviceSurfaceFormatsKHRError ||
-    Instance.GetPhysicalDeviceSurfacePresentModesKHRError ||
+    T.LogicalDevice.CreateCommandPoolError ||
+    T.Instance.CreateDeviceError ||
+    T.Instance.EnumeratePhysicalDevicesError ||
+    T.Instance.EnumerateDeviceExtensionPropertiesError ||
+    T.Instance.GetPhysicalDeviceSurfaceSupportKHRError ||
+    T.Instance.GetPhysicalDeviceSurfaceCapabilitiesKHRError ||
+    T.Instance.GetPhysicalDeviceSurfaceFormatsKHRError ||
+    T.Instance.GetPhysicalDeviceSurfacePresentModesKHRError ||
     std.mem.Allocator.Error;
 
 pub fn create(ctx: *const Context) Error!Device {
@@ -102,7 +91,7 @@ fn create_queue_handles(self: *Device) Error!void {
     self.queues.compute.init(self.handle);
 }
 
-fn create_logical_device(self: Device, ctx: *const Context) Error!LogicalDevice {
+fn create_logical_device(self: Device, ctx: *const Context) Error!T.LogicalDevice {
     const p_shares_g = self.queues.present.family == self.queues.graphics.family;
     const t_shares_g = self.queues.transfer.family == self.queues.graphics.family;
     const c_shares_p = self.queues.compute.family == self.queues.present.family;
@@ -167,11 +156,11 @@ fn create_logical_device(self: Device, ctx: *const Context) Error!LogicalDevice 
     // NOTE: Create logical device. Phycial devices are not created directly, instead you request for a handle.
     // We create a logical device with queue familes. In most cases we work with the logical device.
     const device = try ctx.instance.createDevice(self.pdev, &device_create_info, null);
-    const vkd = try ctx.allocator.create(LogicalDeviceDipatch);
+    const vkd = try ctx.allocator.create(T.LogicalDeviceDispatch);
     errdefer ctx.allocator.destroy(vkd);
 
-    vkd.* = try LogicalDeviceDipatch.load(device, ctx.instance.wrapper.dispatch.vkGetDeviceProcAddr);
-    return LogicalDevice.init(device, vkd);
+    vkd.* = try T.LogicalDeviceDispatch.load(device, ctx.instance.wrapper.dispatch.vkGetDeviceProcAddr);
+    return T.LogicalDevice.init(device, vkd);
 }
 
 fn select_physical_device(ctx: *const Context) Error!Device {
@@ -352,6 +341,16 @@ fn query_swapchain_support(ctx: *const Context, device: vk.PhysicalDevice) Error
         return null;
     }
 }
+
+const Requirements = struct {
+    graphics: bool,
+    present: bool,
+    compute: bool,
+    transfer: bool,
+    sample_anisotropy: bool,
+    discrete_gpu: bool,
+    device_extension_names: std.ArrayList([*:0]const u8),
+};
 
 const std = @import("std");
 const assert = std.debug.assert;

@@ -1,18 +1,13 @@
 const core = @import("fr_core");
 // TODO: Make this configurable from build or other means. TO allow different contexts
 const Context = @import("vulkan/context.zig");
+const types = @import("types.zig");
 const std = @import("std");
 
 const Frontend = @This();
 
-pub const Packet = struct {
-    delta_time: f32,
-};
-
-pub const RendererLog = core.log.ScopedLogger(core.log.default_log, .RENDERER, core.log.default_level);
-
 backend: Context,
-log: RendererLog,
+log: types.RendererLog,
 
 pub const FrontendError = error{ InitFailed, EndFrameFailed } || Context.Error;
 
@@ -24,7 +19,7 @@ pub fn init(
     log_config: *core.log.LogConfig,
 ) FrontendError!void {
     // TODO: Make this configurable
-    self.log = RendererLog.init(log_config);
+    self.log = types.RendererLog.init(log_config);
     try self.backend.init(allocator, application_name, platform_state, self.log);
 }
 
@@ -42,7 +37,7 @@ pub fn end_frame(self: *Frontend, delta_time: f32) bool {
 }
 
 // Does this need to be an error or can it just be a bool?
-pub fn draw_frame(self: *Frontend, packet: Packet) FrontendError!void {
+pub fn draw_frame(self: *Frontend, packet: types.Packet) FrontendError!void {
     // Only if the begin frame is successful can we continue with the mid frame operations
     if (self.begin_frame(packet.delta_time)) {
         // If the end frame fails it is likely irrecoverable

@@ -26,6 +26,7 @@
     - [x] Create a window
     - [x] Handles events and dispatch to the event system
     - [ ] Support multiple windows
+    - [ ] Support controllers
 - [ ] Event system
     - [x] Basic event handling and types
     - [x] Move event system into core as type
@@ -43,6 +44,8 @@
 - [ ] Input system
     - [x] Initial input system implementation
     - [x] API for platform layer to dispatch input events 
+    - [ ] Support controllers
+    - [ ] Should I save the number of transitions that happen within a frame
     - [ ] Remove reference to event system here. The platform/application should handle firing events. Or pass the engine.
     - [ ] Think of using a bit set for the keys instead of an array
     - [ ] Are the comptime versions of the functions necessary

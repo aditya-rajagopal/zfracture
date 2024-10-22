@@ -3,48 +3,22 @@
 //      - [ ] Try to move all the creations of layers and extensions to be comptime
 //      - [ ] This needs to be configurable from the engine/game
 const vk = @import("vulkan");
+const T = @import("types.zig");
 
-const RendererLog = @import("../frontend.zig").RendererLog;
 const platform = @import("platform.zig");
 const Device = @import("device.zig");
 const Swapchain = @import("swapchain.zig");
-
-const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
+const RenderPass = @import("renderpass.zig");
 
 const Context = @This();
 
-const debug_apis = switch (builtin.mode) {
-    .Debug => .{vk.extensions.ext_debug_utils},
-    else => .{},
-};
-
-/// To construct base, instance and device wrappers for vulkan-zig, you need to pass a list of 'apis' to it.
-const apis: []const vk.ApiInfo = &(.{
-    vk.features.version_1_0,
-    vk.features.version_1_1,
-    vk.features.version_1_2,
-    vk.extensions.khr_surface,
-    vk.extensions.khr_win_32_surface,
-    vk.extensions.khr_swapchain,
-} ++ debug_apis);
-
-/// Next, pass the `apis` to the wrappers to create dispatch tables.
-pub const BaseDispatch = vk.BaseWrapper(apis);
-pub const InstanceDispatch = vk.InstanceWrapper(apis);
-pub const LogicalDeviceDispatch = vk.DeviceWrapper(apis);
-
-// Also create some proxying wrappers, which also have the respective handles
-pub const Instance = vk.InstanceProxy(apis);
-pub const LogicalDevice = vk.DeviceProxy(apis);
-pub const CommandBuffer = vk.CommandBufferProxy(apis);
-
-vkb: BaseDispatch,
+vkb: T.BaseDispatch,
 allocator: std.mem.Allocator,
-log: RendererLog,
+log: T.RendererLog,
 vulkan_lib: std.DynLib,
 vkGetInstanceProcAddr: vk.PfnGetInstanceProcAddr,
 
-instance: Instance,
+instance: T.Instance,
 debug_messenger: vk.DebugUtilsMessengerEXT,
 surface: vk.SurfaceKHR,
 device: Device,
@@ -53,26 +27,28 @@ framebuffer_extent: vk.Extent2D,
 swapchain: Swapchain,
 recreating_swapchain: bool,
 current_frame: u32,
+main_render_pass: RenderPass,
 
 pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
     error{CommandLoadFailure} ||
     std.DynLib.Error ||
-    BaseDispatch.EnumerateInstanceLayerPropertiesError ||
-    Instance.CreateDebugUtilsMessengerEXTError ||
-    Instance.CreateWin32SurfaceKHRError ||
-    BaseDispatch.CreateInstanceError ||
+    T.BaseDispatch.EnumerateInstanceLayerPropertiesError ||
+    T.Instance.CreateDebugUtilsMessengerEXTError ||
+    T.Instance.CreateWin32SurfaceKHRError ||
+    T.BaseDispatch.CreateInstanceError ||
     Device.Error ||
-    Swapchain.Error;
+    Swapchain.Error ||
+    RenderPass.Error;
 
 pub fn init(
     self: *Context,
     allocator: std.mem.Allocator,
     application_name: [:0]const u8,
     plat_state: *anyopaque,
-    log: RendererLog,
+    log: T.RendererLog,
 ) Error!void {
-    const internal_plat_state: *platform.VulkanPlatform = @ptrCast(@alignCast(plat_state));
+    const internal_plat_state: *T.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     self.log = log;
     // ========================================== LOAD VULKAN =================================/
 
@@ -87,7 +63,7 @@ pub fn init(
 
     // ========================================== SETUP BASICS =================================/
 
-    self.vkb = try BaseDispatch.load(self.vkGetInstanceProcAddr);
+    self.vkb = try T.BaseDispatch.load(self.vkGetInstanceProcAddr);
     self.allocator = allocator;
     self.framebuffer_extent = .{ .width = 1280, .height = 720 };
     self.log.debug("Loaded Base Dispatch", .{});
@@ -123,9 +99,22 @@ pub fn init(
     self.swapchain = try Swapchain.init(self, self.framebuffer_extent);
     self.current_frame = 0;
     errdefer self.swapchain.deinit();
+
+    self.main_render_pass = try RenderPass.create(
+        self,
+        [_]u32{ 0, 0, self.framebuffer_extent.width, self.framebuffer_extent.height },
+        [_]f32{ 0.0, 0.0, 0.2, 1.0 },
+        1.0,
+        0.0,
+    );
+    errdefer self.main_render_pass.destroy();
+    self.log.debug("Main Renderpass Created", .{});
 }
 
 pub fn deinit(self: *Context) void {
+    self.main_render_pass.destroy(self);
+    self.log.debug("Main Renderpass Destroyed", .{});
+
     self.swapchain.deinit();
     self.log.debug("Swapchain Destroyed", .{});
 
@@ -316,10 +305,10 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
     const instance = try self.vkb.createInstance(&create_info, null);
 
     // This creates the isntance dispatch tables
-    const vk_inst = try self.allocator.create(InstanceDispatch);
+    const vk_inst = try self.allocator.create(T.InstanceDispatch);
     errdefer self.allocator.destroy(vk_inst);
-    vk_inst.* = try InstanceDispatch.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr);
-    self.instance = Instance.init(instance, vk_inst);
+    vk_inst.* = try T.InstanceDispatch.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr);
+    self.instance = T.Instance.init(instance, vk_inst);
 }
 
 fn debug_callback(
@@ -338,7 +327,7 @@ fn debug_callback(
     if (p_callback_data) |data| {
         if (data.p_message) |message| {
             if (p_user_data) |user_data| {
-                const log: *RendererLog = @ptrCast(@alignCast(user_data));
+                const log: *T.RendererLog = @ptrCast(@alignCast(user_data));
                 switch (severity) {
                     err => log.err("{s}", .{message}),
                     warn => log.warn("{s}", .{message}),

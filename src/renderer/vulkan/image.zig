@@ -1,4 +1,5 @@
 const vk = @import("vulkan");
+const T = @import("types.zig");
 const Context = @import("context.zig");
 
 pub const Image = struct {
@@ -10,10 +11,10 @@ pub const Image = struct {
 
 pub const Error =
     error{NotSuitableMemoryType} ||
-    Context.LogicalDevice.CreateImageViewError ||
-    Context.LogicalDevice.CreateImageError ||
-    Context.LogicalDevice.BindImageMemoryError ||
-    Context.LogicalDevice.AllocateMemoryError;
+    T.LogicalDevice.CreateImageViewError ||
+    T.LogicalDevice.CreateImageError ||
+    T.LogicalDevice.BindImageMemoryError ||
+    T.LogicalDevice.AllocateMemoryError;
 
 pub fn create_image(
     ctx: *const Context,
@@ -100,7 +101,7 @@ pub fn create_image_view(
     image: vk.Image,
     format: vk.Format,
     aspect_mask: vk.ImageAspectFlags,
-) Context.LogicalDevice.CreateImageViewError!vk.ImageView {
+) T.LogicalDevice.CreateImageViewError!vk.ImageView {
     const create_info = vk.ImageViewCreateInfo{
         .image = image,
         .view_type = .@"2d",

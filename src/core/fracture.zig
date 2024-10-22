@@ -16,6 +16,7 @@ pub const defines = @import("defines.zig");
 pub const mem = @import("memory.zig");
 pub const Event = @import("event.zig");
 pub const Input = @import("input.zig");
+pub const math = @import("math.zig");
 
 // pub const MergeEnums = comptime_funcs.MergeEnums;
 // pub const Distinct = comptime_funcs.Distinct;
