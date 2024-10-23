@@ -198,6 +198,8 @@ pub fn run(self: *Application) ApplicationError!void {
     var delta_time: u64 = 0;
     var frame_count: u64 = 0;
 
+    var end = self.timer.lap();
+
     while (self.engine.is_running) {
         platform.pump_messages(&self.platform_state);
 
@@ -230,6 +232,9 @@ pub fn run(self: *Application) ApplicationError!void {
                 self.engine.is_running = false;
                 continue;
             };
+
+            delta_time += end;
+            frame_count += 1;
         }
 
         switch (builtin.mode) {
@@ -250,9 +255,7 @@ pub fn run(self: *Application) ApplicationError!void {
         }
 
         self.engine.input.update();
-        const end = self.timer.lap();
-        delta_time += end;
-        frame_count += 1;
+        end = self.timer.lap();
 
         // break;
     }
@@ -269,7 +272,6 @@ pub fn run(self: *Application) ApplicationError!void {
 }
 
 pub fn on_event(self: *Application, comptime event_code: core.Event.EventCode, event_data: core.Event.EventData) void {
-    self.log.trace("Got an event", .{});
     switch (event_code) {
         .APPLICATION_QUIT => {
             _ = self.engine.event.fire(.APPLICATION_QUIT, &self.engine, event_data);
@@ -282,7 +284,7 @@ pub fn on_event(self: *Application, comptime event_code: core.Event.EventCode, e
             if (self.engine.extent.width != w or self.engine.extent.height != h) {
                 self.engine.extent.width = w;
                 self.engine.extent.height = h;
-                self.log.trace("window_resized: w/h: {d}/{d}", .{ self.engine.extent.width, self.engine.extent.height });
+                // self.log.trace("window_resized: w/h: {d}/{d}", .{ self.engine.extent.width, self.engine.extent.height });
                 if (w == 0 or h == 0) {
                     self.log.info("Application has been minimized/suspended\n", .{});
                     self.engine.is_suspended = true;

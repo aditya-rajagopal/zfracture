@@ -1,7 +1,8 @@
-const app = @import("application.zig");
-const platform = @import("platform/platform.zig");
+pub const app = @import("application.zig");
+pub const platform = @import("platform/platform.zig");
+pub const frontend = @import("renderer/frontend.zig");
 
-test {
+test "Unit tests" {
     std.testing.refAllDecls(@This());
 }
 

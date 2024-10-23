@@ -51,3 +51,7 @@ pub fn draw_frame(self: *Frontend, packet: T.Packet) FrontendError!void {
 pub fn on_resize(self: *Frontend, new_extent: core.math.Extent) void {
     self.backend.on_resized(new_extent);
 }
+
+test Frontend {
+    std.testing.refAllDecls(Context);
+}

@@ -33,11 +33,9 @@ framebuffer_size_generation: u32,
 last_framebuffer_generation: u32,
 swapchain: Swapchain,
 recreating_swapchain: bool,
-images_in_flight: []?*Fence,
 current_frame: u32,
 main_render_pass: RenderPass,
 graphics_command_buffers: []CommandBuffer,
-
 framebuffers: []Framebuffer,
 
 pub const Error =
@@ -119,10 +117,10 @@ pub fn init(
     errdefer self.swapchain.deinit();
     self.recreating_swapchain = false;
 
-    self.images_in_flight = try self.allocator.alloc(?*Fence, self.swapchain.images.len);
-    for (self.images_in_flight) |*img| {
-        img.* = null;
-    }
+    // self.images_in_flight = try self.allocator.alloc(?*Fence, self.swapchain.images.len);
+    // for (self.images_in_flight) |*img| {
+    //     img.* = null;
+    // }
 
     // ==================================== MAIN RENDERPASS ====================================/
     self.main_render_pass = try RenderPass.create(
@@ -161,7 +159,7 @@ pub fn deinit(self: *Context) void {
     self.main_render_pass.destroy(self);
     self.log.info("Main Renderpass Destroyed", .{});
 
-    self.allocator.free(self.images_in_flight);
+    // self.allocator.free(self.images_in_flight);
     self.swapchain.deinit();
     self.allocator.free(self.framebuffers);
     self.log.info("Swapchain Destroyed", .{});
@@ -186,10 +184,10 @@ pub fn deinit(self: *Context) void {
 
 pub fn begin_frame(self: *Context, delta_time: f32) bool {
     _ = delta_time;
-    const device = &self.device.handle;
 
     if (self.recreating_swapchain) {
-        device.deviceWaitIdle() catch |err| {
+        @branchHint(.cold);
+        self.device.handle.deviceWaitIdle() catch |err| {
             self.log.err("Vulkan Begin frame waitForIdle failed: {s}", .{@errorName(err)});
             return false;
         };
@@ -199,7 +197,8 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
     }
 
     if (self.framebuffer_size_generation != self.last_framebuffer_generation) {
-        device.deviceWaitIdle() catch |err| {
+        @branchHint(.cold);
+        self.device.handle.deviceWaitIdle() catch |err| {
             self.log.err("Vulkan Begin frame waitForIdle failed: {s}", .{@errorName(err)});
             return false;
         };
@@ -216,10 +215,12 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
 
     const current_image = self.swapchain.get_current_swap_image();
     if (!current_image.fence.wait(self, std.math.maxInt(u64))) {
+        @branchHint(.cold);
         self.log.warn("In-flight fence wait failed", .{});
         return false;
     }
     current_image.fence.reset(self) catch |err| {
+        @branchHint(.cold);
         self.log.err("Vulkan Begin frame current image fence reset failed: {s}", .{@errorName(err)});
         return false;
     };
@@ -227,6 +228,7 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
     const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
     command_buffer.reset();
     command_buffer.begin(false, false, false) catch |err| {
+        @branchHint(.cold);
         self.log.err("Vulkan Begin frame command buffer failed failed: {s}", .{@errorName(err)});
         return false;
     };
@@ -251,8 +253,8 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
     command_buffer.handle.setViewport(0, 1, @ptrCast(&viewport));
     command_buffer.handle.setScissor(0, 1, @ptrCast(&scissor));
 
-    self.main_render_pass.surface_rect[2] = self.framebuffer_extent.width;
-    self.main_render_pass.surface_rect[3] = self.framebuffer_extent.height;
+    // self.main_render_pass.surface_rect[2] = self.framebuffer_extent.width;
+    // self.main_render_pass.surface_rect[3] = self.framebuffer_extent.height;
 
     self.main_render_pass.begin(
         command_buffer,
@@ -270,11 +272,13 @@ pub fn end_frame(self: *Context, delta_time: f32) bool {
     self.main_render_pass.end(command_buffer);
 
     command_buffer.end() catch |err| {
+        @branchHint(.cold);
         self.log.err("Vulkan end frame command buffer end failed: {s}", .{@errorName(err)});
         return false;
     };
 
     const res = self.swapchain.present(command_buffer) catch |err| {
+        @branchHint(.cold);
         self.log.err("Vulkan swapchain present failed with error: {s}\n", .{@errorName(err)});
         return false;
     };
@@ -283,6 +287,7 @@ pub fn end_frame(self: *Context, delta_time: f32) bool {
     if (!res) {
         self.log.info("Swapchain out of date. Recreating swapchain and trying again.", .{});
         _ = self.recreate_swapchain() catch |err| {
+            @branchHint(.cold);
             self.log.err("Vulkan begin frame swapchain recreation failed: {s}", .{@errorName(err)});
             return false;
         };
@@ -295,10 +300,10 @@ pub fn end_frame(self: *Context, delta_time: f32) bool {
 pub fn on_resized(self: *Context, new_extent: math.Extent) void {
     self.cached_framebuffer_extent = @bitCast(new_extent);
     self.framebuffer_size_generation +%= 1;
-    self.log.info(
-        "Vulkan on_resize: w/h/gen: {d}/{d}/{d}",
-        .{ self.cached_framebuffer_extent.width, self.cached_framebuffer_extent.height, self.framebuffer_size_generation },
-    );
+    // self.log.info(
+    //     "Vulkan on_resize: w/h/gen: {d}/{d}/{d}",
+    //     .{ self.cached_framebuffer_extent.width, self.cached_framebuffer_extent.height, self.framebuffer_size_generation },
+    // );
 }
 
 pub fn detect_depth_format(ctx: *const Context) !vk.Format {
@@ -432,7 +437,7 @@ fn create_debugger(self: *Context) !void {
             const log_severity = vk.DebugUtilsMessageSeverityFlagsEXT{
                 .error_bit_ext = true,
                 .warning_bit_ext = true,
-                // .info_bit_ext = true,
+                .info_bit_ext = true,
                 // .verbose_bit_ext = true,
             };
 
@@ -442,6 +447,7 @@ fn create_debugger(self: *Context) !void {
                 .performance_bit_ext = true,
                 .device_address_binding_bit_ext = true,
             };
+
             const debug_info = vk.DebugUtilsMessengerCreateInfoEXT{
                 .s_type = .debug_utils_messenger_create_info_ext,
                 .message_severity = log_severity,

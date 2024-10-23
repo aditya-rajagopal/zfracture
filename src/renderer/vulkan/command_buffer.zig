@@ -52,7 +52,7 @@ pub fn begin(
     is_single_use: bool,
     is_renderpass_continuation: bool,
     is_simultaneous_use: bool,
-) !void {
+) T.CommandBufferProxy.BeginCommandBufferError!void {
     const begin_info = vk.CommandBufferBeginInfo{
         .flags = .{
             .one_time_submit_bit = is_single_use,
@@ -67,7 +67,7 @@ pub fn begin(
     self.state = .recording;
 }
 
-pub fn end(self: *CommandBuffer) !void {
+pub fn end(self: *CommandBuffer) T.CommandBufferProxy.EndCommandBufferError!void {
     // TODO: Check if the current state is valid to end
     try self.handle.endCommandBuffer();
     self.state = .recording_end;

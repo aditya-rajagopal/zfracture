@@ -9,8 +9,8 @@ const RenderPass = @This();
 
 handle: vk.RenderPass,
 state: T.RenderPassState = .not_allocated,
-surface_rect: m.Rect,
-clear_colour: m.Colour,
+surface_rect: [4]u32,
+clear_colour: [4]f32,
 depth: f32,
 stencil: u32,
 
@@ -139,12 +139,11 @@ pub fn destroy(self: *RenderPass, ctx: *const Context) void {
 pub fn begin(self: *RenderPass, command_buffer: *CommandBuffer, frame_buffer: vk.Framebuffer) void {
     // TODO: make this configurable
     var clear_values: [2]vk.ClearValue = undefined;
-    @memset(clear_values[0..2], vk.ClearValue{
-        .color = .{ .int_32 = [_]i32{ 0, 0, 0, 0 } },
-    });
     clear_values[0].color.float_32 = self.clear_colour;
     clear_values[1].depth_stencil.depth = self.depth;
     clear_values[1].depth_stencil.stencil = self.stencil;
+    clear_values[1].color.int_32[2] = 0;
+    clear_values[1].color.int_32[3] = 0;
 
     const begin_info = vk.RenderPassBeginInfo{
         .render_pass = self.handle,

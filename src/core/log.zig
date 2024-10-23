@@ -52,8 +52,8 @@ pub const Level = enum {
 /// The default log level is based on build mode.
 pub const default_level: Level = switch (builtin.mode) {
     .Debug => .trace,
-    .ReleaseSafe => .warn,
-    .ReleaseFast, .ReleaseSmall => .err,
+    .ReleaseSafe => .info,
+    .ReleaseFast, .ReleaseSmall => .info,
 };
 
 /// The type of the logging function required

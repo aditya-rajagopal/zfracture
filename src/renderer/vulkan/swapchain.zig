@@ -165,7 +165,7 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
         true,
         .{ .depth_bit = true },
     );
-    ctx.log.debug("Swapchain Created Successfully!: current_image: {d}", .{swapchain.current_image_index});
+    ctx.log.debug("Swapchain Created Successfully!: present mode: {s}", .{@tagName(swapchain.present_mode)});
     swapchain.ctx = ctx;
     return swapchain;
 }
@@ -223,6 +223,7 @@ pub fn present(self: *Swapchain, command_buffer: *CommandBuffer) SwapchainPresen
     };
 
     const present_queue_handle = self.ctx.device.queues.present.handle;
+
     const result = self.ctx.device.handle.queuePresentKHR(present_queue_handle, &present_info) catch |err| switch (err) {
         error.OutOfDateKHR => .suboptimal_khr,
         else => |overflow| return overflow,
