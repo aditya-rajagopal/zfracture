@@ -161,7 +161,7 @@ fn win32_process_message(
             const width: i32 = rect.right - rect.left;
             const height: i32 = rect.bottom - rect.top;
             const data: core.Event.WindowResizeEventData = .{
-                .size = .{ .width = @truncate(width), .height = @truncate(height) },
+                .size = .{ .width = @intCast(width), .height = @intCast(height) },
             };
             application_state.on_event(.WINDOW_RESIZE, @bitCast(data));
             return 0;

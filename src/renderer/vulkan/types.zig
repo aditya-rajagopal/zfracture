@@ -33,7 +33,7 @@ pub const LogicalDeviceDispatch = vk.DeviceWrapper(apis);
 // Also create some proxying wrappers, which also have the respective handles
 pub const Instance = vk.InstanceProxy(apis);
 pub const LogicalDevice = vk.DeviceProxy(apis);
-pub const CommandBuffer = vk.CommandBufferProxy(apis);
+pub const CommandBufferProxy = vk.CommandBufferProxy(apis);
 
 pub const RenderPassState = enum(u8) {
     /// Ready to being
@@ -46,6 +46,13 @@ pub const RenderPassState = enum(u8) {
     not_allocated,
 };
 
+/// When a command buffer starts it is in the not_allocated state. Command buffers are not created but rather
+/// allocated from commandPools. So the command buffer usually starts with the not_allocated state. We switch to ready
+/// after it is allocated.
+/// It can transition from ready -> recording. In recoding you can issue commands to the command buffer. When you are done
+/// you transition to recording_end. Once you are there you can submit the command buffer for execution. It is in this state
+/// till the command buffer has finished executing and it returns to the ready state.
+/// the in_render_pass is only used for command_buffers that are used in a render pass
 pub const CommandBufferState = enum(u8) {
     ready,
     recording,

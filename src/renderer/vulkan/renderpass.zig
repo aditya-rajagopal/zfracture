@@ -139,7 +139,9 @@ pub fn destroy(self: *RenderPass, ctx: *const Context) void {
 pub fn begin(self: *RenderPass, command_buffer: *CommandBuffer, frame_buffer: vk.Framebuffer) void {
     // TODO: make this configurable
     var clear_values: [2]vk.ClearValue = undefined;
-    @memset(clear_values[0..2], 0);
+    @memset(clear_values[0..2], vk.ClearValue{
+        .color = .{ .int_32 = [_]i32{ 0, 0, 0, 0 } },
+    });
     clear_values[0].color.float_32 = self.clear_colour;
     clear_values[1].depth_stencil.depth = self.depth;
     clear_values[1].depth_stencil.stencil = self.stencil;
@@ -149,8 +151,8 @@ pub fn begin(self: *RenderPass, command_buffer: *CommandBuffer, frame_buffer: vk
         .framebuffer = frame_buffer,
         .render_area = .{
             .offset = .{
-                .x = self.surface_rect[0],
-                .y = self.surface_rect[1],
+                .x = @intCast(self.surface_rect[0]),
+                .y = @intCast(self.surface_rect[1]),
             },
             .extent = .{
                 .width = self.surface_rect[2],

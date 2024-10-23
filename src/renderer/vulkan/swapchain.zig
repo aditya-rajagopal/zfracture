@@ -2,6 +2,9 @@ const vk = @import("vulkan");
 const T = @import("types.zig");
 const Context = @import("context.zig");
 const image = @import("image.zig");
+const Framebuffer = @import("framebuffer.zig");
+const CommandBuffer = @import("command_buffer.zig");
+const Fence = @import("fence.zig");
 
 const Swapchain = @This();
 
@@ -43,6 +46,10 @@ pub fn deinit(self: *Swapchain) void {
     self.ctx.device.handle.destroySwapchainKHR(self.handle, null);
 }
 
+pub fn wait_for_all_fences(self: *Swapchain) void {
+    for (self.images) |*si| _ = si.fence.wait(self.ctx, std.math.maxInt(u64));
+}
+
 fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR) !Swapchain {
     var swapchain: Swapchain = undefined;
 
@@ -59,6 +66,7 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
     if (capabilities.current_extent.width != std.math.maxInt(u32)) {
         actual_extent = capabilities.current_extent;
     }
+
     actual_extent.width = std.math.clamp(
         actual_extent.width,
         capabilities.min_image_extent.width,
@@ -113,14 +121,36 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
     swapchain.handle = handle;
     swapchain.max_frames_in_flight = @truncate(image_count - 1);
 
-    swapchain.current_image_index = 0;
     swapchain.images = try init_swapchain_images(ctx, swapchain.handle, swapchain.image_format.format);
     errdefer {
-        for (swapchain.images) |swap_image| {
+        for (swapchain.images) |*swap_image| {
             swap_image.deinit(ctx);
         }
         ctx.allocator.free(swapchain.images);
     }
+
+    swapchain.next_image_acquired = try ctx.device.handle.createSemaphore(&.{}, null);
+    errdefer ctx.device.handle.destroySemaphore(swapchain.next_image_acquired, null);
+
+    const result = try ctx.device.handle.acquireNextImageKHR(
+        swapchain.handle,
+        std.math.maxInt(u64),
+        swapchain.next_image_acquired,
+        .null_handle,
+    );
+
+    if (result.result != .success) {
+        return error.ImageAcquiredFailed;
+    }
+
+    std.mem.swap(
+        vk.Semaphore,
+        &swapchain.images[result.image_index].image_available_semephore,
+        &swapchain.next_image_acquired,
+    );
+
+    swapchain.current_image_index = result.image_index;
+
     // TODO: Is this something we can recover from?
     swapchain.depth_format = try ctx.detect_depth_format();
 
@@ -135,86 +165,107 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
         true,
         .{ .depth_bit = true },
     );
-    ctx.log.debug("Swapchain Created Successfully!", .{});
+    ctx.log.debug("Swapchain Created Successfully!: current_image: {d}", .{swapchain.current_image_index});
     swapchain.ctx = ctx;
     return swapchain;
 }
 
 fn destroy_all_but_swapchain(self: *Swapchain) void {
     image.destroy_image(self.ctx, &self.depth_attachement);
-    for (self.images) |swap_image| {
+    for (self.images) |*swap_image| {
         swap_image.deinit(self.ctx);
     }
     self.ctx.allocator.free(self.images);
+    self.ctx.device.handle.destroySemaphore(self.next_image_acquired, null);
 }
 
 pub fn recreate(self: *Swapchain, new_extent: vk.Extent2D) !void {
     const old_handle = self.handle;
     self.destroy_all_but_swapchain();
-    self.* = create(self.ctx, new_extent, old_handle);
+    self.* = try create(self.ctx, new_extent, old_handle);
 }
 
-pub fn present(ctx: *Context) Context.Device.QueuePresentKHRError!void {
+pub const SwapchainPresentError =
+    T.LogicalDevice.QueuePresentKHRError || T.LogicalDevice.QueueSubmitError || error{FailedToPresentSwapchain};
+
+pub fn present(self: *Swapchain, command_buffer: *CommandBuffer) SwapchainPresentError!bool {
     // NOTE: We need to return the image to the swapchain for presentation
-    const current_image = ctx.swapchain.get_current_swap_image();
+    const current_image = self.get_current_swap_image();
+
+    const wait_stage: vk.PipelineStageFlags = .{ .color_attachment_output_bit = true };
+    const queue_submit_info = vk.SubmitInfo{
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = @ptrCast(&current_image.image_available_semephore),
+        .command_buffer_count = 1,
+        .p_command_buffers = @ptrCast(&command_buffer.handle.handle),
+        .signal_semaphore_count = 1,
+        .p_signal_semaphores = @ptrCast(&current_image.queue_complete_semephore),
+        .p_wait_dst_stage_mask = @ptrCast(&wait_stage),
+    };
+
+    try self.ctx.device.handle.queueSubmit(
+        self.ctx.device.queues.graphics.handle,
+        1,
+        @ptrCast(&queue_submit_info),
+        current_image.fence.handle,
+    );
+
+    command_buffer.update_submitted();
 
     const present_info = vk.PresentInfoKHR{
         .p_next = null,
         .p_results = null,
         .wait_semaphore_count = 1,
-        .p_wait_semaphores = @ptrCast(current_image.render_complete_semephore),
+        .p_wait_semaphores = @ptrCast(&current_image.queue_complete_semephore),
         .swapchain_count = 1,
-        .p_swapchains = @ptrCast(&ctx.swachain.handle),
-        .p_image_indices = @ptrCast(&ctx.swapchain.current_image_index),
+        .p_swapchains = @ptrCast(&self.handle),
+        .p_image_indices = @ptrCast(&self.current_image_index),
     };
 
-    const present_queue_handle = ctx.physical_device.queues.present_queue.handle;
-    const result = ctx.device.queuePresentKHR(present_queue_handle, &present_info) catch |err| switch (err) {
-        error.OutOfDateKHR => {
-            recreate(ctx, ctx.framebuffer_extent);
-        },
+    const present_queue_handle = self.ctx.device.queues.present.handle;
+    const result = self.ctx.device.handle.queuePresentKHR(present_queue_handle, &present_info) catch |err| switch (err) {
+        error.OutOfDateKHR => .suboptimal_khr,
         else => |overflow| return overflow,
     };
 
     switch (result) {
         .success => {},
-        .suboptimal_khr => {
-            recreate(ctx, ctx.framebuffer_extent);
-        },
+        .suboptimal_khr => return false,
         else => {
             return error.FailedToPresentSwapchain;
         },
     }
 
-    // TODO: Get the next image in the swapchain here?
-}
-
-fn get_current_swap_image(self: *Swapchain) *const SwapImage {
-    return &self.images[self.current_image_index];
-}
-
-/// Gets the next image in the swapchain. Need to handle the OutOfDateKHR
-/// If you get the OutOfDateKHR error you need to boot out of the render loop and try again. It is not a falal error.
-pub fn get_next_image(ctx: *const Context, timeout_ns: u64) (error{ImageAcquiredFailed} || Context.Device.AcquireNextImageKHRError)!u32 {
-    const result = ctx.device.acquireNextImageKHR(
-        ctx.swapchain.handle,
-        timeout_ns,
-        ctx.swapchain.next_image_acquired,
+    const next_image = self.ctx.device.handle.acquireNextImageKHR(
+        self.handle,
+        std.math.maxInt(u64),
+        self.next_image_acquired,
         .null_handle,
     ) catch |err| switch (err) {
-        error.OutOfDateKHR => {
-            // NOTE: We need to recreate the swapchain and boot out of the render loop
-            recreate(ctx, ctx.framebuffer_extent);
-            return error.OutOfDateKHR;
+        error.OutOfDateKHR => T.LogicalDevice.AcquireNextImageKHRResult{ .result = .suboptimal_khr, .image_index = 0 },
+        else => {
+            self.ctx.log.err("Vulkan swapchain present failed getting next image: {s}", .{@errorName(err)});
+            return false;
         },
-        else => |overflow| return overflow,
     };
 
-    // NOTE: This is a fatal error
-    if (result.result != .success and result.result == .suboptimal_khr) {
-        return error.ImageAcquiredFailed;
+    switch (next_image.result) {
+        .success => {},
+        .suboptimal_khr => return false,
+        else => unreachable,
     }
-    return result.image_index;
+
+    std.mem.swap(
+        vk.Semaphore,
+        &self.images[next_image.image_index].image_available_semephore,
+        &self.next_image_acquired,
+    );
+    self.current_image_index = next_image.image_index;
+    return true;
+}
+
+pub fn get_current_swap_image(self: *Swapchain) *SwapImage {
+    return &self.images[self.current_image_index];
 }
 
 const SwapImage = struct {
@@ -222,8 +273,8 @@ const SwapImage = struct {
     // NOTE: In vulkan we work with image views
     view: vk.ImageView,
     image_available_semephore: vk.Semaphore,
-    render_complete_semephore: vk.Semaphore,
-    fence: vk.Fence,
+    queue_complete_semephore: vk.Semaphore,
+    fence: Fence,
 
     pub fn init(ctx: *const Context, image_handle: vk.Image, format: vk.Format) !SwapImage {
         const view = try image.create_image_view(ctx, image_handle, format, .{ .color_bit = true });
@@ -235,25 +286,30 @@ const SwapImage = struct {
         const render_complete_sem = try ctx.device.handle.createSemaphore(&.{}, null);
         errdefer ctx.device.handle.destroySemaphore(render_complete_sem, null);
 
+        // NOTE: We create the fence in the signaled state indicating that this image has already been "rendered"
+        // this is to prevent the application waiting indefinitely to get the first frame since you cant render to
+        // a frame until it has been rendered to already and the fence is signaled
+        const fence = try Fence.create(ctx, true);
+
         return SwapImage{
             .image = image_handle,
             .view = view,
             .image_available_semephore = image_available_sem,
-            .render_complete_semephore = render_complete_sem,
-            .fence = .null_handle,
+            .queue_complete_semephore = render_complete_sem,
+            .fence = fence,
         };
     }
 
-    pub fn deinit(self: SwapImage, ctx: *const Context) void {
-        // self.waitForFence(ctx);
+    pub fn deinit(self: *SwapImage, ctx: *const Context) void {
+        // NOTE: We wait for all the fences on all images to be unlocked before we start destroying images
+        if (!self.fence.wait(ctx, std.math.maxInt(u64))) return;
         ctx.device.handle.destroyImageView(self.view, null);
+        self.view = .null_handle;
         ctx.device.handle.destroySemaphore(self.image_available_semephore, null);
-        ctx.device.handle.destroySemaphore(self.render_complete_semephore, null);
-        // ctx.device.destroyFence(self.fence, null);
-    }
-
-    fn waitForFence(self: SwapImage, ctx: *const Context) !void {
-        _ = try ctx.device.waitForFences(1, @ptrCast(&self.frame_fence), vk.TRUE, std.math.maxInt(u64));
+        self.image_available_semephore = .null_handle;
+        ctx.device.handle.destroySemaphore(self.queue_complete_semephore, null);
+        self.queue_complete_semephore = .null_handle;
+        self.fence.destroy(ctx);
     }
 };
 
@@ -266,7 +322,7 @@ fn init_swapchain_images(ctx: *const Context, swapchain: vk.SwapchainKHR, format
     errdefer ctx.allocator.free(swap_images);
 
     var i: usize = 0;
-    errdefer for (swap_images[0..i]) |si| si.deinit(ctx);
+    errdefer for (swap_images[0..i]) |*si| si.deinit(ctx);
 
     for (images) |image_handle| {
         swap_images[i] = try SwapImage.init(ctx, image_handle, format);

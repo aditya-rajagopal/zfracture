@@ -3,8 +3,10 @@ pub const Fracture = struct {
     event: Event,
     input: Input,
     log_config: log.LogConfig,
-    width: i32 = 1280,
-    height: i32 = 720,
+    extent: math.Extent = .{
+        .width = 1280,
+        .height = 720,
+    },
     last_time: f64 = 0,
     delta_time: f64 = 0,
     is_suspended: bool = false,

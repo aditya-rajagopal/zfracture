@@ -48,7 +48,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     const app: *Application = try allocator.create(Application);
     errdefer allocator.destroy(app);
 
-    app.engine.is_running = true;
+    app.engine.is_running = false;
     app.engine.is_suspended = false;
     const app_config = application_config;
     switch (builtin.mode) {
@@ -124,7 +124,13 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Renderer
     const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
-    try app.frontend.init(renderer_allocator, app_config.application_name, &app.platform_state, &app.engine.log_config);
+    try app.frontend.init(
+        renderer_allocator,
+        app_config.application_name,
+        &app.platform_state,
+        &app.engine.log_config,
+        &app.engine.extent,
+    );
     errdefer app.frontend.deinit();
     app.log.info("Renderer initialized", .{});
 
@@ -141,6 +147,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     const end = start.read();
 
     app.log.info("Engine has been initialized in {s}", .{std.fmt.fmtDuration(end)});
+    app.engine.is_running = true;
     return app;
 }
 
@@ -270,9 +277,28 @@ pub fn on_event(self: *Application, comptime event_code: core.Event.EventCode, e
         },
         .WINDOW_RESIZE => {
             const window_resize_data: core.Event.WindowResizeEventData = @bitCast(event_data);
-            self.engine.width = window_resize_data.size.width;
-            self.engine.height = window_resize_data.size.height;
-            _ = self.engine.event.fire(.WINDOW_RESIZE, &self.engine, event_data);
+            const w = window_resize_data.size.width;
+            const h = window_resize_data.size.height;
+            if (self.engine.extent.width != w or self.engine.extent.height != h) {
+                self.engine.extent.width = w;
+                self.engine.extent.height = h;
+                self.log.trace("window_resized: w/h: {d}/{d}", .{ self.engine.extent.width, self.engine.extent.height });
+                if (w == 0 or h == 0) {
+                    self.log.info("Application has been minimized/suspended\n", .{});
+                    self.engine.is_suspended = true;
+                    return;
+                } else {
+                    if (self.engine.is_suspended) {
+                        self.log.info("Application has been restored\n", .{});
+                        self.engine.is_suspended = false;
+                    }
+
+                    if (self.engine.is_running) {
+                        _ = self.engine.event.fire(.WINDOW_RESIZE, &self.engine, event_data);
+                        self.frontend.on_resize(self.engine.extent);
+                    }
+                }
+            }
         },
         else => {},
     }

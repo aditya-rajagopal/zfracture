@@ -4,11 +4,15 @@
 //      - [ ] This needs to be configurable from the engine/game
 const vk = @import("vulkan");
 const T = @import("types.zig");
+const math = @import("fr_core").math;
 
 const platform = @import("platform.zig");
 const Device = @import("device.zig");
 const Swapchain = @import("swapchain.zig");
 const RenderPass = @import("renderpass.zig");
+const CommandBuffer = @import("command_buffer.zig");
+const Framebuffer = @import("framebuffer.zig");
+const Fence = @import("fence.zig");
 
 const Context = @This();
 
@@ -23,11 +27,18 @@ debug_messenger: vk.DebugUtilsMessengerEXT,
 surface: vk.SurfaceKHR,
 device: Device,
 mem_props: vk.PhysicalDeviceMemoryProperties,
+cached_framebuffer_extent: vk.Extent2D,
 framebuffer_extent: vk.Extent2D,
+framebuffer_size_generation: u32,
+last_framebuffer_generation: u32,
 swapchain: Swapchain,
 recreating_swapchain: bool,
+images_in_flight: []?*Fence,
 current_frame: u32,
 main_render_pass: RenderPass,
+graphics_command_buffers: []CommandBuffer,
+
+framebuffers: []Framebuffer,
 
 pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
@@ -39,7 +50,9 @@ pub const Error =
     T.BaseDispatch.CreateInstanceError ||
     Device.Error ||
     Swapchain.Error ||
-    RenderPass.Error;
+    RenderPass.Error ||
+    CommandBuffer.Error ||
+    Framebuffer.Error;
 
 pub fn init(
     self: *Context,
@@ -47,6 +60,7 @@ pub fn init(
     application_name: [:0]const u8,
     plat_state: *anyopaque,
     log: T.RendererLog,
+    framebuffer_extent: *const math.Extent,
 ) Error!void {
     const internal_plat_state: *T.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     self.log = log;
@@ -59,14 +73,17 @@ pub fn init(
         vk.PfnGetInstanceProcAddr,
         "vkGetInstanceProcAddr",
     ) orelse return Error.FailedProcAddrPFN;
-    self.log.debug("Vulkan Library Opened Successfully", .{});
+    self.log.info("Vulkan Library Opened Successfully", .{});
 
     // ========================================== SETUP BASICS =================================/
 
     self.vkb = try T.BaseDispatch.load(self.vkGetInstanceProcAddr);
     self.allocator = allocator;
-    self.framebuffer_extent = .{ .width = 1280, .height = 720 };
-    self.log.debug("Loaded Base Dispatch", .{});
+    self.cached_framebuffer_extent = .{ .width = 0, .height = 0 };
+    self.framebuffer_extent.width = if (framebuffer_extent.width != 0) framebuffer_extent.width else 800;
+    self.framebuffer_extent.height = if (framebuffer_extent.height != 0) framebuffer_extent.height else 600;
+
+    self.log.info("Loaded Base Dispatch", .{});
 
     // ============================================ INSTANCE ====================================/
     try self.create_instance(application_name);
@@ -74,7 +91,7 @@ pub fn init(
         self.instance.destroyInstance(null);
         self.allocator.destroy(self.instance.wrapper);
     }
-    self.log.debug("Instance Created", .{});
+    self.log.info("Instance Created", .{});
 
     // ========================================== DEBUGGER ======================================/
     try self.create_debugger();
@@ -87,19 +104,27 @@ pub fn init(
             self.instance.destroySurfaceKHR(self.surface, null);
         }
     }
-    self.log.debug("Surface Created", .{});
+    self.log.info("Surface Created", .{});
 
     // ====================================== DEVICE ==========================================/
     self.device = try Device.create(self);
     errdefer self.device.destroy(self);
-    self.log.debug("Device created", .{});
+    self.log.info("Device created", .{});
     self.mem_props = self.instance.getPhysicalDeviceMemoryProperties(self.device.pdev);
 
     // ====================================== SWAPCHAIN ========================================/
     self.swapchain = try Swapchain.init(self, self.framebuffer_extent);
     self.current_frame = 0;
+    self.framebuffers = try self.allocator.alloc(Framebuffer, self.swapchain.images.len);
     errdefer self.swapchain.deinit();
+    self.recreating_swapchain = false;
 
+    self.images_in_flight = try self.allocator.alloc(?*Fence, self.swapchain.images.len);
+    for (self.images_in_flight) |*img| {
+        img.* = null;
+    }
+
+    // ==================================== MAIN RENDERPASS ====================================/
     self.main_render_pass = try RenderPass.create(
         self,
         [_]u32{ 0, 0, self.framebuffer_extent.width, self.framebuffer_extent.height },
@@ -107,45 +132,173 @@ pub fn init(
         1.0,
         0.0,
     );
-    errdefer self.main_render_pass.destroy();
-    self.log.debug("Main Renderpass Created", .{});
+    errdefer self.main_render_pass.destroy(self);
+    self.log.info("Main Renderpass Created", .{});
+
+    // ==================================== FRAMEBUFFERS ====================================/
+    try self.regen_framebuffers();
+    errdefer self.destroy_framebuffers();
+    self.log.info("Framebuffers Created", .{});
+
+    // ==================================== GRAPHICS COMMANDBUFFER ============================/
+    self.graphics_command_buffers = try self.allocate_command_buffers();
+    errdefer self.free_commmand_buffers();
+    self.log.info("Graphics CommandBuffers Allocated", .{});
+    self.framebuffer_size_generation = 0;
+    self.last_framebuffer_generation = 0;
 }
 
 pub fn deinit(self: *Context) void {
-    self.main_render_pass.destroy(self);
-    self.log.debug("Main Renderpass Destroyed", .{});
+    self.swapchain.wait_for_all_fences();
+    self.device.handle.deviceWaitIdle() catch unreachable;
 
+    self.free_commmand_buffers();
+    self.log.info("Graphics CommandBuffers Freed", .{});
+
+    self.destroy_framebuffers();
+    self.log.info("Framebuffers destroyed", .{});
+
+    self.main_render_pass.destroy(self);
+    self.log.info("Main Renderpass Destroyed", .{});
+
+    self.allocator.free(self.images_in_flight);
     self.swapchain.deinit();
-    self.log.debug("Swapchain Destroyed", .{});
+    self.allocator.free(self.framebuffers);
+    self.log.info("Swapchain Destroyed", .{});
 
     self.device.destroy(self);
-    self.log.debug("Device Destroyed", .{});
+    self.log.info("Device Destroyed", .{});
 
     if (self.surface != .null_handle) {
         self.instance.destroySurfaceKHR(self.surface, null);
-        self.log.debug("Surface Destroyed", .{});
+        self.log.info("Surface Destroyed", .{});
     }
 
     self.destroy_debugger();
 
     self.instance.destroyInstance(null);
     self.allocator.destroy(self.instance.wrapper);
-    self.log.debug("Instance Destroyed", .{});
+    self.log.info("Instance Destroyed", .{});
 
     self.vulkan_lib.close();
-    self.log.debug("Vulkan Library Closed", .{});
+    self.log.info("Vulkan Library Closed", .{});
 }
 
 pub fn begin_frame(self: *Context, delta_time: f32) bool {
-    _ = self;
     _ = delta_time;
+    const device = &self.device.handle;
+
+    if (self.recreating_swapchain) {
+        device.deviceWaitIdle() catch |err| {
+            self.log.err("Vulkan Begin frame waitForIdle failed: {s}", .{@errorName(err)});
+            return false;
+        };
+
+        self.log.info("Recreating Swapchain", .{});
+        return false;
+    }
+
+    if (self.framebuffer_size_generation != self.last_framebuffer_generation) {
+        device.deviceWaitIdle() catch |err| {
+            self.log.err("Vulkan Begin frame waitForIdle failed: {s}", .{@errorName(err)});
+            return false;
+        };
+
+        // Swapchain recreation can fail because window was minimized
+        _ = self.recreate_swapchain() catch |err| {
+            self.log.err("Vulkan begin frame swapchain recreation failed: {s}", .{@errorName(err)});
+            return false;
+        };
+
+        self.log.info("Swapchain resized. Skipping frame", .{});
+        return false;
+    }
+
+    const current_image = self.swapchain.get_current_swap_image();
+    if (!current_image.fence.wait(self, std.math.maxInt(u64))) {
+        self.log.warn("In-flight fence wait failed", .{});
+        return false;
+    }
+    current_image.fence.reset(self) catch |err| {
+        self.log.err("Vulkan Begin frame current image fence reset failed: {s}", .{@errorName(err)});
+        return false;
+    };
+
+    const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
+    command_buffer.reset();
+    command_buffer.begin(false, false, false) catch |err| {
+        self.log.err("Vulkan Begin frame command buffer failed failed: {s}", .{@errorName(err)});
+        return false;
+    };
+
+    // NOTE: We are setting the y dimension here to the framebuffer height so that the bottom left is the 0, 0
+    // to be consistent with OpenGL
+    // TODO: Should this be 0, 0 on the top left?
+    const viewport = vk.Viewport{
+        .x = 0.0,
+        .y = @floatFromInt(self.framebuffer_extent.height),
+        .width = @floatFromInt(self.framebuffer_extent.width),
+        .height = -@as(f32, @floatFromInt(self.framebuffer_extent.width)),
+        .min_depth = 0.0,
+        .max_depth = 1.0,
+    };
+
+    const scissor = vk.Rect2D{
+        .offset = .{ .x = 0, .y = 0 },
+        .extent = self.framebuffer_extent,
+    };
+
+    command_buffer.handle.setViewport(0, 1, @ptrCast(&viewport));
+    command_buffer.handle.setScissor(0, 1, @ptrCast(&scissor));
+
+    self.main_render_pass.surface_rect[2] = self.framebuffer_extent.width;
+    self.main_render_pass.surface_rect[3] = self.framebuffer_extent.height;
+
+    self.main_render_pass.begin(
+        command_buffer,
+        self.framebuffers[self.swapchain.current_image_index].handle,
+    );
+
     return true;
 }
 
 pub fn end_frame(self: *Context, delta_time: f32) bool {
-    _ = self;
     _ = delta_time;
+
+    const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
+
+    self.main_render_pass.end(command_buffer);
+
+    command_buffer.end() catch |err| {
+        self.log.err("Vulkan end frame command buffer end failed: {s}", .{@errorName(err)});
+        return false;
+    };
+
+    const res = self.swapchain.present(command_buffer) catch |err| {
+        self.log.err("Vulkan swapchain present failed with error: {s}\n", .{@errorName(err)});
+        return false;
+    };
+
+    // NOTE: Only false when swapchain needs to be recreated
+    if (!res) {
+        self.log.info("Swapchain out of date. Recreating swapchain and trying again.", .{});
+        _ = self.recreate_swapchain() catch |err| {
+            self.log.err("Vulkan begin frame swapchain recreation failed: {s}", .{@errorName(err)});
+            return false;
+        };
+        return false;
+    }
+
     return true;
+}
+
+pub fn on_resized(self: *Context, new_extent: math.Extent) void {
+    self.cached_framebuffer_extent = @bitCast(new_extent);
+    self.framebuffer_size_generation +%= 1;
+    self.log.info(
+        "Vulkan on_resize: w/h/gen: {d}/{d}/{d}",
+        .{ self.cached_framebuffer_extent.width, self.cached_framebuffer_extent.height, self.framebuffer_size_generation },
+    );
 }
 
 pub fn detect_depth_format(ctx: *const Context) !vk.Format {
@@ -176,15 +329,98 @@ pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: v
         }
     }
 
-    self.log.debug("WARNING: unable to find memory type", .{});
+    self.log.info("WARNING: unable to find memory type", .{});
     return error.NotSuitableMemoryType;
+}
+
+fn recreate_swapchain(self: *Context) !bool {
+    if (self.recreating_swapchain) {
+        self.log.debug("Already recreating swapchain. Booting", .{});
+        return false;
+    }
+
+    if (self.framebuffer_extent.width == 0 or self.framebuffer_extent.height == 0) {
+        return false;
+    }
+
+    self.recreating_swapchain = true;
+
+    self.device.handle.deviceWaitIdle() catch return false;
+
+    if (self.cached_framebuffer_extent.width != 0 and self.cached_framebuffer_extent.height != 0) {
+        self.framebuffer_extent = self.cached_framebuffer_extent;
+    }
+
+    try self.swapchain.recreate(self.framebuffer_extent);
+
+    self.main_render_pass.surface_rect[2] = self.framebuffer_extent.width;
+    self.main_render_pass.surface_rect[3] = self.framebuffer_extent.height;
+
+    self.cached_framebuffer_extent = .{ .width = 0, .height = 0 };
+
+    self.last_framebuffer_generation = self.framebuffer_size_generation;
+
+    self.free_commmand_buffers();
+    self.destroy_framebuffers();
+
+    try self.regen_framebuffers();
+    self.graphics_command_buffers = try self.allocate_command_buffers();
+
+    self.recreating_swapchain = false;
+
+    return true;
+}
+
+pub fn regen_framebuffers(self: *Context) Framebuffer.Error!void {
+    var i: usize = 0;
+    errdefer for (self.framebuffers[0..i]) |*fb| fb.destroy(self);
+
+    for (self.swapchain.images) |*img| {
+        const attachments = [_]vk.ImageView{
+            img.view,
+            self.swapchain.depth_attachement.view,
+        };
+        self.framebuffers[i] = try Framebuffer.create(
+            self,
+            &self.main_render_pass,
+            self.framebuffer_extent,
+            &attachments,
+        );
+        i += 1;
+    }
+}
+
+fn destroy_framebuffers(self: *Context) void {
+    for (self.framebuffers) |*fb| {
+        fb.destroy(self);
+    }
+}
+
+// TODO: make these array lists so that memory can be reused and not allocated and destroyed everytime swapchain is recreated
+fn free_commmand_buffers(self: *Context) void {
+    for (self.graphics_command_buffers) |*buf| {
+        buf.free(self);
+    }
+    self.allocator.free(self.graphics_command_buffers);
+}
+
+fn allocate_command_buffers(self: *const Context) ![]CommandBuffer {
+    // NOTE: We need 1 command buffer per swapchain image
+    const cmd_buffers = try self.allocator.alloc(CommandBuffer, self.swapchain.images.len);
+    errdefer self.allocator.free(cmd_buffers);
+
+    for (cmd_buffers) |*buf| {
+        buf.* = try CommandBuffer.allocate(self, self.device.graphics_command_pool, true);
+    }
+
+    return cmd_buffers;
 }
 
 fn destroy_debugger(self: *Context) void {
     switch (builtin.mode) {
         .Debug => {
             self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
-            self.log.debug("Debugger Destroyed", .{});
+            self.log.info("Debugger Destroyed", .{});
         },
         else => {},
     }
@@ -250,9 +486,9 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
         .Debug => {
             required_extensions.appendAssumeCapacity("VK_EXT_debug_utils");
             // TODO: Replace this with core_log
-            self.log.debug("Required Extensions: ", .{});
+            self.log.info("Required Extensions: ", .{});
             for (required_extensions.items, 0..) |ext, i| {
-                self.log.debug("\t{d}. {s}", .{ i, ext });
+                self.log.info("\t{d}. {s}", .{ i, ext });
             }
         },
         else => {},
@@ -268,7 +504,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
     switch (builtin.mode) {
         .Debug => {
             // TODO: replace the prints with core_log somehow
-            self.log.debug("Enabled validations", .{});
+            self.log.info("Enabled validations", .{});
 
             layers.appendAssumeCapacity("VK_LAYER_KHRONOS_validation");
 
@@ -279,7 +515,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
             _ = try self.vkb.enumerateInstanceLayerProperties(&available_count, available_layers.ptr);
 
             for (layers.items) |layer| {
-                self.log.debug("\tSearching for: {s}...", .{layer});
+                self.log.info("\tSearching for: {s}...", .{layer});
                 const length = std.mem.len(layer);
                 var found: bool = false;
                 for (available_layers) |avail_layer| {
@@ -287,7 +523,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
                     if (alength != length) continue;
                     if (std.mem.eql(u8, layer[0..length], avail_layer.layer_name[0..length])) {
                         found = true;
-                        self.log.debug("FOUND!", .{});
+                        self.log.info("FOUND!", .{});
                         break;
                     }
                 }

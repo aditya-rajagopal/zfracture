@@ -286,8 +286,8 @@ pub const MouseMoveEventData = packed struct(u128) {
 /// Representation of EventData for WindowResize
 pub const WindowResizeEventData = packed struct(u128) {
     /// The new window size
-    size: packed struct(i32) { width: i16 = 0, height: i16 = 0 },
-    _unused: u96 = 0,
+    size: packed struct(u64) { width: u32 = 0, height: u32 = 0 },
+    _unused: u64 = 0,
 };
 
 /// When the application wants to send around custom data they can either manage it on the application side
