@@ -18,8 +18,8 @@ pub const Error = T.LogicalDevice.CreateRenderPassError;
 
 pub fn create(
     ctx: *const Context,
-    window_rect: m.Rect,
-    clear_colour: m.Colour,
+    window_rect: [4]u32,
+    clear_colour: [4]f32,
     depth: f32,
     stencil: u32,
 ) !RenderPass {
