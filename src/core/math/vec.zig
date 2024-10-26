@@ -14,14 +14,13 @@ pub fn Vec2(comptime backing_type: type) type {
         pub const Array = [dim]backing_type;
 
         const Self = @This();
-
         const Mixins = VectorMixins(T, Self, dim);
+
         pub const zeros: Self = Mixins.zeros;
         pub const ones: Self = Mixins.ones;
-        pub const left: Self = Self.init(-1.0, 0.0);
-        pub const right: Self = Self.init(1.0, 0.0);
-        pub const down: Self = Self.init(0.0, -1.0);
-        pub const up: Self = Self.init(0.0, 1.0);
+        pub const x_basis: Self = Self.init(1.0, 0.0);
+        pub const y_basis: Self = Self.init(0.0, 1.0);
+        // pub const basis: Mat2x2(T) = Mat2x2(T).init(.{1.0, 0.0}, .{0.0, 1.0});
 
         pub inline fn init(_x: T, _y: T) Self {
             return .{ .vec = .{ _x, _y } };
@@ -47,6 +46,8 @@ pub fn Vec2(comptime backing_type: type) type {
         pub const sub = Mixins.sub;
         pub const mul = Mixins.mul;
         pub const div = Mixins.div;
+        pub const fmadd = Mixins.fmadd;
+        pub const fmadd2 = Mixins.fmadd2;
         pub const splat = Mixins.splat;
         pub const adds = Mixins.adds;
         pub const subs = Mixins.subs;
@@ -60,7 +61,10 @@ pub fn Vec2(comptime backing_type: type) type {
         pub const reflect = Mixins.reflect;
         pub const inv_norm = Mixins.inv_norm;
         pub const normalize = Mixins.normalize;
+        pub const dist = Mixins.dist;
+        pub const dist2 = Mixins.dist2;
         pub const negate = Mixins.negate;
+        pub const mid_point = Mixins.mid_point;
         pub const min = Mixins.min;
         pub const max = Mixins.max;
         pub const clamp = Mixins.clamp;
@@ -92,12 +96,9 @@ pub fn Vec3(comptime backing_type: type) type {
         const Mixins = VectorMixins(T, Self, dim);
         pub const zeros: Self = Mixins.zeros;
         pub const ones: Self = Mixins.ones;
-        pub const left: Self = Self.init(-1.0, 0.0, 0.0);
-        pub const right: Self = Self.init(1.0, 0.0, 0.0);
-        pub const down: Self = Self.init(0.0, -1.0, 0.0);
-        pub const up: Self = Self.init(0.0, 1.0, 0.0);
-        pub const forward: Self = Self.init(0.0, 0.0, 1.0);
-        pub const backward: Self = Self.init(0.0, 0.0, -1.0);
+        pub const x_basis: Self = Self.init(1.0, 0.0, 0.0);
+        pub const y_basis: Self = Self.init(0.0, 1.0, 0.0);
+        pub const z_basis: Self = Self.init(0.0, 0.0, 1.0);
 
         pub inline fn init(_x: T, _y: T, _z: T) Self {
             return .{ .vec = .{ _x, _y, _z } };
@@ -115,6 +116,10 @@ pub fn Vec3(comptime backing_type: type) type {
             return self.vec[2];
         }
 
+        pub inline fn to_vec4(self: *const Self) Vec4(T) {
+            return .{ .vec = .{ self.vec[0], self.vec[1], self.vec[2], 1.0 } };
+        }
+
         pub inline fn swizzle(a: *const Self, x_comp: Component, y_comp: Component, z_comp: Component) Self {
             return .{ .vec = @shuffle(
                 T,
@@ -122,6 +127,41 @@ pub fn Vec3(comptime backing_type: type) type {
                 undefined,
                 [3]i32{ @intFromEnum(x_comp), @intFromEnum(y_comp), @intFromEnum(z_comp) },
             ) };
+        }
+
+        pub inline fn splat_x(self: *const Self) Self {
+            return self.swizzle(.x, .x, .x);
+        }
+
+        pub inline fn splat_y(self: *const Self) Self {
+            return self.swizzle(.y, .y, .y);
+        }
+
+        pub inline fn splat_z(self: *const Self) Self {
+            return self.swizzle(.z, .z, .z);
+        }
+
+        pub inline fn cross(v1: *const Self, v2: *const Self) Self {
+            const x0 = v1.swizzle(.y, .z, .x);
+            const x2 = x0.mul(v1).swizzle(.y, .z, .x);
+            const x3 = x0.mul(&v2.swizzle(.z, .x, .y));
+            return x3.sub(&x2);
+        }
+
+        pub inline fn angle_between(v1: *const Self, v2: *const Self) f32 {
+            const dot_ = v1.dot(v2);
+            const norm_ = v1.cross(v2).norm();
+            return std.math.atan2(norm_, dot_);
+        }
+
+        pub inline fn mat_mul(vector: *const Self, m: *const Mat3x3(T)) Self {
+            var result: Self = undefined;
+            inline for (0..3) |i| {
+                inline for (0..3) |j| {
+                    result.vec[i] += vector.vec[j] * m.c[i].vec[j];
+                }
+            }
+            return result;
         }
 
         pub const init_slice = Mixins.init_slice;
@@ -132,6 +172,8 @@ pub fn Vec3(comptime backing_type: type) type {
         pub const sub = Mixins.sub;
         pub const mul = Mixins.mul;
         pub const div = Mixins.div;
+        pub const fmadd = Mixins.fmadd;
+        pub const fmadd2 = Mixins.fmadd2;
         pub const splat = Mixins.splat;
         pub const adds = Mixins.adds;
         pub const subs = Mixins.subs;
@@ -145,7 +187,10 @@ pub fn Vec3(comptime backing_type: type) type {
         pub const reflect = Mixins.reflect;
         pub const inv_norm = Mixins.inv_norm;
         pub const normalize = Mixins.normalize;
+        pub const dist = Mixins.dist;
+        pub const dist2 = Mixins.dist2;
         pub const negate = Mixins.negate;
+        pub const mid_point = Mixins.mid_point;
         pub const min = Mixins.min;
         pub const max = Mixins.max;
         pub const clamp = Mixins.clamp;
@@ -177,6 +222,10 @@ pub fn Vec4(comptime backing_type: type) type {
         const Mixins = VectorMixins(T, Self, dim);
         pub const zeros: Self = Mixins.zeros;
         pub const ones: Self = Mixins.ones;
+        pub const x_basis: Self = Self.init(1.0, 0.0, 0.0, 0.0);
+        pub const y_basis: Self = Self.init(0.0, 1.0, 0.0, 0.0);
+        pub const z_basis: Self = Self.init(0.0, 0.0, 1.0, 0.0);
+        pub const w_basis: Self = Self.init(0.0, 0.0, 0.0, 1.0);
 
         pub inline fn init(_x: T, _y: T, _z: T, _w: T) Self {
             return .{ .vec = .{ _x, _y, _z, _w } };
@@ -196,6 +245,36 @@ pub fn Vec4(comptime backing_type: type) type {
 
         pub inline fn w(self: *const Self) T {
             return self.vec[3];
+        }
+
+        pub inline fn splat_x(self: *const Self) Self {
+            return self.swizzle(.x, .x, .x, .x);
+        }
+
+        pub inline fn splat_y(self: *const Self) Self {
+            return self.swizzle(.y, .y, .y, .y);
+        }
+
+        pub inline fn splat_z(self: *const Self) Self {
+            return self.swizzle(.z, .z, .z, .z);
+        }
+
+        pub inline fn splat_w(self: *const Self) Self {
+            return self.swizzle(.w, .w, .w, .w);
+        }
+
+        pub inline fn to_vec3(self: *const Self) Vec3(T) {
+            return .{ .vec = .{ self.vec[0], self.vec[1], self.vec[2] } };
+        }
+
+        pub inline fn mat_mul(vector: *const Self, m: *const Mat3x3(T)) Self {
+            var result: Self = undefined;
+            inline for (0..4) |i| {
+                inline for (0..4) |j| {
+                    result.vec[i] += vector.vec[j] * m.c[i].vec[j];
+                }
+            }
+            return result;
         }
 
         pub inline fn swizzle(
@@ -221,6 +300,8 @@ pub fn Vec4(comptime backing_type: type) type {
         pub const sub = Mixins.sub;
         pub const mul = Mixins.mul;
         pub const div = Mixins.div;
+        pub const fmadd = Mixins.fmadd;
+        pub const fmadd2 = Mixins.fmadd2;
         pub const splat = Mixins.splat;
         pub const adds = Mixins.adds;
         pub const subs = Mixins.subs;
@@ -231,10 +312,12 @@ pub fn Vec4(comptime backing_type: type) type {
         pub const is_zero = Mixins.is_zero;
         pub const norm2 = Mixins.norm2;
         pub const norm = Mixins.norm;
-        pub const reflect = Mixins.reflect;
         pub const inv_norm = Mixins.inv_norm;
         pub const normalize = Mixins.normalize;
+        pub const dist = Mixins.dist;
+        pub const dist2 = Mixins.dist2;
         pub const negate = Mixins.negate;
+        pub const mid_point = Mixins.mid_point;
         pub const min = Mixins.min;
         pub const max = Mixins.max;
         pub const clamp = Mixins.clamp;
@@ -343,8 +426,20 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
             return a.divs(a.norm() + delta);
         }
 
+        pub inline fn dist2(a: *const VecT, b: *const VecT) T {
+            return a.sub(b).norm2();
+        }
+
+        pub inline fn dist(a: *const VecT, b: *const VecT) T {
+            return a.sub(b).norm();
+        }
+
         pub inline fn negate(a: *const VecT) VecT {
             return .{ .vec = -a.vec };
+        }
+
+        pub inline fn mid_point(a: *const VecT, b: *const VecT) VecT {
+            return a.add(b).muls(0.5);
         }
 
         pub inline fn min(a: *const VecT, b: *const VecT) VecT {
@@ -361,6 +456,24 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
 
         pub inline fn clamp01(a: *const VecT) VecT {
             return a.clamp(0.0, 1.0);
+        }
+
+        /// Returns a.fmadd(&b, &c) => a * b + c
+        pub inline fn fmadd(a: *const VecT, b: *const VecT, c: *const VecT) VecT {
+            if (comptime is_float) {
+                return @mulAdd(VecT.Simd, a, b, c);
+            } else {
+                return a.mul(b).add(c);
+            }
+        }
+
+        /// Returns a.fmadd2(&b, &c) => a + b * c
+        pub inline fn fmadd2(a: *const VecT, b: *const VecT, c: *const VecT) VecT {
+            if (comptime is_float) {
+                return @mulAdd(VecT.Simd, b, c, a);
+            } else {
+                return b.mul(c).add(a);
+            }
         }
 
         pub inline fn lerp(a: *const VecT, b: *const VecT, t: f32) VecT {
@@ -439,5 +552,17 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
     };
 }
 
+test Vec3 {
+    const v3 = Vec3(f32);
+    const a = v3.x_basis;
+    const b = v3.y_basis;
+    std.debug.print("z: {any}\n", .{a.cross(&b)});
+    std.debug.print("z: {any}\n", .{a.angle_between(&b)});
+}
+
+const matrix = @import("matrix.zig");
+const Mat2x2 = matrix.Mat2x2;
+const Mat3x3 = matrix.Mat3x3;
+const Mat4x4 = matrix.Mat4x4;
 const std = @import("std");
 const assert = std.debug.assert;
