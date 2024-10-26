@@ -11,6 +11,8 @@ pub fn Affine(comptime backing_type: type) type {
 
         const Self = @This();
 
+        pub const identity: Self = @bitCast(MatT.identity);
+
         pub inline fn init(c1: *const ColT, c2: *const ColT, c3: *const ColT, c4: *const ColT) Self {
             return .{ .c = .{ c1.*, c2.*, c3.*, c4.* } };
         }
@@ -62,14 +64,46 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
+        pub inline fn init_rotation(axis: *const V3, angle: E) Self {
+            const c = @cos(angle);
+            const s = @sin(angle);
+            const t = 1 - c;
+            const axis_n = axis.normalize(0.00000001).to_vec4(0.0);
+            const tv = axis_n.muls(t);
+            const sv = axis_n.muls(s);
+
+            switch (builtin.mode) {
+                .Debug => {
+                    return .{ .c = .{
+                        .{ .vec = .{ tv.x() * axis_n.x() + c, tv.y() * axis_n.x() + sv.z(), tv.z() * axis_n.x() - sv.y(), 0.0 } },
+                        .{ .vec = .{ tv.x() * axis_n.y() - sv.z(), tv.y() * axis_n.y() + c, tv.z() * axis_n.y() + sv.x(), 0.0 } },
+                        .{ .vec = .{ tv.x() * axis_n.z() + sv.y(), tv.y() * axis_n.z() - sv.x(), tv.z() * axis_n.z() + c, 1.0 } },
+                        .{ .vec = .{ 0.0, 0.0, 0.0, 1.0 } },
+                    } };
+                },
+                else => {
+                    const x = axis_n.mul(&ColT.splat(tv.x()));
+                    const y = axis_n.mul(&ColT.splat(tv.y()));
+                    const z = axis_n.mul(&ColT.splat(tv.z()));
+
+                    return .{ .c = .{
+                        x.add(&ColT.init(c, sv.z(), -sv.y(), 0.0)),
+                        y.add(&ColT.init(-sv.z(), c, sv.x(), 0.0)),
+                        z.add(&ColT.init(sv.y(), -sv.x(), c, 0.0)),
+                        .{ .vec = .{ 0.0, 0.0, 0.0, 1.0 } },
+                    } };
+                }
+            }
+        }
+
         pub inline fn init_rot_x(angle_rad: E) Self {
             const c = @cos(angle_rad);
             const s = @sin(angle_rad);
             return .{
                 .c = .{
                     .{ .vec = .{ 1.0, 0.0, 0.0, 0.0 } },
-                    .{ .vec = .{ 0.0, c, -s, 0.0 } },
-                    .{ .vec = .{ 0.0, s, c, 0.0 } },
+                    .{ .vec = .{ 0.0, c, s, 0.0 } },
+                    .{ .vec = .{ 0.0, -s, c, 0.0 } },
                     .{ .vec = .{ 0.0, 0.0, 0.0, 1.0 } },
                 },
             };
@@ -93,12 +127,25 @@ pub fn Affine(comptime backing_type: type) type {
             const s = @sin(angle_rad);
             return .{
                 .c = .{
-                    .{ .vec = .{ c, -s, 0.0, 0.0 } },
-                    .{ .vec = .{ s, c, 0.0, 0.0 } },
+                    .{ .vec = .{ c, s, 0.0, 0.0 } },
+                    .{ .vec = .{ -s, c, 0.0, 0.0 } },
                     .{ .vec = .{ 0.0, 0.0, 1.0, 0.0 } },
                     .{ .vec = .{ 0.0, 0.0, 0.0, 1.0 } },
                 },
             };
+        }
+
+        pub inline fn init_rot_xyz(x_rad: E, y_rad: E, z_rad: E) Self {
+            const rot_x = Self.init_rot_x(x_rad);
+            const rot_y = Self.init_rot_y(y_rad);
+            const rot_z = Self.init_rot_z(z_rad);
+            return rot_x.mul(&rot_y).mul(&rot_z);
+        }
+
+        pub inline fn init_pivot_rotation(pivot: *const V3, axis: *const V3, angle: E) Self {
+            return Self.init_trans(pivot)
+                .mul(&Self.init_rotation(axis, angle))
+                .mul(Self.init_trans(&pivot.negate()));
         }
 
         pub inline fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Self {
@@ -144,6 +191,28 @@ pub fn Affine(comptime backing_type: type) type {
             }
         }
 
+        // TODO: This seems to be faster in debug builds for multiplying only rotation matrices
+        // Figure out why this is is slower in release builds
+        // pub inline fn mul_rot(m1: *const Self, m2: *const Self) Self {
+        //     // switch (builtin.mode) {
+        //     //     .Debug => {
+        //     var result: Self = Self.identity;
+        //     inline for (0..shape[0] - 1) |r| {
+        //         inline for (0..shape[1] - 1) |c| {
+        //             var sum: E = 0.0;
+        //             inline for (0..RowT.dim) |i| {
+        //                 sum += m1.c[i].vec[r] * m2.c[c].vec[i];
+        //             }
+        //             result.c[c].vec[r] = sum;
+        //         }
+        //     }
+        //     result.c[3] = m1.c[3];
+        //     return result;
+        //     //     },
+        //     //     else => return m1.mul_fast(m2),
+        //     // }
+        // }
+
         inline fn mul_fast(m1: *const Self, m2: *const Self) Self {
             @setFloatMode(.optimized);
             var result: Self = undefined;
@@ -179,6 +248,15 @@ pub fn Affine(comptime backing_type: type) type {
         }
     };
 }
+
+test Affine {
+    const Transform = Affine(f32);
+    const t = Transform.init_rotation(&Vec3(f32).init(0.678597, 0.28109, 0.678597), 1.49750);
+    std.debug.print("Rotation: {any}\n", .{pi / 4.0});
+    std.debug.print("Rotation: {any}\n", .{t});
+}
+
+const pi = std.math.pi;
 
 const std = @import("std");
 const builtin = @import("builtin");

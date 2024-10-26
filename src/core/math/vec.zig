@@ -116,8 +116,8 @@ pub fn Vec3(comptime backing_type: type) type {
             return self.vec[2];
         }
 
-        pub inline fn to_vec4(self: *const Self) Vec4(T) {
-            return .{ .vec = .{ self.vec[0], self.vec[1], self.vec[2], 1.0 } };
+        pub inline fn to_vec4(self: *const Self, w: T) Vec4(T) {
+            return .{ .vec = .{ self.vec[0], self.vec[1], self.vec[2], w } };
         }
 
         pub inline fn swizzle(a: *const Self, x_comp: Component, y_comp: Component, z_comp: Component) Self {
