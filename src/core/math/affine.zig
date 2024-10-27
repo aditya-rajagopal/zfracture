@@ -2,12 +2,14 @@ pub fn Affine(comptime backing_type: type) type {
     return extern struct {
         c: [shape[1]]ColT,
 
+        const Vec3 = vec.Vec3(E);
+        const Vec4 = vec.Vec4(E);
+
         pub const shape: [2]usize = .{ 4, 4 };
         pub const E = backing_type;
-        pub const ColT = Vec4(E);
-        pub const RowT = Vec4(E);
+        pub const ColT = Vec4;
+        pub const RowT = Vec4;
         pub const MatT = Mat4x4(E);
-        const V3 = Vec3(E);
 
         const Self = @This();
 
@@ -31,7 +33,7 @@ pub fn Affine(comptime backing_type: type) type {
             } };
         }
 
-        pub inline fn init_trans(delta: *const V3) Self {
+        pub inline fn init_trans(delta: *const Vec3) Self {
             return .{
                 .c = .{
                     .{ .vec = .{ 1.0, 0.0, 0.0, 0.0 } },
@@ -42,7 +44,7 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
-        pub inline fn init_scale(scale: *const V3) Self {
+        pub inline fn init_scale(scale: *const Vec3) Self {
             return .{
                 .c = .{
                     .{ .vec = .{ scale.x(), 0.0, 0.0, 0.0 } },
@@ -64,11 +66,11 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
-        pub inline fn init_rotation(axis: *const V3, angle: E) Self {
+        pub inline fn init_rotation(axis: *const Vec3, angle: E) Self {
             const c = @cos(angle);
             const s = @sin(angle);
             const t = 1 - c;
-            const axis_n = axis.normalize(0.00000001).to_vec4(0.0);
+            const axis_n = axis.normalize(0.00000001).to_vec4();
             const tv = axis_n.muls(t);
             const sv = axis_n.muls(s);
 
@@ -136,13 +138,10 @@ pub fn Affine(comptime backing_type: type) type {
         }
 
         pub inline fn init_rot_xyz(x_rad: E, y_rad: E, z_rad: E) Self {
-            const rot_x = Self.init_rot_x(x_rad);
-            const rot_y = Self.init_rot_y(y_rad);
-            const rot_z = Self.init_rot_z(z_rad);
-            return rot_x.mul(&rot_y).mul(&rot_z);
+            return Self.init_rot_x(x_rad).mul(&Self.init_rot_y(y_rad)).mul(&Self.init_rot_z(z_rad));
         }
 
-        pub inline fn init_pivot_rotation(pivot: *const V3, axis: *const V3, angle: E) Self {
+        pub inline fn init_pivot_rotation(pivot: *const Vec3, axis: *const Vec3, angle: E) Self {
             return Self.init_trans(pivot)
                 .mul(&Self.init_rotation(axis, angle))
                 .mul(Self.init_trans(&pivot.negate()));
@@ -189,6 +188,18 @@ pub fn Affine(comptime backing_type: type) type {
                 .Debug => return m1.mul_debug(m2),
                 else => return m1.mul_fast(m2),
             }
+        }
+
+        pub inline fn transform(m: *const Self, v: *const Vec4) Vec4 {
+            return v.transform(m);
+        }
+
+        pub inline fn transform_dir(m: *const Self, v: *const Vec3) Vec3 {
+            return v.transform_dir(m);
+        }
+
+        pub inline fn transform_pos(m: *const Self, v: *const Vec3) Vec3 {
+            return v.transform(m);
         }
 
         // TODO: This seems to be faster in debug builds for multiplying only rotation matrices
@@ -249,12 +260,16 @@ pub fn Affine(comptime backing_type: type) type {
     };
 }
 
-test Affine {
-    const Transform = Affine(f32);
-    const t = Transform.init_rotation(&Vec3(f32).init(0.678597, 0.28109, 0.678597), 1.49750);
-    std.debug.print("Rotation: {any}\n", .{pi / 4.0});
-    std.debug.print("Rotation: {any}\n", .{t});
-}
+// test Affine {
+//     const Transform = Affine(f32);
+//     const t = Transform.init_rotation(&Vec3(f32).init(0.678597, 0.28109, 0.678597), 1.49750);
+//     std.debug.print("Rotation: {any}\n", .{t});
+//     const v3 = Vec3(f32).init(1, 2, 3);
+//     const vec4: Vec4(f32) = @bitCast(v3);
+//     std.debug.print("Vec3: {any}\n", .{v3.to_vec4()});
+//     std.debug.print("Vec3: {any}\n", .{vec4});
+//     // std.debug.print("Rotation: {any}\n", .{t.T().mul(&t)});
+// }
 
 const pi = std.math.pi;
 
@@ -262,6 +277,4 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const vec = @import("vec.zig");
-const Vec3 = vec.Vec3;
-const Vec4 = vec.Vec4;
 const Mat4x4 = @import("matrix.zig").Mat4x4;

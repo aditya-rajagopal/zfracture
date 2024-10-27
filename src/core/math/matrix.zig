@@ -1,3 +1,6 @@
+// TODO:
+//      - [ ] Inverse
+//      - [ ] Matrix vector multiplication
 pub fn Mat2x2(comptime backing_type: type) type {
     return extern struct {
         /// the backing data. For 2x2 the backing is stored as a column major Vec4
@@ -35,32 +38,6 @@ pub fn Mat2x2(comptime backing_type: type) type {
             } };
         }
 
-        // TODO: Check benchmark with naive implementation
-        // Again the inline for loop implementation wins out even though this should be "smarter"
-        // NOTE(aditya): Again the compiler is a better programmer than you will ever be
-        //
-        // pub inline fn mul(m1: *const Self, m2: *const Self) Self {
-        //     const x0 = m2.c.swizzle(.x, .x, .w, .w);
-        //     const x1 = m2.c.swizzle(.y, .y, .z, .z);
-        //     const x2 = m1.c.swizzle(.z, .w, .x, .y);
-        //     return .{ .c = x0.mul(&m1.c).add(&x1.mul(&x2)) };
-        // }
-
-        pub inline fn mul(m1: *const Self, m2: *const Self) Self {
-            @setFloatMode(.optimized);
-            var result: Self = undefined;
-            inline for (0..RowT.dim) |row| {
-                inline for (0..ColT.dim) |col| {
-                    var sum: E = 0.0;
-                    inline for (0..RowT.dim) |i| {
-                        sum += m1.c[i].vec[row] * m2.c[col].vec[i];
-                    }
-                    result.c[col].vec[row] = sum;
-                }
-            }
-            return result;
-        }
-
         pub inline fn mul_left(m1: *const Self, m2: *const Self) Self {
             return m2.mul(m1);
         }
@@ -82,6 +59,12 @@ pub fn Mat2x2(comptime backing_type: type) type {
                 m.c[1].dot(v),
             } };
         }
+
+        const Mixins = MatrixMixins(Self);
+
+        pub const mul = Mixins.mul;
+        pub const add = Mixins.add;
+        pub const eql = Mixins.eql;
     };
 }
 
@@ -143,20 +126,11 @@ pub fn Mat3x3(comptime backing_type: type) type {
             } };
         }
 
-        pub inline fn mul(m1: *const Self, m2: *const Self) Self {
-            @setFloatMode(.optimized);
-            var result: Self = undefined;
-            inline for (0..shape[0]) |r| {
-                inline for (0..shape[1]) |c| {
-                    var sum: E = 0.0;
-                    inline for (0..RowT.dim) |i| {
-                        sum += m1.c[i].vec[r] * m2.c[c].vec[i];
-                    }
-                    result.c[c].vec[r] = sum;
-                }
-            }
-            return result;
-        }
+        const Mixins = MatrixMixins(Self);
+
+        pub const mul = Mixins.mul;
+        pub const add = Mixins.add;
+        pub const eql = Mixins.eql;
     };
 }
 
@@ -214,20 +188,49 @@ pub fn Mat4x4(comptime backing_type: type) type {
             } };
         }
 
+        const Mixins = MatrixMixins(Self);
+
+        pub const mul = Mixins.mul;
+        pub const add = Mixins.add;
+        pub const eql = Mixins.eql;
+    };
+}
+
+pub fn MatrixMixins(comptime MatT: type) type {
+    return struct {
         // NOTE(aditya): The compiler is a better programmer than you will be
-        pub inline fn mul(m1: *const Self, m2: *const Self) Self {
+        pub inline fn mul(m1: *const MatT, m2: *const MatT) MatT {
+            @setEvalBranchQuota(10000);
             @setFloatMode(.optimized);
-            var result: Self = undefined;
-            inline for (0..shape[0]) |r| {
-                inline for (0..shape[1]) |c| {
-                    var sum: E = 0.0;
-                    inline for (0..RowT.dim) |i| {
+            var result: MatT = undefined;
+            inline for (0..MatT.shape[0]) |r| {
+                inline for (0..MatT.shape[1]) |c| {
+                    var sum: MatT.E = 0.0;
+                    inline for (0..MatT.RowT.dim) |i| {
                         sum += m1.c[i].vec[r] * m2.c[c].vec[i];
                     }
                     result.c[c].vec[r] = sum;
                 }
             }
             return result;
+        }
+
+        pub inline fn add(m1: *const MatT, m2: *const MatT) MatT {
+            @setFloatMode(.optimized);
+            var result: MatT = undefined;
+            inline for (0..MatT.shape[1]) |c| {
+                result.c[c] = m1.c[c].vec + m2.c[c].vec;
+            }
+            return result;
+        }
+
+        pub inline fn eql(m1: *const MatT, m2: *const MatT) bool {
+            inline for (0..MatT.shape[1]) |col| {
+                if (!m1.c[col].eql(&m2.c[col])) {
+                    return false;
+                }
+            }
+            return true;
         }
     };
 }

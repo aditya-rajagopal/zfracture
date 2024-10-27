@@ -38,6 +38,40 @@ pub fn Vec2(comptime backing_type: type) type {
             return .{ .vec = @shuffle(T, a.vec, undefined, [2]i32{ @intFromEnum(x_comp), @intFromEnum(y_comp) }) };
         }
 
+        /// Transform a vec2 with a 3x3 trasform matrix of shape with m * v
+        /// |a, b, dx|
+        /// |c, d, dy|
+        /// |0, 0, 1 |
+        /// If w is == 1 then please use transform_pos and for w == 0 please use transform_dir
+        //TODO: Check if it is faster to conver to vec3 and do a loopd multiply
+        pub inline fn transform(v: *const Self, w: T, m: *const Mat3x3(T)) Self {
+            return .{ .vec = .{
+                m.c[0].vec[0] * v.vec[0] + m.c[1].vec[0] * v.vec[1] + w * m.c[2].vec[0],
+                m.c[0].vec[1] * v.vec[0] + m.c[1].vec[1] * v.vec[1] + w * m.c[3].vec[0],
+            } };
+        }
+
+        pub inline fn transform_pos(v: *const Self, m: *const Mat3x3(T)) Self {
+            return .{ .vec = .{
+                m.c[0].vec[0] * v.vec[0] + m.c[1].vec[0] * v.vec[1] + m.c[2].vec[0],
+                m.c[0].vec[1] * v.vec[0] + m.c[1].vec[1] * v.vec[1] + m.c[3].vec[0],
+            } };
+        }
+
+        pub inline fn transform_dir(v: *const Self, m: *const Mat3x3(T)) Self {
+            return .{ .vec = .{
+                m.c[0].vec[0] * v.vec[0] + m.c[1].vec[0] * v.vec[1],
+                m.c[0].vec[1] * v.vec[0] + m.c[1].vec[1] * v.vec[1],
+            } };
+        }
+
+        pub inline fn mul_mat(v: *const Self, m: *const Mat2x2(T)) Self {
+            return .{ .vec = .{
+                m.c[0].vec[0] * v.vec[0] + m.c[1].vec[0] * v.vec[1],
+                m.c[0].vec[1] * v.vec[0] + m.c[1].vec[1] * v.vec[1],
+            } };
+        }
+
         pub const init_slice = Mixins.init_slice;
         pub const to_slice = Mixins.to_slice;
         pub const init_array = Mixins.init_array;
@@ -74,6 +108,7 @@ pub fn Vec2(comptime backing_type: type) type {
         pub const project = Mixins.project;
         pub const eql = Mixins.eql;
         pub const eqls = Mixins.eqls;
+        pub const eql_exact = Mixins.eql_exact;
         pub const eql_approx = Mixins.eql_appox;
         pub const less = Mixins.less;
         pub const less_eq = Mixins.less_eq;
@@ -116,8 +151,17 @@ pub fn Vec3(comptime backing_type: type) type {
             return self.vec[2];
         }
 
-        pub inline fn to_vec4(self: *const Self, w: T) Vec4(T) {
+        pub inline fn to_vec4w(self: *const Self, w: T) Vec4(T) {
             return .{ .vec = .{ self.vec[0], self.vec[1], self.vec[2], w } };
+        }
+
+        /// The last element will be set to 0
+        pub inline fn to_vec4_dir(self: *const Self) Vec4(T) {
+            return .{ .vec = .{ self.vec[0], self.vec[1], self.vec[2], 0.0 } };
+        }
+
+        pub inline fn to_vec4(self: *const Self) Vec4(T) {
+            return .{ .vec = .{ self.vec[0], self.vec[1], self.vec[2], 1.0 } };
         }
 
         pub inline fn swizzle(a: *const Self, x_comp: Component, y_comp: Component, z_comp: Component) Self {
@@ -154,11 +198,64 @@ pub fn Vec3(comptime backing_type: type) type {
             return std.math.atan2(norm_, dot_);
         }
 
+        /// Compute M * v
         pub inline fn mat_mul(vector: *const Self, m: *const Mat3x3(T)) Self {
             var result: Self = undefined;
-            inline for (0..3) |i| {
-                inline for (0..3) |j| {
-                    result.vec[i] += vector.vec[j] * m.c[i].vec[j];
+            inline for (0..Self.dim) |r| {
+                inline for (0..Self.dim) |c| {
+                    result.vec[r] += vector.vec[c] * m.c[c].vec[r];
+                }
+            }
+            return result;
+        }
+
+        /// Compute v * M
+        pub inline fn mat_vmul(vector: *const Self, m: *const Mat3x3(T)) Self {
+            var result: Self = undefined;
+            inline for (0..Self.dim) |r| {
+                inline for (0..Self.dim) |c| {
+                    result.vec[r] += vector.vec[c] * m.c[r].vec[c];
+                }
+            }
+            return result;
+        }
+
+        const AffT = Affine(T);
+        pub inline fn transform(v: *const Self, m: *const AffT) Self {
+            switch (builtin.mode) {
+                .Debug => return v.transform_debug(m),
+                else => return v.to_vec4().transform(m).to_vec3(),
+            }
+        }
+
+        // TODO: Check on other processors if this is still much faster in Debug builds. 3.3sec for 400mil transforms
+        // from 8sec
+        // The conversion to vec4 and back to vec3 Is faster in release fast 0.20sec vs 0.32sec
+        inline fn transform_debug(v: *const Self, m: *const AffT) Self {
+            var result: Self = m.c[3].to_vec3();
+            inline for (0..3) |r| {
+                inline for (0..3) |c| {
+                    result.vec[r] += v.vec[c] * m.c[c].vec[r];
+                }
+            }
+            return result;
+        }
+
+        pub inline fn transform_dir(v: *const Self, m: *const AffT) Self {
+            switch (builtin.mode) {
+                .Debug => return v.transform_dir_debug(m),
+                else => return v.to_vec4_dir().transform(m).to_vec3(),
+            }
+        }
+
+        // TODO: Check on other processors if this is still much faster in Debug builds. 2.7sec for 400mil transforms
+        // from 8sec
+        // The conversion to vec4 and back to vec3 Is faster in release fast 0.20sec vs 0.32sec
+        inline fn transform_dir_debug(v: *const Self, m: *const AffT) Self {
+            var result: Self = Self.zeros;
+            inline for (0..3) |r| {
+                inline for (0..3) |c| {
+                    result.vec[r] += v.vec[c] * m.c[c].vec[r];
                 }
             }
             return result;
@@ -200,6 +297,7 @@ pub fn Vec3(comptime backing_type: type) type {
         pub const project = Mixins.project;
         pub const eql = Mixins.eql;
         pub const eqls = Mixins.eqls;
+        pub const eql_exact = Mixins.eql_exact;
         pub const eql_approx = Mixins.eql_appox;
         pub const less = Mixins.less;
         pub const less_eq = Mixins.less_eq;
@@ -264,17 +362,7 @@ pub fn Vec4(comptime backing_type: type) type {
         }
 
         pub inline fn to_vec3(self: *const Self) Vec3(T) {
-            return .{ .vec = .{ self.vec[0], self.vec[1], self.vec[2] } };
-        }
-
-        pub inline fn mat_mul(vector: *const Self, m: *const Mat3x3(T)) Self {
-            var result: Self = undefined;
-            inline for (0..4) |i| {
-                inline for (0..4) |j| {
-                    result.vec[i] += vector.vec[j] * m.c[i].vec[j];
-                }
-            }
-            return result;
+            return @bitCast(self.*);
         }
 
         pub inline fn swizzle(
@@ -290,6 +378,40 @@ pub fn Vec4(comptime backing_type: type) type {
                 undefined,
                 [4]i32{ @intFromEnum(x_comp), @intFromEnum(y_comp), @intFromEnum(z_comp), @intFromEnum(w_comp) },
             ) };
+        }
+
+        /// Compute M * v
+        pub inline fn mat_mul(vector: *const Self, m: *const Mat3x3(T)) Self {
+            var result: Self = undefined;
+            inline for (0..Self.dim) |r| {
+                inline for (0..Self.dim) |c| {
+                    result.vec[r] += vector.vec[c] * m.c[c].vec[r];
+                }
+            }
+            return result;
+        }
+
+        /// Compute v * M
+        pub inline fn mat_vmul(vector: *const Self, m: *const Mat3x3(T)) Self {
+            var result: Self = undefined;
+            inline for (0..Self.dim) |r| {
+                inline for (0..Self.dim) |c| {
+                    result.vec[r] += vector.vec[c] * m.c[r].vec[c];
+                }
+            }
+            return result;
+        }
+
+        const AffT = Affine(T);
+        /// Transform vector with an affine transformation => T * v
+        pub inline fn transform(v: *const Self, m: *const AffT) Self {
+            var result: Self = Self.zeros;
+            inline for (0..AffT.shape[0]) |r| {
+                inline for (0..AffT.shape[1]) |c| {
+                    result.vec[r] += v.vec[c] * m.c[c].vec[r];
+                }
+            }
+            return result;
         }
 
         pub const init_slice = Mixins.init_slice;
@@ -326,8 +448,10 @@ pub fn Vec4(comptime backing_type: type) type {
         pub const lerp_clamped = Mixins.lerp_clamped;
         pub const project = Mixins.project;
         pub const eql = Mixins.eql;
+        pub const eql_exact = Mixins.eql_exact;
         pub const eqls = Mixins.eqls;
         pub const eql_approx = Mixins.eql_appox;
+        pub const eqlApprox = Mixins.eqlApprox;
         pub const less = Mixins.less;
         pub const less_eq = Mixins.less_eq;
         pub const greater = Mixins.greater;
@@ -516,6 +640,10 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
             }
         }
 
+        pub inline fn eql_exact(a: *const VecT, b: *const VecT) bool {
+            return @reduce(.And, a.vec == b.vec);
+        }
+
         /// For floats this function is only accurate for small float values in the vector
         pub inline fn eql_appox(a: *const VecT, b: *const VecT, comptime tolarance: T) bool {
             const xmm0 = @abs(a.vec - b.vec);
@@ -552,17 +680,23 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
     };
 }
 
-test Vec3 {
-    const v3 = Vec3(f32);
-    const a = v3.x_basis;
-    const b = v3.y_basis;
-    std.debug.print("z: {any}\n", .{a.cross(&b)});
-    std.debug.print("z: {any}\n", .{a.angle_between(&b)});
+test Vec4 {
+    const v = Vec3(f32).init(1.0, 0.0, 0.0);
+    const rot = Affine(f32).init_rot_z(std.math.pi / 2.0);
+    const translate = Affine(f32).init_trans(&Vec3(f32).init(0.0, 1.0, 0.0));
+    const transform = rot.mul(&translate);
+    // const transform = translate.mul(&rot);
+    std.debug.print("Transform: {any}\n", .{transform});
+    std.debug.print("Vector: {any}\n", .{v.transform_dir(&transform)});
+    std.debug.print("Vector: {any}\n", .{transform.transform_dir(&v)});
+    // std.debug.print("Vector: {any}\n", .{v.transform_dir_debug(&transform)});
 }
 
+const Affine = @import("affine.zig").Affine;
 const matrix = @import("matrix.zig");
 const Mat2x2 = matrix.Mat2x2;
 const Mat3x3 = matrix.Mat3x3;
 const Mat4x4 = matrix.Mat4x4;
 const std = @import("std");
 const assert = std.debug.assert;
+const builtin = @import("builtin");
