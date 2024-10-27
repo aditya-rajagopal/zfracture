@@ -10,6 +10,7 @@ pub fn Affine(comptime backing_type: type) type {
         pub const ColT = Vec4;
         pub const RowT = Vec4;
         pub const MatT = Mat4x4(E);
+        pub const Quat = Quaternion(E);
 
         const Self = @This();
 
@@ -59,6 +60,43 @@ pub fn Affine(comptime backing_type: type) type {
 
         pub inline fn to_mat(t: *const Self) MatT {
             return @bitCast(t.*);
+        }
+
+        pub inline fn to_quat(t: *const Self) Quat {
+            var result = Quat.identity;
+            const trace = t.c[0].vec[0] + t.c[1].vec[1] + t.c[2].vec[2];
+
+            if (trace > 0.0) {
+                const root = std.math.sqrt(trace + 1.0);
+                result.q[3] = 0.5 * root;
+                const inv_root = 0.5 / root;
+
+                result.q[0] = (t.c[1].vec[2] - t.c[2].vec[1]) * inv_root;
+                result.q[1] = (t.c[2].vec[0] - t.c[0].vec[2]) * inv_root;
+                result.q[2] = (t.c[0].vec[1] - t.c[1].vec[0]) * inv_root;
+            } else {
+                var i: usize = 0;
+                if (t.c[1].vec[1] > t.c[0].vec[0]) {
+                    i = 1;
+                }
+
+                if (t.c[2].vec[2] > t.c[i].vec[i]) {
+                    i = 2;
+                }
+
+                const j = (i + 1) % 3;
+                const k = (i + 2) % 3;
+
+                const root = std.math.sqrt(t.c[i].vec[i] - t.c[j].vec[j] - t.c[k].vec[k] + 1.0);
+                result.q[i] = 0.5 * root;
+                const inv_root = 0.5 / root;
+
+                result.q[3] = (t.c[j].vec[k] - t.c[k].vec[j]) * inv_root;
+                result.q[j] = (t.c[j].vec[i] - t.c[i].vec[j]) * inv_root;
+                result.q[k] = (t.c[k].vec[i] - t.c[i].vec[k]) * inv_root;
+            }
+
+            return result;
         }
 
         pub inline fn init_trans(delta: *const Vec3) Self {
@@ -524,3 +562,4 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const vec = @import("vec.zig");
 const Mat4x4 = @import("matrix.zig").Mat4x4;
+const Quaternion = @import("quat.zig").Quaternion;
