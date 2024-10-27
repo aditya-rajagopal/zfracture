@@ -65,7 +65,7 @@ pub fn Quaternion(comptime backing_type: type) type {
             return .{ .q = @splat(v) };
         }
 
-        pub fn normalize(q: *const Self, delta: E) E {
+        pub fn normalize(q: *const Self, delta: E) Self {
             return .{ .q = q.q * Self.splat(q.norm() + delta).q };
         }
 
@@ -97,26 +97,26 @@ pub fn Quaternion(comptime backing_type: type) type {
         }
 
         pub fn to_affine(q: *const Self) Transform {
-            const result = Transform.identity;
+            var result = Transform.identity;
             const n = q.normalize(0.0000001);
 
-            result.c[0].vec[0] = 1.0 - 2.0 * n.y * n.y - 2.0 * n.z * n.z;
-            result.c[0].vec[1] = 2.0 * n.x * n.y - 2.0 * n.z * n.w;
-            result.c[0].vec[2] = 2.0 * n.x * n.z + 2.0 * n.y * n.w;
+            result.c[0].vec[0] = 1.0 - 2.0 * n.q[1] * n.q[1] - 2.0 * n.q[2] * n.q[2];
+            result.c[0].vec[1] = 2.0 * n.q[0] * n.q[1] - 2.0 * n.q[2] * n.q[3];
+            result.c[0].vec[2] = 2.0 * n.q[0] * n.q[2] + 2.0 * n.q[1] * n.q[3];
 
-            result.c[1].vec[1] = 2.0 * n.x * n.y + 2.0 * n.z * n.w;
-            result.c[1].vec[2] = 1.0 - 2.0 * n.x * n.x - 2.0 * n.z * n.z;
-            result.c[1].vec[3] = 2.0 * n.y * n.z - 2.0 * n.x * n.w;
+            result.c[1].vec[1] = 2.0 * n.q[0] * n.q[1] + 2.0 * n.q[2] * n.q[3];
+            result.c[1].vec[2] = 1.0 - 2.0 * n.q[0] * n.q[0] - 2.0 * n.q[2] * n.q[2];
+            result.c[1].vec[3] = 2.0 * n.q[1] * n.q[2] - 2.0 * n.q[0] * n.q[3];
 
-            result.c[2].vec[1] = 2.0 * n.x * n.z - 2.0 * n.y * n.w;
-            result.c[2].vec[2] = 2.0 * n.y * n.z + 2.0 * n.x * n.w;
-            result.c[2].vec[3] = 1.0 - 2.0 * n.x * n.x - 2.0 * n.y * n.y;
+            result.c[2].vec[1] = 2.0 * n.q[0] * n.q[2] - 2.0 * n.q[1] * n.q[3];
+            result.c[2].vec[2] = 2.0 * n.q[1] * n.q[2] + 2.0 * n.q[0] * n.q[3];
+            result.c[2].vec[3] = 1.0 - 2.0 * n.q[0] * n.q[0] - 2.0 * n.q[1] * n.q[1];
 
             return result;
         }
 
         pub fn to_affine_center(q: *const Self, center: *const Vec3) Transform {
-            const result: Transform = undefined;
+            var result: Transform = undefined;
             result.c[0].vec[0] = (q.x() * q.x()) - (q.y() * q.y()) - (q.z() * q.z()) + (q.w() * q.w());
             result.c[0].vec[1] = 2.0 * ((q.x() * q.y()) + (q.z() * q.w()));
             result.c[0].vec[2] = 2.0 * ((q.x() * q.z()) - (q.y() * q.w()));
@@ -125,12 +125,12 @@ pub fn Quaternion(comptime backing_type: type) type {
             result.c[1].vec[0] = 2.0 * ((q.x() * q.y()) - (q.z() * q.w()));
             result.c[1].vec[1] = -(q.x() * q.x()) + (q.y() * q.y()) - (q.z() * q.z()) + (q.w() * q.w());
             result.c[1].vec[2] = 2.0 * ((q.y() * q.z()) + (q.x() * q.w()));
-            result.c[1].vec[3] = center.y() - center.x() * result.c[4] - center.y() * result.c[5] - center.z() * result.c[6];
+            result.c[1].vec[3] = center.x() - center.x() * result.c[1].vec[0] - center.y() * result.c[1].vec[1] - center.z() * result.c[1].vec[2];
 
             result.c[2].vec[0] = 2.0 * ((q.x() * q.z()) + (q.y() * q.w()));
             result.c[2].vec[1] = 2.0 * ((q.y() * q.z()) - (q.x() * q.w()));
             result.c[2].vec[2] = -(q.x() * q.x()) - (q.y() * q.y()) + (q.z() * q.z()) + (q.w() * q.w());
-            result.c[2].vec[3] = center.z() - center.x() * result.c[8] - center.y() * result.c[9] - center.z() * result.c[10];
+            result.c[2].vec[3] = center.x() - center.x() * result.c[2].vec[0] - center.y() * result.c[2].vec[1] - center.z() * result.c[2].vec[2];
 
             result.c[3].vec[0] = 0.0;
             result.c[3].vec[1] = 0.0;

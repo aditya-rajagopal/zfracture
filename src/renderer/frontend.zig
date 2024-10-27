@@ -17,7 +17,7 @@ pub fn init(
     application_name: [:0]const u8,
     platform_state: *anyopaque,
     log_config: *core.log.LogConfig,
-    framebuffer_extent: *const core.math.Extent,
+    framebuffer_extent: *const core.math.Extent2D,
 ) FrontendError!void {
     // TODO: Make this configurable
     self.log = T.RendererLog.init(log_config);
@@ -48,7 +48,7 @@ pub fn draw_frame(self: *Frontend, packet: T.Packet) FrontendError!void {
     }
 }
 
-pub fn on_resize(self: *Frontend, new_extent: core.math.Extent) void {
+pub fn on_resize(self: *Frontend, new_extent: core.math.Extent2D) void {
     self.backend.on_resized(new_extent);
 }
 

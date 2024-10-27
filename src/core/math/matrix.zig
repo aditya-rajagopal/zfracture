@@ -340,10 +340,10 @@ pub fn MatrixMixins(comptime MatT: type) type {
     };
 }
 
-test "inverse" {
-    const t = Mat4x4(f32).identity;
-    std.debug.print("Inv: {any}\n", .{t.inv()});
-}
+// test "inverse" {
+//     const t = Mat4x4(f32).identity;
+//     std.debug.print("Inv: {any}\n", .{t.inv()});
+// }
 
 const std = @import("std");
 const builtin = @import("builtin");

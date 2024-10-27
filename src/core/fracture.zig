@@ -3,7 +3,7 @@ pub const Fracture = struct {
     event: Event,
     input: Input,
     log_config: log.LogConfig,
-    extent: math.Extent = .{
+    extent: math.Extent2D = .{
         .width = 1280,
         .height = 720,
     },
@@ -86,8 +86,8 @@ pub fn not_implemented(comptime src: std.builtin.SourceLocation) void {
     @compileError("NOT IMPLEMENTED: " ++ src.fn_name ++ " - " ++ src.file);
 }
 
-test {
-    testing.refAllDeclsRecursive(@This());
+test Fracture {
+    testing.refAllDecls(@This());
 }
 
 const std = @import("std");

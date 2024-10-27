@@ -58,7 +58,7 @@ pub fn init(
     application_name: [:0]const u8,
     plat_state: *anyopaque,
     log: T.RendererLog,
-    framebuffer_extent: *const math.Extent,
+    framebuffer_extent: *const math.Extent2D,
 ) Error!void {
     const internal_plat_state: *T.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     self.log = log;
@@ -297,7 +297,7 @@ pub fn end_frame(self: *Context, delta_time: f32) bool {
     return true;
 }
 
-pub fn on_resized(self: *Context, new_extent: math.Extent) void {
+pub fn on_resized(self: *Context, new_extent: math.Extent2D) void {
     self.cached_framebuffer_extent = @bitCast(new_extent);
     self.framebuffer_size_generation +%= 1;
     // self.log.info(

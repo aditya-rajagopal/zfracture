@@ -109,7 +109,8 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     const preheat_bytes = comptime app_config.frame_arena_preheat_size.as_bytes();
     if (comptime preheat_bytes != 0) {
-        _ = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, preheat_bytes);
+        const ptr = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, preheat_bytes);
+        @memset(ptr, 0);
         if (!app.frame_arena.reset(.retain_capacity)) {
             @branchHint(.unlikely);
             app.log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
@@ -196,9 +197,14 @@ pub fn run(self: *Application) ApplicationError!void {
     // NOTE(aditya): This cannot fail on windows
     self.timer = std.time.Timer.start() catch unreachable;
     var delta_time: u64 = 0;
+    var frame_time: u64 = 0;
     var frame_count: u64 = 0;
+    var last_frame_count: u64 = 0;
 
     var end = self.timer.lap();
+
+    const frame_rate_interval = 2 * std.time.ns_per_s;
+    var current_frame_rate: f32 = 0.0;
 
     while (self.engine.is_running) {
         platform.pump_messages(&self.platform_state);
@@ -234,7 +240,15 @@ pub fn run(self: *Application) ApplicationError!void {
             };
 
             delta_time += end;
+            frame_time += end;
             frame_count += 1;
+
+            if (frame_time > frame_rate_interval) {
+                current_frame_rate = @as(f32, @floatFromInt(frame_count - last_frame_count)) / @as(f32, @floatFromInt(frame_time));
+                current_frame_rate *= @as(f32, @floatFromInt(std.time.ns_per_s));
+                frame_time = 0;
+                last_frame_count = frame_count;
+            }
         }
 
         switch (builtin.mode) {
@@ -254,6 +268,9 @@ pub fn run(self: *Application) ApplicationError!void {
             else => {},
         }
 
+        if (self.engine.input.key_pressed_this_frame(.KEY_2)) {
+            self.log.info("Frame rate: {d}\n", .{current_frame_rate});
+        }
         self.engine.input.update();
         end = self.timer.lap();
 

@@ -426,42 +426,46 @@ pub fn Vec4(comptime backing_type: type) type {
         }
 
         /// t is expected to be between 0.0 and 1.0. q0 and q1 are assumed to be normalized
-        pub fn slerp(q0: *const Self, q1: *const Self, t: T) Self {
-            var d = q0.dot(q1);
-            const a = q0.q;
-            var b = q1.q;
+        pub fn slerp(v1: *const Self, v2: *const Self, t: T) Self {
+            if (@typeInfo(T) == .float) {
+                var d = v1.dot(v2);
+                const a = v1.vec;
+                var b = v2.vec;
 
-            if (d < 0.0) {
-                d = -d;
-                b = -b;
-            }
+                if (d < 0.0) {
+                    d = -d;
+                    b = -b;
+                }
 
-            const DOT_THRESHOLD: T = 0.9995;
-            if (d > DOT_THRESHOLD) {
-                // NOTE: If the inputs are really close to each other then we linerearly interpolate
-                const result: Self = .{ .q = .{
-                    a[0] + (b[0] - a[0]) * t,
-                    a[1] + (b[1] - a[1]) * t,
-                    a[2] + (b[2] - a[2]) * t,
-                    a[3] + (b[3] - a[3]) * t,
+                const DOT_THRESHOLD: T = 0.9995;
+                if (d > DOT_THRESHOLD) {
+                    // NOTE: If the inputs are really close to each other then we linerearly interpolate
+                    const result: Self = .{ .vec = .{
+                        a[0] + (b[0] - a[0]) * t,
+                        a[1] + (b[1] - a[1]) * t,
+                        a[2] + (b[2] - a[2]) * t,
+                        a[3] + (b[3] - a[3]) * t,
+                    } };
+                    return result.normalize(0.00000001);
+                }
+
+                // NOTE: Since we have gurenteed that dot is between [0, DOT_THRESHOLD] we can do acos
+                const theta0: T = std.math.acos(d); // Angle between the vectors
+                const theta: T = theta0 * t; // Angle btween q0 and the result
+                const s_theta: T = @sin(theta);
+                const s_theta0: T = @sin(theta0);
+
+                const s0 = @cos(theta) - d * s_theta / s_theta0;
+                const s1 = s_theta / s_theta0;
+                return .{ .vec = .{
+                    a[0] * s0 + b[0] * s1,
+                    a[1] * s0 + b[1] * s1,
+                    a[2] * s0 + b[2] * s1,
+                    a[3] * s0 + b[3] * s1,
                 } };
-                return result.normalize(0.00000001);
+            } else {
+                return v1.*;
             }
-
-            // NOTE: Since we have gurenteed that dot is between [0, DOT_THRESHOLD] we can do acos
-            const theta0: T = std.math.acos(d); // Angle between the vectors
-            const theta: T = theta0 * t; // Angle btween q0 and the result
-            const s_theta: T = @sin(theta);
-            const s_theta0: T = @sin(theta0);
-
-            const s0 = @cos(theta) - d * s_theta / s_theta0;
-            const s1 = s_theta / s_theta0;
-            return .{ .q = .{
-                a[0] * s0 + b[0] * s1,
-                a[1] * s0 + b[1] * s1,
-                a[2] * s0 + b[2] * s1,
-                a[3] * s0 + b[3] * s1,
-            } };
         }
 
         pub const init_slice = Mixins.init_slice;
