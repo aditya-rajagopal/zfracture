@@ -11,13 +11,16 @@ pub fn build(b: *std.Build) !void {
     // ==================================== VULKAN ==================================/
 
     const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
-    // const shader_compiler = b.dependency("shader_compiler", .{
-    //     .target = b.host,
-    //     .optimize = .ReleaseFast,
-    // }).artifact("shader_compiler");
     const vk_gen = b.dependency("vulkan", .{}).artifact("vulkan-zig-generator");
     const vk_generate_cmd = b.addRunArtifact(vk_gen);
     vk_generate_cmd.addFileArg(registry);
+
+    // ====================================== Shader Compile =======================/
+
+    const shader_compiler = b.dependency("shader_compiler", .{
+        .target = b.host,
+        .optimize = .ReleaseFast,
+    }).artifact("shader_compiler");
 
     // ================================== MODULES ==================================/
     const core_lib = b.addModule("fr_core", .{
@@ -32,11 +35,38 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const shaders = b.addModule("shaders", .{
+        .root_source_file = b.path("src/renderer/shaders.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    shaders.addAnonymousImport(
+        "builtin.ObjectShader.vert",
+        .{ .root_source_file = compile_shader(
+            b,
+            optimize,
+            shader_compiler,
+            b.path("assets/shaders/builtin.ObjectShader.vert"),
+            "assets/shaders/builtin.ObjectShader.vert.spv",
+        ) },
+    );
+    shaders.addAnonymousImport(
+        "builtin.ObjectShader.frag",
+        .{ .root_source_file = compile_shader(
+            b,
+            optimize,
+            shader_compiler,
+            b.path("assets/shaders/builtin.ObjectShader.frag"),
+            "assets/shaders/builtin.ObjectShader.frag.spv",
+        ) },
+    );
+
     const entrypoint = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/entrypoint.zig"),
         .imports = &.{
             .{ .name = "fr_core", .module = core_lib },
             .{ .name = "vulkan", .module = vulkan },
+            .{ .name = "shaders", .module = shaders },
         },
         .target = target,
         .optimize = optimize,
@@ -118,6 +148,7 @@ pub fn build(b: *std.Build) !void {
     });
     engine_unit_tests.root_module.addImport("fr_core", core_lib);
     engine_unit_tests.root_module.addImport("vulkan", vulkan);
+    engine_unit_tests.root_module.addImport("shaders", shaders);
 
     const run_engine_unit_tests = b.addRunArtifact(engine_unit_tests);
     run_engine_unit_tests.has_side_effects = true;
@@ -136,4 +167,23 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&run_engine_unit_tests.step);
     test_step.dependOn(&run_game_unit_tests.step);
     test_step.dependOn(&run_core_unit_tests.step);
+}
+
+fn compile_shader(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+    shader_compiler: *std.Build.Step.Compile,
+    src: std.Build.LazyPath,
+    out_name: []const u8,
+) std.Build.LazyPath {
+    const artifact = b.addRunArtifact(shader_compiler);
+    artifact.addArgs(&.{ "--target", "Vulkan-1.3" });
+    switch (optimize) {
+        .Debug => artifact.addArgs(&.{"--robust-access"}),
+        .ReleaseSafe => artifact.addArgs(&.{ "--optimize-perf", "--robust-access" }),
+        .ReleaseFast => artifact.addArgs(&.{"--optimize-perf"}),
+        .ReleaseSmall => artifact.addArgs(&.{ "--optimize-perf", "--optimize-small" }),
+    }
+    artifact.addFileArg(src);
+    return artifact.addOutputFileArg(out_name);
 }

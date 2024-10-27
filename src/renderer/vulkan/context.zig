@@ -5,6 +5,8 @@
 const vk = @import("vulkan");
 const T = @import("types.zig");
 const math = @import("fr_core").math;
+const shaders = @import("shaders");
+const a = shaders.builtin.ObjectShader.vert;
 
 const platform = @import("platform.zig");
 const Device = @import("device.zig");
@@ -62,6 +64,7 @@ pub fn init(
 ) Error!void {
     const internal_plat_state: *T.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     self.log = log;
+    self.log.info("A loaded: {d}\n", .{a.len});
     // ========================================== LOAD VULKAN =================================/
 
     self.vulkan_lib = try std.DynLib.open("vulkan-1.dll");
