@@ -6,11 +6,13 @@ pub fn main() !void {
     // try benchmark_mat4();
     // try benchmark_affine();
     // try benchmark_cross();
+    // try benchmark_dot();
     // try benchmark_eql();
     // try benchmark_vmul();
     // try benchmark_affine_rot();
     // try benchmark_affine_rotation();
-    try benchmark_vec3_transform();
+    try benchmark_affine_inv();
+    // try benchmark_vec3_transform();
 }
 
 const Vec4 = @import("vec.zig").Vec4(f32);
@@ -69,6 +71,71 @@ fn benchmark_eql() !void {
             for (data1.items) |b| {
                 for (data0.items) |a| {
                     const r = a.eql_approx(&b, tol);
+                    std.mem.doNotOptimizeAway(&r);
+                }
+            }
+        }
+        const end = timer.read();
+        const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+
+        std.debug.print("my version: {d:.4}s, ", .{elapsed_s});
+    }
+}
+
+fn benchmark_dot() !void {
+    @setFloatMode(.optimized);
+    var xor = std.Random.DefaultPrng.init(0);
+    var random = xor.random();
+    const count = 100_000;
+
+    const allocator = std.heap.page_allocator;
+    var data0 = try std.ArrayList(Vec3).initCapacity(allocator, 64);
+    defer data0.deinit();
+    var data1 = try std.ArrayList(Vec3).initCapacity(allocator, 64);
+    defer data1.deinit();
+
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        data0.appendAssumeCapacity(Vec3.init(random.float(f32), random.float(f32), random.float(f32)));
+        data1.appendAssumeCapacity(Vec3.init(random.float(f32), random.float(f32), random.float(f32)));
+    }
+
+    i = 0;
+    while (i < 1024) : (i += 1) {
+        for (data1.items) |b| {
+            for (data0.items) |a| {
+                const r = a.dot(&b);
+                std.mem.doNotOptimizeAway(&r);
+            }
+        }
+    }
+
+    {
+        i = 0;
+        var timer = try Timer.start();
+        const start = timer.lap();
+        while (i < count) : (i += 1) {
+            for (data1.items) |b| {
+                for (data0.items) |a| {
+                    const r = a.dot(&b);
+                    std.mem.doNotOptimizeAway(&r);
+                }
+            }
+        }
+        const end = timer.read();
+        const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+
+        std.debug.print("my version: {d:.4}s, ", .{elapsed_s});
+    }
+
+    {
+        i = 0;
+        var timer = try Timer.start();
+        const start = timer.lap();
+        while (i < count) : (i += 1) {
+            for (data1.items) |b| {
+                for (data0.items) |a| {
+                    const r = a.dot2(&b);
                     std.mem.doNotOptimizeAway(&r);
                 }
             }
@@ -537,23 +604,23 @@ fn benchmark_affine_rot() !void {
         std.debug.print("simd version: {d:.4}s, ", .{elapsed_s});
     }
 
-    {
-        i = 0;
-        var timer = try Timer.start();
-        const start = timer.lap();
-        while (i < count) : (i += 1) {
-            for (data1.items) |b| {
-                for (data0.items) |a| {
-                    const r = a.mul_rot(&b);
-                    std.mem.doNotOptimizeAway(&r);
-                }
-            }
-        }
-        const end = timer.read();
-        const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
-
-        std.debug.print("simd version: {d:.4}s, ", .{elapsed_s});
-    }
+    // {
+    //     i = 0;
+    //     var timer = try Timer.start();
+    //     const start = timer.lap();
+    //     while (i < count) : (i += 1) {
+    //         for (data1.items) |b| {
+    //             for (data0.items) |a| {
+    //                 const r = a.mul_rot(&b);
+    //                 std.mem.doNotOptimizeAway(&r);
+    //             }
+    //         }
+    //     }
+    //     const end = timer.read();
+    //     const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+    //
+    //     std.debug.print("simd version: {d:.4}s, ", .{elapsed_s});
+    // }
 }
 
 fn benchmark_affine_rotation() !void {
@@ -623,6 +690,76 @@ fn benchmark_affine_rotation() !void {
     }
 }
 
+fn benchmark_affine_inv() !void {
+    @setFloatMode(.optimized);
+    var xor = std.Random.DefaultPrng.init(0);
+    var random = xor.random();
+    const count = 32 * 100_000;
+
+    const allocator = std.heap.page_allocator;
+    var data0 = try std.ArrayList(Transform).initCapacity(allocator, 128);
+    defer data0.deinit();
+    var data1 = try std.ArrayList(Vec3).initCapacity(allocator, 128);
+    defer data1.deinit();
+
+    var i: usize = 0;
+    while (i < 128) : (i += 1) {
+        data0.appendAssumeCapacity(Transform.init_slice(&.{
+            random.float(f32), random.float(f32), random.float(f32), 0.0,
+            random.float(f32), random.float(f32), random.float(f32), 0.0,
+            random.float(f32), random.float(f32), random.float(f32), 0.0,
+            random.float(f32), random.float(f32), random.float(f32), 1.0,
+        }));
+        data1.appendAssumeCapacity(Vec3.init(random.float(f32), random.float(f32), random.float(f32)));
+    }
+
+    i = 0;
+    while (i < 1024) : (i += 1) {
+        // for (data1.items) |b| {
+        for (data0.items) |a| {
+            const r = a.inv_tr();
+            std.mem.doNotOptimizeAway(&r);
+        }
+        // }
+    }
+
+    {
+        i = 0;
+        var timer = try Timer.start();
+        const start = timer.lap();
+        while (i < count) : (i += 1) {
+            // for (data1.items) |b| {
+            for (data0.items, data1.items) |a, b| {
+                const r = a.inv();
+                std.mem.doNotOptimizeAway(&r);
+                std.mem.doNotOptimizeAway(&b);
+            }
+            // }
+        }
+        const end = timer.read();
+        const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+
+        std.debug.print("simd version: {d:.4}s, ", .{elapsed_s});
+    }
+
+    {
+        i = 0;
+        var timer = try Timer.start();
+        const start = timer.lap();
+        while (i < count) : (i += 1) {
+            // for (data1.items) |b| {
+            for (data0.items, data1.items) |a, b| {
+                const r = a.inv_trs(&b);
+                std.mem.doNotOptimizeAway(&r);
+            }
+            // }
+        }
+        const end = timer.read();
+        const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+
+        std.debug.print("simd version2: {d:.4}s, ", .{elapsed_s});
+    }
+}
 const std = @import("std");
 const Timer = std.time.Timer;
 const time = std.time;

@@ -1,7 +1,12 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+pub fn build(b: *std.Build) !void {
+    const query = try std.Target.Query.parse(.{
+        .cpu_features = "x86_64-avx512f",
+    });
+    const target = b.standardTargetOptions(.{
+        .default_target = query,
+    });
     const optimize = b.standardOptimizeOption(.{});
     // ==================================== VULKAN ==================================/
 

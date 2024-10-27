@@ -65,10 +65,19 @@ pub fn Vec2(comptime backing_type: type) type {
             } };
         }
 
-        pub inline fn mul_mat(v: *const Self, m: *const Mat2x2(T)) Self {
+        /// M * v
+        pub inline fn mat_mul(v: *const Self, m: *const Mat2x2(T)) Self {
             return .{ .vec = .{
                 m.c[0].vec[0] * v.vec[0] + m.c[1].vec[0] * v.vec[1],
                 m.c[0].vec[1] * v.vec[0] + m.c[1].vec[1] * v.vec[1],
+            } };
+        }
+
+        /// v * M
+        pub inline fn mat_vmul(v: *const Self, m: *const Mat2x2(T)) Self {
+            return .{ .vec = .{
+                m.c[0].vec[0] * v.vec[0] + m.c[0].vec[1] * v.vec[1],
+                m.c[1].vec[0] * v.vec[0] + m.c[1].vec[1] * v.vec[1],
             } };
         }
 
@@ -451,7 +460,6 @@ pub fn Vec4(comptime backing_type: type) type {
         pub const eql_exact = Mixins.eql_exact;
         pub const eqls = Mixins.eqls;
         pub const eql_approx = Mixins.eql_appox;
-        pub const eqlApprox = Mixins.eqlApprox;
         pub const less = Mixins.less;
         pub const less_eq = Mixins.less_eq;
         pub const greater = Mixins.greater;
@@ -585,7 +593,7 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
         /// Returns a.fmadd(&b, &c) => a * b + c
         pub inline fn fmadd(a: *const VecT, b: *const VecT, c: *const VecT) VecT {
             if (comptime is_float) {
-                return @mulAdd(VecT.Simd, a, b, c);
+                return .{ .vec = @mulAdd(VecT.Simd, a.vec, b.vec, c.vec) };
             } else {
                 return a.mul(b).add(c);
             }
@@ -594,7 +602,7 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
         /// Returns a.fmadd2(&b, &c) => a + b * c
         pub inline fn fmadd2(a: *const VecT, b: *const VecT, c: *const VecT) VecT {
             if (comptime is_float) {
-                return @mulAdd(VecT.Simd, b, c, a);
+                return .{ .vec = @mulAdd(VecT.Simd, b.vec, c.vec, a.vec) };
             } else {
                 return b.mul(c).add(a);
             }
@@ -679,18 +687,18 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
         }
     };
 }
-
-test Vec4 {
-    const v = Vec3(f32).init(1.0, 0.0, 0.0);
-    const rot = Affine(f32).init_rot_z(std.math.pi / 2.0);
-    const translate = Affine(f32).init_trans(&Vec3(f32).init(0.0, 1.0, 0.0));
-    const transform = rot.mul(&translate);
-    // const transform = translate.mul(&rot);
-    std.debug.print("Transform: {any}\n", .{transform});
-    std.debug.print("Vector: {any}\n", .{v.transform_dir(&transform)});
-    std.debug.print("Vector: {any}\n", .{transform.transform_dir(&v)});
-    // std.debug.print("Vector: {any}\n", .{v.transform_dir_debug(&transform)});
-}
+//
+// test Vec4 {
+//     const v = Vec3(f32).init(1.0, 0.0, 0.0);
+//     const rot = Affine(f32).init_rot_z(std.math.pi / 2.0);
+//     const translate = Affine(f32).init_trans(&Vec3(f32).init(0.0, 1.0, 0.0));
+//     const transform = rot.mul(&translate);
+//     // const transform = translate.mul(&rot);
+//     std.debug.print("Transform: {any}\n", .{transform});
+//     std.debug.print("Vector: {any}\n", .{v.transform_dir(&transform)});
+//     std.debug.print("Vector: {any}\n", .{transform.transform_dir(&v)});
+//     // std.debug.print("Vector: {any}\n", .{v.transform_dir_debug(&transform)});
+// }
 
 const Affine = @import("affine.zig").Affine;
 const matrix = @import("matrix.zig");
