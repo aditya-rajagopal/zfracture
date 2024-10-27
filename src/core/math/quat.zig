@@ -1,3 +1,7 @@
+// TODO:
+//      - [ ] Benchmark
+//      - [ ] Docstrings
+//      - [ ] Write tests
 pub fn Quaternion(comptime backing_type: type) type {
     comptime assert(backing_type == f16 or backing_type == f32 or backing_type == f64);
     return extern struct {
@@ -149,7 +153,7 @@ pub fn Quaternion(comptime backing_type: type) type {
         }
 
         /// t is expected to be between 0.0 and 1.0. q0 and q1 are assumed to be normalized
-        pub fn slerp(q0: *const Self, q1: *const Self, t: f32) Self {
+        pub fn slerp(q0: *const Self, q1: *const Self, t: E) Self {
             var d = q0.dot(q1);
             const a = q0.q;
             var b = q1.q;

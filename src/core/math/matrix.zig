@@ -1,6 +1,7 @@
 // TODO:
-//      - [ ] Inverse
-//      - [ ] Matrix vector multiplication
+//      - [ ] Benchmark
+//      - [ ] Docstrings
+//      - [ ] Write tests
 pub fn Mat2x2(comptime backing_type: type) type {
     return extern struct {
         /// the backing data. For 2x2 the backing is stored as a column major Vec4

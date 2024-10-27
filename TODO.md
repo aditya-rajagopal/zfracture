@@ -49,9 +49,23 @@
     - [ ] Remove reference to event system here. The platform/application should handle firing events. Or pass the engine.
     - [ ] Think of using a bit set for the keys instead of an array
     - [ ] Are the comptime versions of the functions necessary
+    - [ ] Should there be the rest of the messages be parsed for key and mouse events whne firing events
 - [ ] Signal System
     - [ ] Decide if there is a need for signal plug and socket system.
 - [ ] SIMD Math Library
+    - [x] Basic vec
+    - [x] Basic matrix
+    - [x] Basic Affine
+    - [x] Basic Quaternions
+    - [ ] Docstrings
+    - [ ] Benchmarks
+    - [ ] Tests
+    - [ ] Shapes
+        - [x] Rectangle
+        - [ ] Circle
+        - [ ] Triangle
+        - [ ] Point
+        - [ ] Line
 - [ ] Containers
     - [ ] StaticArrayList: Partially implemented
     - [ ] Array backed linked list?
@@ -59,6 +73,14 @@
     - [ ] Create a static multiarrayList
 - [ ] Instrumentation
 - [ ] Renderer
+    - [ ] Create renderer settings on the engine/app side rather than hard coded settings
+    - [ ] Create image pools and modify image.zig to use offsets
+    - [ ] Deal with possibility of more than 1 queues for graphics
+        - [ ] Should the graphics queue have more than 1 queue
+    - [ ] Should 0,0 be top left or bottom left. It is bottom left in OpenGL
+    - [ ] Change command buffers to be array list rather than allocated every time teh swapchain is recreated
+    - [ ] implement custom allocator for deubg builds
+    - [ ] Allow choosing different graphics Backends.
 - [ ] Jobs System
 - [x] Move types into core
 - [x] Application and platform should be part of entry point

@@ -453,7 +453,6 @@ fn create_debugger(self: *Context) !void {
                 .message_severity = log_severity,
                 .message_type = message_type,
                 .pfn_user_callback = debug_callback,
-                // TODO: Pass the engine pointer/logger pointer here.
                 .p_user_data = &self.log,
             };
 
@@ -491,7 +490,6 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
     switch (builtin.mode) {
         .Debug => {
             required_extensions.appendAssumeCapacity("VK_EXT_debug_utils");
-            // TODO: Replace this with core_log
             self.log.info("Required Extensions: ", .{});
             for (required_extensions.items, 0..) |ext, i| {
                 self.log.info("\t{d}. {s}", .{ i, ext });
@@ -509,7 +507,6 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
     defer layers.deinit();
     switch (builtin.mode) {
         .Debug => {
-            // TODO: replace the prints with core_log somehow
             self.log.info("Enabled validations", .{});
 
             layers.appendAssumeCapacity("VK_LAYER_KHRONOS_validation");

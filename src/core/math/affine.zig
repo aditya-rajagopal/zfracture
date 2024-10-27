@@ -1,3 +1,7 @@
+// TODO:
+//      - [ ] Benchmark
+//      - [ ] Docstrings
+//      - [ ] Write tests
 pub fn Affine(comptime backing_type: type) type {
     return extern struct {
         c: [shape[1]]ColT,
