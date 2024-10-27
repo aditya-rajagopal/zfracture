@@ -103,6 +103,7 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
             if (comptime memory_tag_len != 0) {
                 self.memory_stats.current_total_memory = 0;
                 self.memory_stats.current_memory = [_]u64{0} ** memory_tag_len;
+                self.memory_stats.num_allocations = 0;
             }
         }
 
@@ -141,6 +142,8 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
                     self.log.debug("=" ** padding, .{});
                     self.log.debug("|\t{s:<16}| {s} |{s} |", .{ "TOTAL", curr_bytes, peak_bytes });
                     self.log.debug("=" ** padding, .{});
+                    self.log.debug("|\t{s:<16}| {d} |", .{ "TOTAL ALLOCATION", self.memory_stats.num_allocations });
+                    self.log.debug("=" ** padding, .{});
                     self.log.debug("", .{});
                 }
             }
@@ -152,6 +155,8 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
                 current_memory: [memory_tag_len]u64,
                 peak_total_memory: u64,
                 peak_memory: [memory_tag_len]u64,
+                num_allocations: u64,
+                max_allocations: u64,
             },
             else => struct {},
         };
@@ -185,6 +190,7 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
                     const self: *TAlloc = @ptrCast(@alignCast(ctx));
                     self.stats.current_memory[@intFromEnum(tag)] += len;
                     self.stats.current_total_memory += len;
+                    self.stats.num_allocations += 1;
                     if (self.stats.current_total_memory > self.stats.peak_total_memory) {
                         self.stats.peak_total_memory = self.stats.current_total_memory;
                     }
