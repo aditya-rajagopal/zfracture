@@ -5,8 +5,6 @@
 const vk = @import("vulkan");
 const T = @import("types.zig");
 const math = @import("fr_core").math;
-const shaders = @import("shaders");
-const a = shaders.builtin.ObjectShader.vert;
 
 const platform = @import("platform.zig");
 const Device = @import("device.zig");
@@ -15,6 +13,8 @@ const RenderPass = @import("renderpass.zig");
 const CommandBuffer = @import("command_buffer.zig");
 const Framebuffer = @import("framebuffer.zig");
 const Fence = @import("fence.zig");
+
+const ObjectShader = @import("object_shader.zig");
 
 const Context = @This();
 
@@ -39,6 +39,7 @@ current_frame: u32,
 main_render_pass: RenderPass,
 graphics_command_buffers: []CommandBuffer,
 framebuffers: []Framebuffer,
+object_shader: ObjectShader,
 
 pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
@@ -52,7 +53,8 @@ pub const Error =
     Swapchain.Error ||
     RenderPass.Error ||
     CommandBuffer.Error ||
-    Framebuffer.Error;
+    Framebuffer.Error ||
+    ObjectShader.Error;
 
 pub fn init(
     self: *Context,
@@ -64,7 +66,6 @@ pub fn init(
 ) Error!void {
     const internal_plat_state: *T.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     self.log = log;
-    self.log.info("A loaded: {d}\n", .{a.len});
     // ========================================== LOAD VULKAN =================================/
 
     self.vulkan_lib = try std.DynLib.open("vulkan-1.dll");
@@ -147,9 +148,13 @@ pub fn init(
     self.log.info("Graphics CommandBuffers Allocated", .{});
     self.framebuffer_size_generation = 0;
     self.last_framebuffer_generation = 0;
+
+    self.object_shader = try ObjectShader.create(self);
+    self.log.info("Builtin Object Shader loaded Successfully", .{});
 }
 
 pub fn deinit(self: *Context) void {
+    self.object_shader.destroy(self);
     self.swapchain.wait_for_all_fences();
     self.device.handle.deviceWaitIdle() catch unreachable;
 
@@ -200,7 +205,7 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
     }
 
     if (self.framebuffer_size_generation != self.last_framebuffer_generation) {
-        @branchHint(.cold);
+        @branchHint(.unlikely);
         self.device.handle.deviceWaitIdle() catch |err| {
             self.log.err("Vulkan Begin frame waitForIdle failed: {s}", .{@errorName(err)});
             return false;
@@ -473,7 +478,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
         .p_engine_name = "Fracture Engine",
         .engine_version = vk.makeApiVersion(1, 0, 0, 0),
         .p_next = null,
-        .api_version = vk.API_VERSION_1_2,
+        .api_version = vk.API_VERSION_1_3,
     };
 
     var create_info: vk.InstanceCreateInfo = .{

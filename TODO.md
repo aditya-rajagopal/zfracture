@@ -20,7 +20,8 @@
     - [x] Add allocators to the context passed to the game. One GPA and one FrameArena
     - [x] Move memory into core
     - [x] Remove merge enums from memory and let the game handle it's own memory
-    - [ ] Should the FrameArena be replaced by a FixedBufferAllocator (i.e a bump allocator)
+    - [ ] Should the FrameArena be replaced by a FixedBufferAllocator (i.e a bump allocator) - YES
+        - [ ] A linear allocator
     - [ ] Create a custom allocator for Fracture that allows larger virtual space allocations for expanding allocations
 - [ ] windows platform layer
     - [x] Create a window
