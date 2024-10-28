@@ -154,9 +154,10 @@ pub fn init(
 }
 
 pub fn deinit(self: *Context) void {
-    self.object_shader.destroy(self);
     self.swapchain.wait_for_all_fences();
     self.device.handle.deviceWaitIdle() catch unreachable;
+
+    self.object_shader.destroy(self);
 
     self.free_commmand_buffers();
     self.log.info("Graphics CommandBuffers Freed", .{});

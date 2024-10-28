@@ -6,15 +6,10 @@ const T = @import("types.zig");
 // vertex, frag
 pub const OBJECT_SHADER_STAGE_COUNT = 2;
 
-pub const ShaderType = enum {
-    vertex,
-    fragment,
-};
+const ObjectShader = @This();
 
-pub const Shader = struct {
-    tag: ShaderType,
-    binary: []align(4) const u8,
-};
+stages: [OBJECT_SHADER_STAGE_COUNT]ShaderStage,
+pipeline: Pipeline,
 
 pub const ShaderStage = struct {
     create_info: vk.ShaderModuleCreateInfo,
@@ -26,16 +21,6 @@ pub const Pipeline = struct {
     handle: vk.Pipeline,
     layout: vk.PipelineLayout,
 };
-
-const shaders: []const Shader = &.{
-    .{ .tag = .vertex, .binary = builtin.ObjectShader.vert },
-    .{ .tag = .fragment, .binary = builtin.ObjectShader.frag },
-};
-
-const ObjectShader = @This();
-
-stages: [OBJECT_SHADER_STAGE_COUNT]ShaderStage,
-pipeline: Pipeline,
 
 pub const Error = error{UnableToLoadShader};
 
@@ -90,5 +75,20 @@ fn create_shader_module(
 
     return stage;
 }
+
+pub const ShaderType = enum {
+    vertex,
+    fragment,
+};
+
+pub const Shader = struct {
+    tag: ShaderType,
+    binary: []align(4) const u8,
+};
+
+const shaders: []const Shader = &.{
+    .{ .tag = .vertex, .binary = builtin.ObjectShader.vert },
+    .{ .tag = .fragment, .binary = builtin.ObjectShader.frag },
+};
 
 const std = @import("std");

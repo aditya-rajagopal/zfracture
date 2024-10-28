@@ -85,11 +85,11 @@ pub const LogConfig = struct {
 
     /// Initialize the logger to print to a file
     pub fn file_init(self: *LogConfig) LoggerError!void {
-        self.log_file = std.fs.cwd().openFile("./Logs/debug_log.txt", .{ .mode = .write_only }) catch |e| switch (e) {
+        self.log_file = std.fs.cwd().openFile("./Logs/debug_log.log", .{ .mode = .write_only }) catch |e| switch (e) {
             std.fs.File.OpenError.FileNotFound => blk: {
                 @branchHint(.cold);
                 try std.fs.cwd().makePath("./Logs/");
-                break :blk try std.fs.cwd().createFile("./Logs/debug_log.txt", .{});
+                break :blk try std.fs.cwd().createFile("./Logs/debug_log.log", .{});
             },
             else => |overflow| return overflow,
         };
