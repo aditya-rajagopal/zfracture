@@ -114,22 +114,29 @@ pub fn bind(self: *Buffer, ctx: *const Context, offset: u64) void {
     ctx.device.handle.bindBufferMemory(self.handle, self.memory, offset) catch unreachable;
 }
 
-pub inline fn lock(self: *Buffer, offset: u64, size: u64, flags: vk.MemoryMapFlags, ctx: *const Context) ?*anyopaque {
+pub inline fn lock(self: *const Buffer, offset: u64, size: u64, flags: vk.MemoryMapFlags, ctx: *const Context) ?*anyopaque {
     // NOTE: This will only fail if there is not enough virtual address space left. Which is highly unlikely
     return ctx.device.handle.mapMemory(self.memory, offset, size, flags) catch null;
 }
 
-pub inline fn unlock(self: *Buffer, ctx: *const Context) void {
+pub inline fn unlock(self: *const Buffer, ctx: *const Context) void {
     ctx.device.handle.unmapMemory(self.memory);
 }
 
-pub fn load_data(self: *Buffer, offset: u64, size: u64, flags: u32, ctx: *const Context, data: []const u8) void {
+pub fn load_data(
+    self: *const Buffer,
+    offset: u64,
+    size: u64,
+    flags: vk.MemoryMapFlags,
+    ctx: *const Context,
+    data: [*]const u8,
+) void {
     const data_ptr = self.lock(offset, size, flags, ctx);
     if (data_ptr) |ptr| {
         // NOTE: only copy if the data_ptr is not null else we just continue doing nothing.
         // TODO: Shoudl there be an error for when you get a null pointer;
         const dest: [*]u8 = @ptrCast(ptr);
-        @memcpy(dest[0..size], data);
+        @memcpy(dest[0..size], data[0..size]);
     } else {
         unreachable;
     }
@@ -150,7 +157,7 @@ pub fn copy_to(
     ctx.device.handle.queueWaitIdle(queue) catch unreachable;
 
     // We create a one time use command buffer
-    const temp_command_buffer = try CommandBuffer.allocate_and_begin_single_use(ctx, pool);
+    var temp_command_buffer = try CommandBuffer.allocate_and_begin_single_use(ctx, pool);
     errdefer temp_command_buffer.free(ctx);
 
     const copy_region = vk.BufferCopy{

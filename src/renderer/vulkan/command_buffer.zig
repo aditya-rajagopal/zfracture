@@ -90,14 +90,14 @@ pub fn allocate_and_begin_single_use(ctx: *const Context, pool: vk.CommandPool) 
     return command_buffer;
 }
 
-pub fn end_single_use(self: *CommandBuffer, ctx: *const Context, fence: vk.Fence, queue: vk.Queue) void {
+pub fn end_single_use(self: *CommandBuffer, ctx: *const Context, fence: vk.Fence, queue: vk.Queue) !void {
     try self.end();
     const submit_info = vk.SubmitInfo{
         .command_buffer_count = 1,
         .p_command_buffers = @ptrCast(&self.handle.handle),
     };
 
-    try ctx.device.handle.queueSubmit(queue, 1, &submit_info, fence);
+    try ctx.device.handle.queueSubmit(queue, 1, @ptrCast(&submit_info), fence);
     self.update_submitted();
     try ctx.device.handle.queueWaitIdle(queue);
     self.free(ctx);

@@ -47,12 +47,11 @@ pub fn create(ctx: *const Context) Error!ObjectShader {
     // TODO: Descriptiors
 
     // Create the pipeline
-
     const viewport = vk.Viewport{
-        .x = 0,
+        .x = 0.0,
         .y = @floatFromInt(ctx.framebuffer_extent.height),
         .width = @floatFromInt(ctx.framebuffer_extent.width),
-        .height = -@as(f32, @floatFromInt(ctx.framebuffer_extent.height)),
+        .height = -@as(f32, @floatFromInt(ctx.framebuffer_extent.width)),
         .min_depth = 0.0,
         .max_depth = 1.0,
     };
@@ -118,7 +117,10 @@ pub fn destroy(self: *ObjectShader, ctx: *const Context) void {
     }
 }
 
-pub fn use() void {}
+pub fn use(self: *const ObjectShader, ctx: *const Context) void {
+    const image_index = ctx.swapchain.current_image_index;
+    self.pipeline.bind(ctx.graphics_command_buffers[image_index], .graphics);
+}
 
 fn create_shader_module(
     ctx: *const Context,

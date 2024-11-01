@@ -165,6 +165,39 @@ pub fn init(
     try self.create_buffers();
     errdefer self.destroy_buffers();
     self.log.info("Vertex and Index buffers created", .{});
+
+    {
+        // HACK: This is temporary to get something working.
+        const num_vertices: usize = 4;
+        const vertices = [num_vertices]T.Vertex3D{
+            .{ .position = [3]f32{ -0.5, -0.5, 0.0 } },
+            .{ .position = [3]f32{ 0.5, 0.5, 0.0 } },
+            .{ .position = [3]f32{ -0.5, 0.5, 0.0 } },
+            .{ .position = [3]f32{ 0.5, -0.5, 0.0 } },
+        };
+
+        const index_count: usize = 6;
+        const indices = [index_count]u32{ 0, 1, 2, 0, 3, 1 };
+        try self.upload_data_range(
+            self.device.graphics_command_pool,
+            .null_handle,
+            self.device.queues.graphics.handle,
+            &self.object_vertex_buffer,
+            0,
+            @sizeOf(T.Vertex3D) * num_vertices,
+            @ptrCast(&vertices[0]),
+        );
+
+        try self.upload_data_range(
+            self.device.graphics_command_pool,
+            .null_handle,
+            self.device.queues.graphics.handle,
+            &self.object_index_buffer,
+            0,
+            @sizeOf(u32) * index_count,
+            @ptrCast(&indices[0]),
+        );
+    }
 }
 
 pub fn deinit(self: *Context) void {
@@ -267,7 +300,7 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
         .x = 0.0,
         .y = @floatFromInt(self.framebuffer_extent.height),
         .width = @floatFromInt(self.framebuffer_extent.width),
-        .height = -@as(f32, @floatFromInt(self.framebuffer_extent.width)),
+        .height = -@as(f32, @floatFromInt(self.framebuffer_extent.height)),
         .min_depth = 0.0,
         .max_depth = 1.0,
     };
@@ -287,6 +320,17 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
         command_buffer,
         self.framebuffers[self.swapchain.current_image_index].handle,
     );
+
+    {
+
+        // HACK: Temporary code to get something working
+        self.object_shader.use(self);
+
+        const offsets = [_]vk.DeviceSize{0};
+        command_buffer.handle.bindVertexBuffers(0, 1, @ptrCast(&self.object_vertex_buffer.handle), @ptrCast(&offsets));
+        command_buffer.handle.bindIndexBuffer(self.object_index_buffer.handle, 0, .uint32);
+        command_buffer.handle.drawIndexed(6, 1, 0, 0, 0);
+    }
 
     return true;
 }
@@ -363,6 +407,28 @@ pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: v
 
     self.log.info("WARNING: unable to find memory type", .{});
     return error.NotSuitableMemoryType;
+}
+
+fn upload_data_range(
+    self: *const Context,
+    pool: vk.CommandPool,
+    fence: vk.Fence,
+    queue: vk.Queue,
+    buffer: *const Buffer,
+    offset: u64,
+    size: u64,
+    data: [*]const u8,
+) (Buffer.Error || CommandBuffer.Error)!void {
+    // NOTE: We create a temporary buffer on the host side because the vertex and index buffers are on the device
+    // and we cannot access the device memory directly. But we can transfer the data from the host to the device using
+    // a command
+    const staging_usage_flags = vk.MemoryPropertyFlags{ .host_visible_bit = true, .host_coherent_bit = true };
+    var staging_buffer = try Buffer.create(self, size, .{ .transfer_src_bit = true }, staging_usage_flags, true);
+    defer staging_buffer.destroy(self);
+
+    staging_buffer.load_data(0, size, .{}, self, data);
+
+    try staging_buffer.copy_to(self, pool, fence, queue, buffer.handle, 0, offset, size);
 }
 
 fn recreate_swapchain(self: *Context) !bool {

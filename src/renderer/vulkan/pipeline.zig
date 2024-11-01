@@ -197,8 +197,8 @@ pub fn destroy(self: *Pipeline, ctx: *const Context) void {
 
 // TODO: This should move to the command buffer
 /// Any command that runs while this pipeline is bound will be executed against that pipeline
-pub fn bind(self: Pipeline, command_buffer: CommandBuffer, bind_point: vk.PipelineBindPoint) void {
-    command_buffer.handle.bindPipeline(bind_point, &self.handle);
+pub inline fn bind(self: Pipeline, command_buffer: CommandBuffer, bind_point: vk.PipelineBindPoint) void {
+    command_buffer.handle.bindPipeline(bind_point, self.handle);
 }
 
 const std = @import("std");
