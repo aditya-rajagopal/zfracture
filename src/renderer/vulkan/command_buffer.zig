@@ -16,7 +16,7 @@ pub const Error =
     T.LogicalDevice.QueueSubmitError ||
     T.LogicalDevice.QueueWaitIdleError;
 
-pub fn allocate(ctx: *const Context, pool: vk.CommandPool, is_primary: bool) !CommandBuffer {
+pub fn allocate(ctx: *const Context, pool: vk.CommandPool, is_primary: bool) Error!CommandBuffer {
     const allocate_info = vk.CommandBufferAllocateInfo{
         .command_pool = pool,
         .command_buffer_count = 1,
@@ -83,7 +83,7 @@ pub fn reset(self: *CommandBuffer) void {
     self.state = .ready;
 }
 
-pub fn allocate_and_begin_single_use(ctx: *const Context, pool: vk.CommandPool) !CommandBuffer {
+pub fn allocate_and_begin_single_use(ctx: *const Context, pool: vk.CommandPool) Error!CommandBuffer {
     // NOTE: Usually single use command buffers are primary
     var command_buffer = try allocate(ctx, pool, true);
     try command_buffer.begin(true, false, false);

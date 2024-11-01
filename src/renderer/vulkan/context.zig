@@ -13,6 +13,7 @@ const RenderPass = @import("renderpass.zig");
 const CommandBuffer = @import("command_buffer.zig");
 const Framebuffer = @import("framebuffer.zig");
 const Fence = @import("fence.zig");
+const Buffer = @import("buffer.zig");
 
 const ObjectShader = @import("object_shader.zig");
 
@@ -40,6 +41,11 @@ main_render_pass: RenderPass,
 graphics_command_buffers: []CommandBuffer,
 framebuffers: []Framebuffer,
 object_shader: ObjectShader,
+object_vertex_buffer: Buffer,
+object_index_buffer: Buffer,
+/// Runnint offset that is maintained when using the above buffers
+geometry_vertex_offset: u64 = 0,
+geometry_index_offset: u64 = 0,
 
 pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
@@ -54,7 +60,8 @@ pub const Error =
     RenderPass.Error ||
     CommandBuffer.Error ||
     Framebuffer.Error ||
-    ObjectShader.Error;
+    ObjectShader.Error ||
+    Buffer.Error;
 
 pub fn init(
     self: *Context,
@@ -149,15 +156,26 @@ pub fn init(
     self.framebuffer_size_generation = 0;
     self.last_framebuffer_generation = 0;
 
+    // =============================== SHADER OBJECTS AND PIPELINE ============================/
     self.object_shader = try ObjectShader.create(self);
-    self.log.info("Builtin Object Shader loaded Successfully", .{});
+    errdefer self.object_shader.destroy(self);
+    self.log.info("Builtin Object Shader loaded Successfully along with pipeline", .{});
+
+    // =========================== CREATE VERTEX AND INDEX BUFFERS ============================/
+    try self.create_buffers();
+    errdefer self.destroy_buffers();
+    self.log.info("Vertex and Index buffers created", .{});
 }
 
 pub fn deinit(self: *Context) void {
     self.swapchain.wait_for_all_fences();
     self.device.handle.deviceWaitIdle() catch unreachable;
 
+    self.destroy_buffers();
+    self.log.info("Vertex and Index buffers destroyed", .{});
+
     self.object_shader.destroy(self);
+    self.log.info("Object shader and pipeline destroyed", .{});
 
     self.free_commmand_buffers();
     self.log.info("Graphics CommandBuffers Freed", .{});
@@ -438,6 +456,40 @@ fn destroy_debugger(self: *Context) void {
         },
         else => {},
     }
+}
+
+fn create_buffers(self: *Context) Buffer.Error!void {
+    // NOTE: We want the memory to be loacl to the device. This is much faster
+    const memory_properties = vk.MemoryPropertyFlags{ .device_local_bit = true };
+
+    // NOTE: Just randomly allocate 1mil vertices?
+    const vertex_buffer_size: u64 = @sizeOf(T.Vertex3D) * 1024 * 1024;
+    self.object_vertex_buffer = try Buffer.create(
+        self,
+        vertex_buffer_size,
+        // NOTE: We want to be abel to use this bit as the source and destination for transfers
+        .{ .vertex_buffer_bit = true, .transfer_dst_bit = true, .transfer_src_bit = true },
+        memory_properties,
+        true,
+    );
+    self.geometry_vertex_offset = 0;
+    errdefer self.object_vertex_buffer.destroy(self);
+
+    const index_buffer_size: u64 = @sizeOf(u32) * 1024 * 1024;
+    self.object_index_buffer = try Buffer.create(
+        self,
+        index_buffer_size,
+        // NOTE: We want to be abel to use this bit as the source and destination for transfers
+        .{ .index_buffer_bit = true, .transfer_dst_bit = true, .transfer_src_bit = true },
+        memory_properties,
+        true,
+    );
+    self.geometry_index_offset = 0;
+}
+
+fn destroy_buffers(self: *Context) void {
+    self.object_vertex_buffer.destroy(self);
+    self.object_index_buffer.destroy(self);
 }
 
 fn create_debugger(self: *Context) !void {

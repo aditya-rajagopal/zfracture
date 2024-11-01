@@ -1,4 +1,5 @@
 const vk = @import("vulkan");
+const m = @import("fr_core").math;
 
 pub const RendererLog = @import("../types.zig").RendererLog;
 
@@ -6,6 +7,10 @@ pub const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapch
 const debug_apis = switch (builtin.mode) {
     .Debug => .{vk.extensions.ext_debug_utils},
     else => .{},
+};
+
+pub const Vertex3D = extern struct {
+    position: m.Vec3.Array,
 };
 
 pub const VulkanPlatform = struct {

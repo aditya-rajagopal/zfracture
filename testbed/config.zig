@@ -11,6 +11,6 @@ pub const app_api: core.API = .{
 
 pub const app_config: core.AppConfig = .{
     .application_name = "Testbed",
-    .window_pos = .{ .x = 100, .y = 100, .width = 1280, .height = 720 },
+    .window_pos = .{ .x = 0, .y = 0, .width = 1920, .height = 1080 },
     .frame_arena_preheat_size = .{ .MB = 512 },
 };

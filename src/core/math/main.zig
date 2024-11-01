@@ -9,9 +9,10 @@ pub fn main() !void {
     // try benchmark_dot();
     // try benchmark_eql();
     // try benchmark_vmul();
+    try benchmark_conversion_vec3();
     // try benchmark_affine_rot();
     // try benchmark_affine_rotation();
-    try benchmark_affine_inv();
+    // try benchmark_affine_inv();
     // try benchmark_vec3_transform();
 }
 
@@ -197,6 +198,73 @@ fn benchmark_cross() !void {
 }
 
 const Mat3 = @import("matrix.zig").Mat3x3(f32);
+
+fn benchmark_conversion_vec3() !void {
+    @setFloatMode(.optimized);
+    var xor = std.Random.DefaultPrng.init(0);
+    var random = xor.random();
+    const count = 100_000;
+
+    const allocator = std.heap.page_allocator;
+    var data0 = try std.ArrayList(Vec3).initCapacity(allocator, 64);
+    defer data0.deinit();
+    var data1 = try std.ArrayList(Vec3.Array).initCapacity(allocator, 64);
+    defer data1.deinit();
+
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        data0.appendAssumeCapacity(Vec3.init(random.float(f32), random.float(f32), random.float(f32)));
+        data1.appendAssumeCapacity(.{ random.float(f32), random.float(f32), random.float(f32) });
+    }
+
+    i = 0;
+    while (i < 1024) : (i += 1) {
+        // for (data1.items) |b| {
+        for (data0.items, data1.items) |a, b| {
+            const r = a.to_array();
+            const s = Vec3.init_array(b);
+            std.mem.doNotOptimizeAway(&r[0..3]);
+            std.mem.doNotOptimizeAway(&s);
+        }
+        // }
+    }
+
+    {
+        i = 0;
+        var timer = try Timer.start();
+        const start = timer.lap();
+        while (i < count) : (i += 1) {
+            for (data0.items, data1.items) |a, b| {
+                const r = a.to_array();
+                // const s = Vec3.init_array(b);
+                std.mem.doNotOptimizeAway(&r);
+                std.mem.doNotOptimizeAway(&b);
+            }
+        }
+        const end = timer.read();
+        const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+
+        std.debug.print("my version: {d:.4}s, \n", .{elapsed_s});
+    }
+
+    {
+        i = 0;
+        var timer = try Timer.start();
+        const start = timer.lap();
+        while (i < count) : (i += 1) {
+            for (data0.items, data1.items) |a, b| {
+                const r = a.to_array();
+                const s = Vec3.init_array(b);
+                std.mem.doNotOptimizeAway(&r[0..3]);
+                std.mem.doNotOptimizeAway(&s);
+            }
+        }
+        const end = timer.read();
+        const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+
+        std.debug.print("my version: {d:.4}s, \n", .{elapsed_s});
+    }
+}
 
 fn benchmark_vmul() !void {
     @setFloatMode(.optimized);
