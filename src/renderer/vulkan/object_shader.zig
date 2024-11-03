@@ -5,13 +5,24 @@ const T = @import("types.zig");
 const m = @import("fr_core").math;
 
 const Pipeline = @import("pipeline.zig");
+const Buffer = @import("buffer.zig");
 
 // vertex, frag
 pub const OBJECT_SHADER_STAGE_COUNT = 2;
+pub const MAX_DESCRIPTOR_SETS = 5;
 
 const ObjectShader = @This();
 
 stages: [OBJECT_SHADER_STAGE_COUNT]ShaderStage,
+
+// This is the actual buffer that holds our uniforms. And this buffer is attached to the descriptor set
+global_uniform_buffer: Buffer,
+global_uo: T.GlobalUO,
+global_descriptor_pool: vk.DescriptorPool,
+global_descriptor_set_layout: vk.DescriptorSetLayout,
+// NOTE: one per frame with 3 max for triple buffering
+global_descriptor_sets: [MAX_DESCRIPTOR_SETS]vk.DescriptorSet,
+
 pipeline: Pipeline,
 
 pub const ShaderStage = struct {
@@ -44,7 +55,42 @@ pub fn create(ctx: *const Context) Error!ObjectShader {
         };
     }
 
-    // TODO: Descriptiors
+    // INFO: Global Descriptiors
+    // NOTE: Descriptors are not created bu allocated from a pool
+    // A Descriptor Set is a grouping of uniforms. That is what the set=0 in the vertex shader means
+
+    const global_ubo_layout_binding = vk.DescriptorSetLayoutBinding{
+        .binding = 0, // This means this is the first binding. this is what binding=0 in the vert shader indicates
+        .descriptor_count = 1, // We only have 1 object
+        .descriptor_type = .uniform_buffer,
+        .p_immutable_samplers = null,
+        // This means this uniform is attached to the vertex shader
+        .stage_flags = .{ .vertex_bit = true },
+    };
+
+    // NOTE: We are only binding one ubo. If we have more we can add more
+    const global_layout_info = vk.DescriptorSetLayoutCreateInfo{
+        .binding_count = 1,
+        .p_bindings = @ptrCast(&global_ubo_layout_binding),
+    };
+
+    out_shader.global_descriptor_set_layout = ctx.device.handle.createDescriptorSetLayout(&global_layout_info, null) catch unreachable;
+
+    // INFO: The global Descriptor pool
+    const global_pool_size = vk.DescriptorPoolSize{
+        .type = .uniform_buffer,
+        // NOTE: We pass the same number as the number of images we have in the swapchain. So we make one set for each
+        // image
+        .descriptor_count = MAX_DESCRIPTOR_SETS,
+    };
+
+    const global_pool_info = vk.DescriptorPoolCreateInfo{
+        .pool_size_count = 1,
+        .p_pool_sizes = @ptrCast(&global_pool_size),
+        .max_sets = MAX_DESCRIPTOR_SETS,
+    };
+
+    out_shader.global_descriptor_pool = ctx.device.handle.createDescriptorPool(&global_pool_info, null) catch unreachable;
 
     // Create the pipeline
     const viewport = vk.Viewport{
@@ -86,7 +132,13 @@ pub fn create(ctx: *const Context) Error!ObjectShader {
         offset += sizes[index];
     }
 
-    // TODO: Descriptor layouts go here
+    // INFO: Descriptor layouts
+
+    // NOTE: We only have 1 for now
+    const descriptor_set_layout_count: usize = 1;
+    const layouts = [descriptor_set_layout_count]vk.DescriptorSetLayout{
+        out_shader.global_descriptor_set_layout,
+    };
 
     var stage_create_info: [OBJECT_SHADER_STAGE_COUNT]vk.PipelineShaderStageCreateInfo = undefined;
     for (stage_create_info[0..OBJECT_SHADER_STAGE_COUNT], 0..) |*info, index| {
@@ -98,21 +150,63 @@ pub fn create(ctx: *const Context) Error!ObjectShader {
         ctx,
         ctx.main_render_pass.handle,
         attribute_descriptions[0..attribute_count],
-        null,
+        layouts[0..descriptor_set_layout_count],
         stage_create_info[0..OBJECT_SHADER_STAGE_COUNT],
         viewport,
         scissor,
         false,
     );
 
+    out_shader.global_uniform_buffer = Buffer.create(
+        ctx,
+        @sizeOf(T.GlobalUO) * MAX_DESCRIPTOR_SETS,
+        // The buffer is the destination of writing the uniform data
+        .{ .transfer_dst_bit = true, .uniform_buffer_bit = true },
+        // The buffer is in the device and not CPU. But we can upload to it directly so we set host visible and coherent
+        .{ .device_local_bit = true, .host_visible_bit = true, .host_coherent_bit = true },
+        true,
+    ) catch |err| {
+        ctx.log.err("Vulkan buffer creation frailed for global_uniform_buffer with error: {s}", .{@errorName(err)});
+        return error.UnableToLoadShader;
+    };
+
+    // Allocate Descriptor Sets
+    // NOTE: We are using the same layout for all 3 sets which are associated with each swapchain image
+    const global_layouts = [_]vk.DescriptorSetLayout{
+        out_shader.global_descriptor_set_layout,
+        // out_shader.global_descriptor_set_layout,
+        // out_shader.global_descriptor_set_layout,
+    } ** MAX_DESCRIPTOR_SETS;
+
+    const alloc_info = vk.DescriptorSetAllocateInfo{
+        .descriptor_pool = out_shader.global_descriptor_pool,
+        .descriptor_set_count = MAX_DESCRIPTOR_SETS,
+        .p_set_layouts = @ptrCast(&global_layouts[0]),
+    };
+
+    ctx.device.handle.allocateDescriptorSets(
+        &alloc_info,
+        @ptrCast(&out_shader.global_descriptor_sets[0]),
+    ) catch unreachable;
+
     return out_shader;
 }
 
 pub fn destroy(self: *ObjectShader, ctx: *const Context) void {
+    const device = ctx.device.handle;
+
+    // device.freeDescriptorSets(self.global_descriptor_pool, 3, @ptrCast(&self.global_descriptor_sets[0])) catch unreachable;
+
+    self.global_uniform_buffer.destroy(ctx);
+
     self.pipeline.destroy(ctx);
 
+    device.destroyDescriptorPool(self.global_descriptor_pool, null);
+
+    device.destroyDescriptorSetLayout(self.global_descriptor_set_layout, null);
+
     for (&self.stages) |*stage| {
-        ctx.device.handle.destroyShaderModule(stage.handle, null);
+        device.destroyShaderModule(stage.handle, null);
         stage.handle = .null_handle;
     }
 }
@@ -120,6 +214,50 @@ pub fn destroy(self: *ObjectShader, ctx: *const Context) void {
 pub fn use(self: *const ObjectShader, ctx: *const Context) void {
     const image_index = ctx.swapchain.current_image_index;
     self.pipeline.bind(ctx.graphics_command_buffers[image_index], .graphics);
+}
+
+pub fn update_global_state(self: *ObjectShader, ctx: *const Context) void {
+    const image_index = ctx.swapchain.current_image_index;
+    const command_buffer = ctx.graphics_command_buffers[image_index].handle;
+    const global_descriptor = self.global_descriptor_sets[image_index];
+
+    // 2. Configure the descriptor for the given index.
+    const range: u32 = @sizeOf(T.GlobalUO);
+    const offset: u64 = @sizeOf(T.GlobalUO) * image_index;
+
+    // 3. Upload data to the buffer
+    self.global_uniform_buffer.load_data(offset, range, .{}, ctx, @ptrCast(&self.global_uo));
+
+    // 4. We need to tell the descriptor that the data has changed.
+    const buffer_info = vk.DescriptorBufferInfo{
+        .offset = offset,
+        .range = range,
+        .buffer = self.global_uniform_buffer.handle,
+    };
+
+    const descriptor_write = vk.WriteDescriptorSet{
+        .dst_set = global_descriptor,
+        .dst_binding = 0,
+        .dst_array_element = 0,
+        .descriptor_type = .uniform_buffer,
+        .descriptor_count = 1,
+        .p_buffer_info = @ptrCast(&buffer_info),
+        .p_texel_buffer_view = @ptrCast(&[_]vk.BufferView{}),
+        .p_image_info = @ptrCast(&[_]vk.DescriptorImageInfo{}),
+    };
+
+    ctx.device.handle.updateDescriptorSets(1, @ptrCast(&descriptor_write), 0, null);
+
+    // 1. Bind global descriptor set that needs to be updated
+    command_buffer.bindDescriptorSets(
+        .graphics,
+        self.pipeline.layout,
+        0,
+        1,
+        @ptrCast(&global_descriptor),
+        0,
+        null,
+    );
 }
 
 fn create_shader_module(

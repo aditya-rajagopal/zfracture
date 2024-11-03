@@ -74,6 +74,7 @@
     - [ ] Create a static multiarrayList
 - [ ] Instrumentation
 - [ ] Renderer
+    - [ ] Unify all errors into a small set that are allowed to crash the program. Everything else needs to be handled
     - [ ] Create renderer settings on the engine/app side rather than hard coded settings
     - [ ] Create image pools and modify image.zig to use offsets
     - [ ] Deal with possibility of more than 1 queues for graphics

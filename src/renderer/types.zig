@@ -7,4 +7,19 @@ pub const RendererLog = core.log.ScopedLogger(core.log.default_log, .RENDERER, c
 // TODO: Create an extent type in math
 pub const FramebufferExtentFn = *const fn () [2]u32;
 
+pub const Vertex3D = extern struct {
+    position: m.Vec3.Array,
+};
+
+// NOTE: We want the Global UBO to be 256 bytes
+// Specifically on some Nvidia cards UBOs need to have 256 bytes
+pub const GlobalUO = extern struct {
+    /// The view projection matrix P * V (Order is important)
+    view_projection: m.Transform.Array, // 64 bytes
+    reserved_0: m.Transform.Array,
+    reserved_1: m.Transform.Array,
+    reserved_2: m.Transform.Array,
+};
+
 const core = @import("fr_core");
+const m = core.math;

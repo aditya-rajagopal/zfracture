@@ -9,6 +9,7 @@ pub fn Affine(comptime backing_type: type) type {
         const Vec3 = vec.Vec3(E);
         const Vec4 = vec.Vec4(E);
 
+        pub const Array = [ColT.dim * RowT.dim]E;
         pub const shape: [2]usize = .{ 4, 4 };
         pub const E = backing_type;
         pub const ColT = Vec4;
@@ -290,8 +291,8 @@ pub fn Affine(comptime backing_type: type) type {
                 .c = .{
                     .{ .vec = .{ inv_half_tan_fov / aspect_ratio, 0.0, 0.0, 0.0 } },
                     .{ .vec = .{ 0.0, inv_half_tan_fov, 0.0, 0.0 } },
-                    .{ .vec = .{ 0.0, 0.0, -((far_clip + near_clip) * nf), -1.0 } },
-                    .{ .vec = .{ 0.0, 0.0, -2.0 * near_clip * far_clip * nf, 0.0 } },
+                    .{ .vec = .{ 0.0, 0.0, ((far_clip + near_clip) * nf), -1.0 } },
+                    .{ .vec = .{ 0.0, 0.0, 2.0 * near_clip * far_clip * nf, 0.0 } },
                 },
             };
         }
@@ -489,7 +490,7 @@ pub fn Affine(comptime backing_type: type) type {
         }
 
         inline fn mul_debug(m1: *const Self, m2: *const Self) Self {
-            @setFloatMode(.optimized);
+            // @setFloatMode(.optimized);
             var result: Self = undefined;
             inline for (0..shape[0] - 1) |r| {
                 inline for (0..shape[1]) |c| {

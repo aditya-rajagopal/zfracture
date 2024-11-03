@@ -50,6 +50,8 @@ pub const mat4x4 = Mat4.init;
 // pub const vec3d = Vec3d.init;
 // pub const vec4d = Vec4d.init;
 
+pub const deg_to_rad = std.math.degreesToRadians;
+
 pub const vec = @import("vec.zig");
 pub const mat = @import("matrix.zig");
 pub const affine = @import("affine.zig");

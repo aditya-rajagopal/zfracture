@@ -169,11 +169,12 @@ pub fn init(
     {
         // HACK: This is temporary to get something working.
         const num_vertices: usize = 4;
+        const scale: f32 = 0.5;
         const vertices = [num_vertices]T.Vertex3D{
-            .{ .position = [3]f32{ -0.5, -0.5, 0.0 } },
-            .{ .position = [3]f32{ 0.5, 0.5, 0.0 } },
-            .{ .position = [3]f32{ -0.5, 0.5, 0.0 } },
-            .{ .position = [3]f32{ 0.5, -0.5, 0.0 } },
+            .{ .position = [3]f32{ -0.5 * scale, -0.5 * scale, 0.0 } },
+            .{ .position = [3]f32{ 0.5 * scale, 0.5 * scale, 0.0 } },
+            .{ .position = [3]f32{ -0.5 * scale, 0.5 * scale, 0.0 } },
+            .{ .position = [3]f32{ 0.5 * scale, -0.5 * scale, 0.0 } },
         };
 
         const index_count: usize = 6;
@@ -240,6 +241,38 @@ pub fn deinit(self: *Context) void {
 
     self.vulkan_lib.close();
     self.log.info("Vulkan Library Closed", .{});
+}
+
+pub fn update_global_state(
+    self: *Context,
+    projection: math.Transform,
+    view: math.Transform,
+    view_position: math.Vec3,
+    ambient_colour: math.Vec4,
+    mode: i32,
+) void {
+    _ = view_position;
+    _ = ambient_colour;
+    _ = mode;
+
+    self.object_shader.use(self);
+    self.object_shader.global_uo.view_projection = @bitCast(projection.mul(&view));
+    // self.log.debug("Projection: {any}\nView:{any}\nVP: {any}\n", .{ projection, view, projection.mul(&view) });
+    // TODO: Use the other properties
+
+    self.object_shader.update_global_state(self);
+
+    {
+        const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
+
+        // HACK: Temporary code to get something working
+        // self.object_shader.use(self);
+
+        const offsets = [_]vk.DeviceSize{0};
+        command_buffer.handle.bindVertexBuffers(0, 1, @ptrCast(&self.object_vertex_buffer.handle), @ptrCast(&offsets));
+        command_buffer.handle.bindIndexBuffer(self.object_index_buffer.handle, 0, .uint32);
+        command_buffer.handle.drawIndexed(6, 1, 0, 0, 0);
+    }
 }
 
 pub fn begin_frame(self: *Context, delta_time: f32) bool {
@@ -320,17 +353,6 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
         command_buffer,
         self.framebuffers[self.swapchain.current_image_index].handle,
     );
-
-    {
-
-        // HACK: Temporary code to get something working
-        self.object_shader.use(self);
-
-        const offsets = [_]vk.DeviceSize{0};
-        command_buffer.handle.bindVertexBuffers(0, 1, @ptrCast(&self.object_vertex_buffer.handle), @ptrCast(&offsets));
-        command_buffer.handle.bindIndexBuffer(self.object_index_buffer.handle, 0, .uint32);
-        command_buffer.handle.drawIndexed(6, 1, 0, 0, 0);
-    }
 
     return true;
 }

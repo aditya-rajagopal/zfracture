@@ -1,4 +1,5 @@
 const core = @import("fr_core");
+const math = core.math;
 // TODO: Make this configurable from build or other means. TO allow different contexts
 const Context = @import("vulkan/context.zig");
 const T = @import("types.zig");
@@ -6,8 +7,12 @@ const std = @import("std");
 
 const Frontend = @This();
 
+const perspective = math.Transform.perspective(math.deg_to_rad(45.0), 1920.0 / 1080.0, 0.1, 1000.0);
+const view_mat = math.Transform.init_trans(&math.Vec3.init(0.0, 0.0, -1.0));
+
 backend: Context,
 log: T.RendererLog,
+angle: f32,
 
 pub const FrontendError = error{ InitFailed, EndFrameFailed } || Context.Error;
 
@@ -22,10 +27,22 @@ pub fn init(
     // TODO: Make this configurable
     self.log = T.RendererLog.init(log_config);
     try self.backend.init(allocator, application_name, platform_state, self.log, framebuffer_extent);
+    self.angle = 0;
 }
 
 pub fn deinit(self: *Frontend) void {
     self.backend.deinit();
+}
+
+pub fn update_global_state(
+    self: *Frontend,
+    projection: math.Transform,
+    view: math.Transform,
+    view_position: math.Vec3,
+    ambient_colour: math.Vec4,
+    mode: i32,
+) void {
+    self.backend.update_global_state(projection, view, view_position, ambient_colour, mode);
 }
 
 pub fn begin_frame(self: *Frontend, delta_time: f32) bool {
@@ -41,6 +58,10 @@ pub fn end_frame(self: *Frontend, delta_time: f32) bool {
 pub fn draw_frame(self: *Frontend, packet: T.Packet) FrontendError!void {
     // Only if the begin frame is successful can we continue with the mid frame operations
     if (self.begin_frame(packet.delta_time)) {
+        const rot = math.Transform.init_rot_z(math.deg_to_rad(self.angle));
+        self.backend.update_global_state(perspective, rot.mul(&view_mat), math.Vec3.zeros, math.Vec4.ones, 0);
+        self.angle += 0.01;
+
         // If the end frame fails it is likely irrecoverable
         if (!self.end_frame(packet.delta_time)) {
             return FrontendError.EndFrameFailed;
