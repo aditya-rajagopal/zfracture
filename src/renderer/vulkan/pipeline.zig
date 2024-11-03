@@ -1,5 +1,6 @@
 const vk = @import("vulkan");
 const T = @import("types.zig");
+const m = @import("fr_core").math;
 
 const Context = @import("context.zig");
 const CommandBuffer = @import("command_buffer.zig");
@@ -132,11 +133,22 @@ pub fn create(
         .primitive_restart_enable = vk.FALSE,
     };
 
+    // INFO: Push constants
+    const push_constant = vk.PushConstantRange{
+        // We want to push the constant to the vertex shader and nowhere else
+        .stage_flags = .{ .vertex_bit = true },
+        .offset = @sizeOf(m.Transform) * 0,
+        // We are reserving 128 bytes. The driver is not guarnteed to have more than that
+        .size = @sizeOf(m.Transform) * 2,
+    };
+
     const length = if (descriptor_set_layouts) |d| d.len else 0;
     const layouts = if (descriptor_set_layouts) |d| d.ptr else null;
     const pipeline_layout_create_info = vk.PipelineLayoutCreateInfo{
         .set_layout_count = @truncate(length),
         .p_set_layouts = layouts,
+        .push_constant_range_count = 1,
+        .p_push_constant_ranges = @ptrCast(&push_constant),
     };
 
     const pipeline_layout = try ctx.device.handle.createPipelineLayout(&pipeline_layout_create_info, null);

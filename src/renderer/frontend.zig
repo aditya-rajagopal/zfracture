@@ -58,9 +58,18 @@ pub fn end_frame(self: *Frontend, delta_time: f32) bool {
 pub fn draw_frame(self: *Frontend, packet: T.Packet) FrontendError!void {
     // Only if the begin frame is successful can we continue with the mid frame operations
     if (self.begin_frame(packet.delta_time)) {
-        const rot = math.Transform.init_rot_z(math.deg_to_rad(self.angle));
-        self.backend.update_global_state(perspective, rot.mul(&view_mat), math.Vec3.zeros, math.Vec4.ones, 0);
-        self.angle += 0.01;
+        self.backend.update_global_state(perspective, view_mat, math.Vec3.zeros, math.Vec4.ones, 0);
+
+        // const model = math.Transform.init_trans(&math.vec3s(0, 0, 0));
+
+        const model = math.Transform.init_rot_z(math.deg_to_rad(self.angle));
+        // const quat = math.Quat.init_axis_angle(&math.Vec3.z_basis.negate(), self.angle, false);
+        // const model = quat.to_affine_center(&math.Vec3.zeros);
+        self.angle += 0.001;
+
+        self.backend.update_object(model);
+
+        self.backend.temp_draw_object();
 
         // If the end frame fails it is likely irrecoverable
         if (!self.end_frame(packet.delta_time)) {

@@ -261,18 +261,22 @@ pub fn update_global_state(
     // TODO: Use the other properties
 
     self.object_shader.update_global_state(self);
+}
 
-    {
-        const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
+pub fn update_object(self: *Context, model: math.Transform) void {
+    self.object_shader.update_object(self, model);
+}
 
-        // HACK: Temporary code to get something working
-        // self.object_shader.use(self);
+pub fn temp_draw_object(self: *Context) void {
+    const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
 
-        const offsets = [_]vk.DeviceSize{0};
-        command_buffer.handle.bindVertexBuffers(0, 1, @ptrCast(&self.object_vertex_buffer.handle), @ptrCast(&offsets));
-        command_buffer.handle.bindIndexBuffer(self.object_index_buffer.handle, 0, .uint32);
-        command_buffer.handle.drawIndexed(6, 1, 0, 0, 0);
-    }
+    // HACK: Temporary code to get something working
+    // self.object_shader.use(self);
+
+    const offsets = [_]vk.DeviceSize{0};
+    command_buffer.handle.bindVertexBuffers(0, 1, @ptrCast(&self.object_vertex_buffer.handle), @ptrCast(&offsets));
+    command_buffer.handle.bindIndexBuffer(self.object_index_buffer.handle, 0, .uint32);
+    command_buffer.handle.drawIndexed(6, 1, 0, 0, 0);
 }
 
 pub fn begin_frame(self: *Context, delta_time: f32) bool {

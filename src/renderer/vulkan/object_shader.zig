@@ -260,6 +260,22 @@ pub fn update_global_state(self: *ObjectShader, ctx: *const Context) void {
     );
 }
 
+pub fn update_object(self: *ObjectShader, ctx: *const Context, model: m.Transform) void {
+    const image_index = ctx.swapchain.current_image_index;
+    const command_buffer = ctx.graphics_command_buffers[image_index].handle;
+
+    // NOTE: Push constants are used for constantly changing data. We dont need to create a descriptor set for this
+    // They have a size limitation. THey have a limit for 128 bytes. Because the driver is guarnteed to have atleast 128
+    // but there is no guarentee there will be more.
+    command_buffer.pushConstants(
+        self.pipeline.layout,
+        .{ .vertex_bit = true },
+        0,
+        @sizeOf(m.Transform),
+        @ptrCast(&model),
+    );
+}
+
 fn create_shader_module(
     ctx: *const Context,
     stage_type: vk.ShaderStageFlags,
