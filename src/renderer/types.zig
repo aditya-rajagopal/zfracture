@@ -15,10 +15,10 @@ pub const Vertex3D = extern struct {
 // Specifically on some Nvidia cards UBOs need to have 256 bytes
 pub const GlobalUO = extern struct {
     /// The view projection matrix P * V (Order is important)
-    view_projection: m.Transform.Array, // 64 bytes
-    reserved_0: m.Transform.Array,
-    reserved_1: m.Transform.Array,
-    reserved_2: m.Transform.Array,
+    view_projection: m.Mat4, // 64 bytes
+    reserved_0: m.Mat4,
+    reserved_1: m.Mat4,
+    reserved_2: m.Mat4,
 };
 
 const core = @import("fr_core");

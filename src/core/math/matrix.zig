@@ -209,6 +209,34 @@ pub fn Mat4x4(comptime backing_type: type) type {
             return vector.mat_vmul(m);
         }
 
+        pub inline fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Self {
+            const lr: f32 = 1.0 / (right - left);
+            const bt: f32 = 1.0 / (top - bottom);
+            const nf: f32 = 1.0 / (far - near);
+            return .{
+                .c = .{
+                    .{ .vec = .{ 2.0 * lr, 0.0, 0.0, -(right + left) * lr } },
+                    .{ .vec = .{ 1.0, 2.0 * bt, 0.0, -(top + bottom) * bt } },
+                    .{ .vec = .{ 1.0, 0.0, 2.0 * nf, -(near + far) * nf } },
+                    .{ .vec = .{ 1.0, 0.0, 0.0, 1.0 } },
+                },
+            };
+        }
+
+        pub inline fn perspective(fov_rad: f32, aspect_ratio: f32, near_clip: f32, far_clip: f32) Self {
+            // const inv_half_tan_fov = 1 / @tan(fov_rad * 0.5);
+            const half_tan_fov = @tan(fov_rad * 0.5);
+            // const nf = 1.0 / (near_clip - far_clip);
+            return .{
+                .c = .{
+                    .{ .vec = .{ 1.0 / (aspect_ratio * half_tan_fov), 0.0, 0.0, 0.0 } },
+                    .{ .vec = .{ 0.0, 1.0 / half_tan_fov, 0.0, 0.0 } },
+                    .{ .vec = .{ 0.0, 0.0, -((far_clip + near_clip) / (far_clip - near_clip)), -1.0 } },
+                    .{ .vec = .{ 0.0, 0.0, -(2.0 * near_clip * far_clip / (far_clip - near_clip)), 0.0 } },
+                },
+            };
+        }
+
         /// Inverse
         pub inline fn inv(m: *const Self) Self {
             const Ty = Vec4(E).T;

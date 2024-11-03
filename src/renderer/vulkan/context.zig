@@ -245,8 +245,8 @@ pub fn deinit(self: *Context) void {
 
 pub fn update_global_state(
     self: *Context,
-    projection: math.Transform,
-    view: math.Transform,
+    projection: math.Mat4,
+    view: math.Mat4,
     view_position: math.Vec3,
     ambient_colour: math.Vec4,
     mode: i32,

@@ -7,12 +7,13 @@ const std = @import("std");
 
 const Frontend = @This();
 
-const perspective = math.Transform.perspective(math.deg_to_rad(45.0), 1920.0 / 1080.0, 0.1, 1000.0);
-const view_mat = math.Transform.init_trans(&math.Vec3.init(0.0, 0.0, -1.0));
+const perspective = math.Mat4.perspective(math.deg_to_rad(45.0), 1920.0 / 1080.0, 0.1, 1000.0);
+// const view_mat = math.Transform.init_trans(&math.Vec3.init(0.0, 0.0, -1.0));
 
 backend: Context,
 log: T.RendererLog,
 angle: f32,
+z: f32 = 0.0,
 
 pub const FrontendError = error{ InitFailed, EndFrameFailed } || Context.Error;
 
@@ -28,6 +29,7 @@ pub fn init(
     self.log = T.RendererLog.init(log_config);
     try self.backend.init(allocator, application_name, platform_state, self.log, framebuffer_extent);
     self.angle = 0;
+    self.z = 0;
 }
 
 pub fn deinit(self: *Frontend) void {
@@ -58,13 +60,16 @@ pub fn end_frame(self: *Frontend, delta_time: f32) bool {
 pub fn draw_frame(self: *Frontend, packet: T.Packet) FrontendError!void {
     // Only if the begin frame is successful can we continue with the mid frame operations
     if (self.begin_frame(packet.delta_time)) {
-        self.backend.update_global_state(perspective, view_mat, math.Vec3.zeros, math.Vec4.ones, 0);
+        const view_trans = math.Transform.init_trans(&math.vec3s(0, 0, self.z));
+        self.backend.update_global_state(perspective, view_trans.to_mat(), math.Vec3.zeros, math.Vec4.ones, 0);
+        self.z -= 0.001;
 
         // const model = math.Transform.init_trans(&math.vec3s(0, 0, 0));
 
-        const model = math.Transform.init_rot_z(math.deg_to_rad(self.angle));
-        // const quat = math.Quat.init_axis_angle(&math.Vec3.z_basis.negate(), self.angle, false);
-        // const model = quat.to_affine_center(&math.Vec3.zeros);
+        // const model = math.Transform.init_rot_z(math.deg_to_rad(self.angle));
+
+        const quat = math.Quat.init_axis_angle(&math.Vec3.z_basis.negate(), self.angle, false);
+        const model = quat.to_affine_center(&math.Vec3.zeros);
         self.angle += 0.001;
 
         self.backend.update_object(model);
