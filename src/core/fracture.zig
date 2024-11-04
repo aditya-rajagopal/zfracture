@@ -8,9 +8,12 @@ pub const Fracture = struct {
         .height = 720,
     },
     last_time: f64 = 0,
-    delta_time: f64 = 0,
+    delta_time: f32 = 0,
     is_suspended: bool = false,
     is_running: bool = false,
+    // HACK: Temporary. THis should be the camera system
+    view: math.Mat4,
+    camera_dirty: bool,
 };
 
 pub const log = @import("log.zig");

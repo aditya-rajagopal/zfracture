@@ -157,6 +157,7 @@ pub fn create(ctx: *const Context) Error!ObjectShader {
         false,
     );
 
+    // TODO: NOt all devices have the ability to have device local + host visible. Check for this support
     out_shader.global_uniform_buffer = Buffer.create(
         ctx,
         @sizeOf(T.GlobalUO) * MAX_DESCRIPTOR_SETS,

@@ -51,6 +51,7 @@ pub const mat4x4 = Mat4.init;
 // pub const vec4d = Vec4d.init;
 
 pub const deg_to_rad = std.math.degreesToRadians;
+pub const clamp = std.math.clamp;
 
 pub const vec = @import("vec.zig");
 pub const mat = @import("matrix.zig");

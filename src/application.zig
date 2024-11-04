@@ -135,6 +135,8 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     errdefer app.frontend.deinit();
     app.log.info("Renderer initialized", .{});
 
+    app.engine.view = app.frontend.view;
+
     // Application
     app.game_state = app.api.init(&app.engine) orelse {
         @branchHint(.cold);
@@ -225,6 +227,11 @@ pub fn run(self: *Application) ApplicationError!void {
                 break;
             }
 
+            if (self.engine.camera_dirty) {
+                self.frontend.set_object_view(&self.engine.view);
+                self.engine.camera_dirty = false;
+            }
+
             if (!self.api.render(&self.engine, self.game_state)) {
                 @branchHint(.cold);
                 core_log.fatal("Client app render failed, shutting down", .{});
@@ -273,6 +280,9 @@ pub fn run(self: *Application) ApplicationError!void {
         }
         self.engine.input.update();
         end = self.timer.lap();
+
+        const ns_to_s: f32 = 1.0 / @as(f32, @floatFromInt(std.time.ns_per_s));
+        self.engine.delta_time = @as(f32, @floatFromInt(end)) * ns_to_s;
 
         // break;
     }
