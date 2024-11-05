@@ -4,7 +4,9 @@
 //      - [ ] This needs to be configurable from the engine/game
 const vk = @import("vulkan");
 const T = @import("types.zig");
-const math = @import("fr_core").math;
+const core = @import("fr_core");
+const math = core.math;
+const Texture = core.resource.Texture;
 
 const platform = @import("platform.zig");
 const Device = @import("device.zig");
@@ -14,6 +16,7 @@ const CommandBuffer = @import("command_buffer.zig");
 const Framebuffer = @import("framebuffer.zig");
 const Fence = @import("fence.zig");
 const Buffer = @import("buffer.zig");
+const Image = @import("image.zig");
 
 const ObjectShader = @import("object_shader.zig");
 
@@ -435,6 +438,119 @@ pub fn find_memory_index(self: *const Context, type_filter: u32, memory_flags: v
     return error.NotSuitableMemoryType;
 }
 
+pub fn create_texture(
+    self: *Context,
+    width: u32,
+    height: u32,
+    channel_count: u8,
+    pixels: []const u8,
+    has_transparency: bool,
+    // TODO: This is for reference countintg
+    auto_release: bool,
+) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!Texture {
+    _ = has_transparency;
+    _ = auto_release;
+    const image_size: vk.DeviceSize = width * height * channel_count;
+
+    assert(image_size < pixels.len);
+    var out_texture: Texture = undefined;
+    out_texture.width = width;
+    out_texture.height = height;
+    out_texture.channel_count = channel_count;
+    // TODO: used when we create a resource manager
+    out_texture.generation = 0;
+
+    const internal_data = try self.allocator.create(T.TextureData);
+    out_texture.data = @ptrCast(internal_data);
+
+    // Create staging buffer and load data into it.
+    const usage = vk.BufferUsageFlags{ .transfer_src_bit = true };
+    const props = vk.MemoryPropertyFlags{ .host_visible_bit = true, .host_coherent_bit = true };
+    const staging_buffer = Buffer.create(self, image_size, usage, props, true) catch |err| {
+        @branchHint(.cold);
+        self.log.err("Unable to create staging buffer for texture creation: {s}", .{@errorName(err)});
+        return error.UnableToLoadTexture;
+    };
+    defer staging_buffer.destroy(self);
+
+    staging_buffer.load_data(0, image_size, .{}, self, pixels.ptr);
+
+    // TODO: Maybe this should be configurable
+    const format: vk.Format = .r8g8b8a8_unorm;
+
+    internal_data.image = Image.create(
+        self,
+        // TODO: Do I need 3D?
+        .@"2d",
+        .{ .width = width, .height = height },
+        format,
+        .optimal,
+        // NOTE: THis is specific to the texture
+        .{ .transfer_src_bit = true, .transfer_dst_bit = true, .sampled_bit = true, .color_attachment_bit = true },
+        .{ .device_local_bit = true },
+        true,
+        .{ .color_bit = true },
+    ) catch |err| {
+        @branchHint(.cold);
+        self.log.err("Unable to create vulkan image for texture creation: {s}", .{@errorName(err)});
+        return error.UnableToLoadTexture;
+    };
+    errdefer internal_data.image.destroy(self);
+
+    var temp_buffer = CommandBuffer.allocate_and_begin_single_use(self, self.device.graphics_command_pool) catch |err| {
+        @branchHint(.cold);
+        self.log.err("Unable to allocate command buffer to copy image data for texture creation: {s}", .{@errorName(err)});
+        return error.UnableToLoadTexture;
+    };
+
+    // Transition from whatever it is to recieve the data from our staging buffer
+    internal_data.image.transition_layout(.undefined, .transfer_dst_optimal, self, &temp_buffer);
+
+    internal_data.image.copy_from_buffer(staging_buffer.handle, &temp_buffer);
+
+    internal_data.image.transition_layout(.transfer_dst_optimal, .shader_read_only_optimal, self, &temp_buffer);
+
+    temp_buffer.end_single_use(self, .null_handle, self.device.queues.graphics.handle);
+
+    const sampler_info = vk.SamplerCreateInfo{
+        // TODO: Make these configurable
+        .mag_filter = .linear,
+        .min_filter = .linear,
+        .address_mode_u = .repeat,
+        .address_mode_v = .repeat,
+        .address_mode_w = .repeat,
+        .anisotropy_enable = vk.TRUE,
+        .max_anisotropy = 16,
+        .border_color = .int_opaque_black,
+        .unnormalized_coordinates = vk.FALSE,
+        .compare_enable = vk.FALSE,
+        .compare_op = .always,
+        .mipmap_mode = .linear,
+        .mip_lod_bias = 0.0,
+        .min_lod = 0.0,
+        .max_lod = 0.0,
+    };
+
+    internal_data.sampler = self.device.handle.createSampler(&sampler_info, null) catch unreachable;
+
+    out_texture.has_transparency = 0;
+    out_texture.generation += 1;
+    return out_texture;
+}
+
+pub fn destory_texture(self: *Context, texture: *Texture) void {
+    if (texture.data) |data| {
+        const internal_data: *T.TextureData = @ptrCast(@alignCast(data));
+
+        internal_data.image.destroy(self);
+        self.device.handle.destroySampler(internal_data.sampler, null);
+        internal_data.sampler = .null_handle;
+
+        self.allocator.destroy(internal_data);
+    }
+    texture.* = .{};
+}
+
 fn upload_data_range(
     self: *const Context,
     pool: vk.CommandPool,
@@ -734,4 +850,5 @@ fn debug_callback(
 }
 
 const std = @import("std");
+const assert = std.debug.assert;
 const builtin = @import("builtin");

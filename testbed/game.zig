@@ -115,7 +115,7 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         }
 
         if (engine.input.is_key_down(.KEY_1)) {
-            state.camera_pos = m.vec3s(0, 0, 10.0);
+            state.camera_pos = m.vec3s(0, 0, 2.0);
             state.camera_euler = m.Vec3.zeros;
             state.camera_dirty = true;
         }

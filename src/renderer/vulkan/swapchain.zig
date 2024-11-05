@@ -1,7 +1,7 @@
 const vk = @import("vulkan");
 const T = @import("types.zig");
 const Context = @import("context.zig");
-const image = @import("image.zig");
+const Image = @import("image.zig");
 const Framebuffer = @import("framebuffer.zig");
 const CommandBuffer = @import("command_buffer.zig");
 const Fence = @import("fence.zig");
@@ -24,14 +24,14 @@ next_image_acquired: vk.Semaphore,
 /// Current image index
 current_image_index: u32,
 
-depth_attachement: image.Image,
+depth_attachement: Image,
 depth_format: vk.Format,
 
 pub const Error =
     error{ ImageAcquiredFailed, FailedToPresentSwapchain } ||
     T.LogicalDevice.AcquireNextImageKHRError ||
     T.LogicalDevice.CreateSemaphoreError ||
-    image.Error ||
+    Image.Error ||
     T.LogicalDevice.CreateSwapchainKHRError ||
     T.LogicalDevice.GetSwapchainImagesAllocKHRError ||
     T.Instance.GetPhysicalDeviceSurfaceFormatsAllocKHRError ||
@@ -154,7 +154,7 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
     // TODO: Is this something we can recover from?
     swapchain.depth_format = try ctx.detect_depth_format();
 
-    swapchain.depth_attachement = try image.create_image(
+    swapchain.depth_attachement = try Image.create(
         ctx,
         .@"2d",
         actual_extent,
@@ -171,7 +171,7 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
 }
 
 fn destroy_all_but_swapchain(self: *Swapchain) void {
-    image.destroy_image(self.ctx, &self.depth_attachement);
+    self.depth_attachement.destroy(self.ctx);
     for (self.images) |*swap_image| {
         swap_image.deinit(self.ctx);
     }
@@ -278,7 +278,7 @@ const SwapImage = struct {
     fence: Fence,
 
     pub fn init(ctx: *const Context, image_handle: vk.Image, format: vk.Format) !SwapImage {
-        const view = try image.create_image_view(ctx, image_handle, format, .{ .color_bit = true });
+        const view = try Image.create_image_view(ctx, image_handle, format, .{ .color_bit = true });
         errdefer ctx.device.handle.destroyImageView(view, null);
 
         const image_available_sem = try ctx.device.handle.createSemaphore(&.{}, null);

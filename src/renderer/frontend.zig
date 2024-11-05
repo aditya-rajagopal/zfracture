@@ -1,5 +1,7 @@
 const core = @import("fr_core");
 const math = core.math;
+const Texture = core.resource.Texture;
+
 // TODO: Make this configurable from build or other means. TO allow different contexts
 const Context = @import("vulkan/context.zig");
 const T = @import("types.zig");
@@ -93,6 +95,23 @@ pub fn on_resize(self: *Frontend, new_extent: core.math.Extent2D) void {
     const aspect_ratio = @as(f32, @floatFromInt(new_extent.width)) / @as(f32, @floatFromInt(new_extent.height));
     self.projection = math.Mat4.perspective(math.deg_to_rad(45.0), aspect_ratio, self.near_clip, self.far_clip);
     self.backend.on_resized(new_extent);
+}
+
+pub inline fn create_texture(
+    self: *Frontend,
+    width: u32,
+    height: u32,
+    channel_count: u8,
+    pixels: []const u8,
+    has_transparency: bool,
+    // TODO: This is for reference countintg
+    auto_release: bool,
+) Texture {
+    self.backend.create_texture(width, height, channel_count, pixels, has_transparency, auto_release);
+}
+
+pub inline fn destory_texture(self: *Frontend, texture: *Texture) void {
+    self.backend.destory_texture(texture);
 }
 
 test Frontend {

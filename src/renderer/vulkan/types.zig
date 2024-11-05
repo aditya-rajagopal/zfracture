@@ -1,4 +1,5 @@
 const vk = @import("vulkan");
+const Image = @import("image.zig");
 
 pub const RendererLog = @import("../types.zig").RendererLog;
 pub const Vertex3D = @import("../types.zig").Vertex3D;
@@ -62,6 +63,12 @@ pub const CommandBufferState = enum(u8) {
     recording_end,
     submitted,
     not_allocated,
+};
+
+// TODO: Seperate file?
+pub const TextureData = extern struct {
+    image: Image,
+    sampler: vk.Sampler,
 };
 
 const builtin = @import("builtin");
