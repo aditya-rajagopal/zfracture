@@ -17,9 +17,10 @@ projection: math.Mat4,
 view: math.Mat4,
 near_clip: f32,
 far_clip: f32,
+default_texture: core.resource.Texture,
 
 angle: f32,
-z: f32 = 0.0,
+render_data: T.RenderData,
 
 pub const FrontendError = error{ InitFailed, EndFrameFailed } || Context.Error;
 
@@ -35,18 +36,53 @@ pub fn init(
     self.log = T.RendererLog.init(log_config);
     try self.backend.init(allocator, application_name, platform_state, self.log, framebuffer_extent);
     self.angle = 0;
-    self.z = 0;
     self.near_clip = 0.1;
     self.far_clip = 1000.0;
     self.projection = math.Mat4.perspective(math.deg_to_rad(45.0), 1920.0 / 1080.0, self.near_clip, self.far_clip);
     self.view = math.Transform.init_trans(&math.Vec3.init(0.0, 0.0, -2.0)).to_mat();
+    self.render_data.object_id = self.backend.object_shader.acquire_resources(&self.backend);
+    self.render_data.model = math.Transform.identity;
+
+    // INFO: We are going to create a blue and white checkerboard 256x256 texture as default
+    // TODO: Maybe this will be the magenta texture
+    self.log.debug("Createing Default texture", .{});
+    const texture_dim = 256;
+    const channels = 4;
+    const pixel_count = texture_dim * texture_dim;
+    const square_width = 16;
+    var pixels: [pixel_count * channels]u8 = undefined;
+    @memset(&pixels, 255);
+
+    for (0..texture_dim) |row| {
+        for (0..texture_dim) |col| {
+            const index = row * texture_dim + col;
+            const index_byte = index * channels;
+            const r = @divFloor(row, square_width);
+            const c = @divFloor(col, square_width);
+            if (r % 2 != 0) {
+                if (c % 2 != 0) {
+                    pixels[index_byte] = 0;
+                    pixels[index_byte + 1] = 0;
+                }
+            } else {
+                if (c % 2 == 0) {
+                    pixels[index_byte] = 0;
+                    pixels[index_byte + 1] = 0;
+                }
+            }
+        }
+    }
+
+    self.default_texture = try self.backend.create_texture(texture_dim, texture_dim, channels, &pixels, false, false);
+    self.render_data.textures[0] = &self.default_texture;
 }
 
 pub fn deinit(self: *Frontend) void {
+    self.backend.destory_texture(&self.default_texture);
     self.backend.deinit();
 }
 
-pub fn update_global_state(
+pub inline fn update_global_state(
     self: *Frontend,
     projection: math.Transform,
     view: math.Transform,
@@ -72,23 +108,27 @@ pub fn end_frame(self: *Frontend, delta_time: f32) bool {
 
 // Does this need to be an error or can it just be a bool?
 pub fn draw_frame(self: *Frontend, packet: T.Packet) FrontendError!void {
+    self.backend.frame_delta_time = packet.delta_time;
     // Only if the begin frame is successful can we continue with the mid frame operations
     if (self.begin_frame(packet.delta_time)) {
         self.backend.update_global_state(self.projection, self.view, math.Vec3.zeros, math.Vec4.ones, 0);
 
-        const quat = math.Quat.init_axis_angle(&math.Vec3.z_basis.negate(), self.angle, false);
-        const model = quat.to_affine_center(&math.Vec3.zeros);
-        self.angle += 0.001;
+        // const quat = math.Quat.init_axis_angle(&math.Vec3.z_basis.negate(), self.angle, false);
+        // const model = quat.to_affine_center(&math.Vec3.zeros);
+        // self.angle += 0.001;
+        // self.render_data.model = model;
 
-        self.backend.update_object(model);
-
-        self.backend.temp_draw_object();
+        self.backend.temp_draw_object(self.render_data);
 
         // If the end frame fails it is likely irrecoverable
         if (!self.end_frame(packet.delta_time)) {
             return FrontendError.EndFrameFailed;
         }
     }
+}
+
+pub inline fn update_object(self: *Frontend, geometry: T.RenderData) void {
+    self.backend.update_object(geometry);
 }
 
 pub fn on_resize(self: *Frontend, new_extent: core.math.Extent2D) void {

@@ -49,10 +49,13 @@ object_index_buffer: Buffer,
 /// Runnint offset that is maintained when using the above buffers
 geometry_vertex_offset: u64 = 0,
 geometry_index_offset: u64 = 0,
+frame_delta_time: f32 = 0.0,
 
 pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
     error{CommandLoadFailure} ||
+    error{UnableToLoadTexture} ||
+    std.mem.Allocator.Error ||
     std.DynLib.Error ||
     T.BaseDispatch.EnumerateInstanceLayerPropertiesError ||
     T.Instance.CreateDebugUtilsMessengerEXTError ||
@@ -94,6 +97,7 @@ pub fn init(
     self.cached_framebuffer_extent = .{ .width = 0, .height = 0 };
     self.framebuffer_extent.width = if (framebuffer_extent.width != 0) framebuffer_extent.width else 800;
     self.framebuffer_extent.height = if (framebuffer_extent.height != 0) framebuffer_extent.height else 600;
+    self.frame_delta_time = 0.0;
 
     self.log.info("Loaded Base Dispatch", .{});
 
@@ -174,10 +178,10 @@ pub fn init(
         const num_vertices: usize = 4;
         const scale: f32 = 0.5;
         const vertices = [num_vertices]T.Vertex3D{
-            .{ .position = [3]f32{ -0.5 * scale, -0.5 * scale, 0.0 } },
-            .{ .position = [3]f32{ 0.5 * scale, 0.5 * scale, 0.0 } },
-            .{ .position = [3]f32{ -0.5 * scale, 0.5 * scale, 0.0 } },
-            .{ .position = [3]f32{ 0.5 * scale, -0.5 * scale, 0.0 } },
+            T.Vertex3D{ .position = [3]f32{ -0.5 * scale, -0.5 * scale, 0.0 }, .uv = [2]f32{ 0.0, 0.0 } },
+            T.Vertex3D{ .position = [3]f32{ 0.5 * scale, 0.5 * scale, 0.0 }, .uv = [2]f32{ 1.0, 1.0 } },
+            T.Vertex3D{ .position = [3]f32{ -0.5 * scale, 0.5 * scale, 0.0 }, .uv = [2]f32{ 0.0, 1.0 } },
+            T.Vertex3D{ .position = [3]f32{ 0.5 * scale, -0.5 * scale, 0.0 }, .uv = [2]f32{ 1.0, 0.0 } },
         };
 
         const index_count: usize = 6;
@@ -260,18 +264,19 @@ pub fn update_global_state(
 
     self.object_shader.use(self);
     self.object_shader.global_uo.view_projection = @bitCast(projection.mul(&view));
-    // self.log.debug("Projection: {any}\nView:{any}\nVP: {any}\n", .{ projection, view, projection.mul(&view) });
     // TODO: Use the other properties
 
     self.object_shader.update_global_state(self);
 }
 
-pub fn update_object(self: *Context, model: math.Transform) void {
-    self.object_shader.update_object(self, model);
+pub fn update_object(self: *Context, geometry: T.RenderData) void {
+    self.object_shader.update_object(self, geometry);
 }
 
-pub fn temp_draw_object(self: *Context) void {
+pub fn temp_draw_object(self: *Context, geometry: T.RenderData) void {
     const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
+
+    self.object_shader.update_object(self, geometry);
 
     // HACK: Temporary code to get something working
     // self.object_shader.use(self);
@@ -452,13 +457,14 @@ pub fn create_texture(
     _ = auto_release;
     const image_size: vk.DeviceSize = width * height * channel_count;
 
-    assert(image_size < pixels.len);
+    assert(image_size <= pixels.len);
     var out_texture: Texture = undefined;
     out_texture.width = width;
     out_texture.height = height;
     out_texture.channel_count = channel_count;
     // TODO: used when we create a resource manager
-    out_texture.generation = 0;
+    out_texture.generation = .null_handle;
+    out_texture.id = .null_handle;
 
     const internal_data = try self.allocator.create(T.TextureData);
     out_texture.data = @ptrCast(internal_data);
@@ -466,7 +472,7 @@ pub fn create_texture(
     // Create staging buffer and load data into it.
     const usage = vk.BufferUsageFlags{ .transfer_src_bit = true };
     const props = vk.MemoryPropertyFlags{ .host_visible_bit = true, .host_coherent_bit = true };
-    const staging_buffer = Buffer.create(self, image_size, usage, props, true) catch |err| {
+    var staging_buffer = Buffer.create(self, image_size, usage, props, true) catch |err| {
         @branchHint(.cold);
         self.log.err("Unable to create staging buffer for texture creation: {s}", .{@errorName(err)});
         return error.UnableToLoadTexture;
@@ -510,7 +516,11 @@ pub fn create_texture(
 
     internal_data.image.transition_layout(.transfer_dst_optimal, .shader_read_only_optimal, self, &temp_buffer);
 
-    temp_buffer.end_single_use(self, .null_handle, self.device.queues.graphics.handle);
+    temp_buffer.end_single_use(self, .null_handle, self.device.queues.graphics.handle) catch |err| {
+        @branchHint(.cold);
+        self.log.err("Unable to upload texture data from staging buffer for texture creation: {s}", .{@errorName(err)});
+        return error.UnableToLoadTexture;
+    };
 
     const sampler_info = vk.SamplerCreateInfo{
         // TODO: Make these configurable
@@ -534,12 +544,13 @@ pub fn create_texture(
     internal_data.sampler = self.device.handle.createSampler(&sampler_info, null) catch unreachable;
 
     out_texture.has_transparency = 0;
-    out_texture.generation += 1;
+    out_texture.generation = @enumFromInt(0);
     return out_texture;
 }
 
 pub fn destory_texture(self: *Context, texture: *Texture) void {
     if (texture.data) |data| {
+        self.device.handle.deviceWaitIdle() catch unreachable;
         const internal_data: *T.TextureData = @ptrCast(@alignCast(data));
 
         internal_data.image.destroy(self);

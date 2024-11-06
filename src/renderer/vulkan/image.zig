@@ -136,8 +136,8 @@ pub fn transition_layout(
     var barrier = vk.ImageMemoryBarrier{
         .old_layout = old_layout,
         .new_layout = new_layout,
-        .src_queue_family_index = ctx.device.queues.graphics.handle,
-        .dst_queue_family_index = ctx.device.queues.graphics.handle,
+        .src_queue_family_index = ctx.device.queues.graphics.family,
+        .dst_queue_family_index = ctx.device.queues.graphics.family,
         .image = self.handle,
         .subresource_range = .{
             .aspect_mask = .{ .color_bit = true },

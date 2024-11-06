@@ -99,11 +99,13 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         }
 
         if (engine.input.is_key_down(.RSHIFT)) {
-            velocity.vec[1] += 1.0;
+            const up = engine.view.to_affine().get_up();
+            velocity = velocity.add(&up);
         }
 
         if (engine.input.is_key_down(.RCONTROL)) {
-            velocity.vec[1] -= 1.0;
+            const down = engine.view.to_affine().get_down();
+            velocity = velocity.add(&down);
         }
 
         if (!velocity.eql_approx(&m.Vec3.zeros, 0.0002)) {

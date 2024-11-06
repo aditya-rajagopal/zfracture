@@ -1,7 +1,8 @@
+const T = @import("types.zig");
 const Texture = @This();
 
-id: u32 = 0,
-generation: u32 = 0,
+id: T.ResourceHandle = .null_handle,
+generation: T.Generation = .null_handle,
 width: u32 = 0,
 height: u32 = 0,
 channel_count: u8 = 0,

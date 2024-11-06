@@ -240,7 +240,7 @@ pub fn run(self: *Application) ApplicationError!void {
             }
 
             // HACK: Temporary packet passing
-            self.frontend.draw_frame(.{ .delta_time = 0 }) catch |e| {
+            self.frontend.draw_frame(.{ .delta_time = self.engine.delta_time }) catch |e| {
                 err = e;
                 self.engine.is_running = false;
                 continue;
