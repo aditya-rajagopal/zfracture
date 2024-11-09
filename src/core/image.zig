@@ -160,7 +160,7 @@ const PNGContext = struct {
 
 // The standard PNG header that all PNG files should have
 const PNGHeader: []const u8 = &[_]u8{ 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
-const BufferSize = 4096 * 2;
+const BufferSize = 4096 * 1;
 comptime {
     assert(BufferSize > 8);
 }
@@ -188,7 +188,6 @@ pub fn read_png(file: std.fs.File, allocator: Allocator, comptime config: ImageL
     ctx.push_state(.read_more_data);
 
     var first_chunk: bool = true;
-    // var png_done: bool = false;
 
     while (true) {
         switch (ctx.current_state()) {
@@ -566,8 +565,12 @@ pub fn read_png(file: std.fs.File, allocator: Allocator, comptime config: ImageL
         } else {
             return error.OverflowImageSize;
         }
+        const width_bytes, overflow = @mulWithOverflow(ctx.info.width, ctx.info.num_channels);
+        if (overflow != 0) {
+            return error.OverflowImageSize;
+        }
 
-        if (uncompressed_data.items.len < img_len) {
+        if (uncompressed_data.items.len < width_bytes * ctx.info.height) {
             return error.InvalidPNG;
         }
 
@@ -575,11 +578,9 @@ pub fn read_png(file: std.fs.File, allocator: Allocator, comptime config: ImageL
         errdefer allocator.free(out_data);
 
         // NOTE: We crete 2 buffers for scanlines. But this one will use the channels of the read image
-        const width_bytes, overflow = @mulWithOverflow(ctx.info.width, ctx.info.num_channels);
-        if (overflow != 0) {
-            return error.OverflowImageSize;
-        }
         const filter_buffer = try allocator.alloc(u8, width_bytes * 2);
+        defer allocator.free(filter_buffer);
+
         const front_back_buffer = [_][]u8{ filter_buffer[0..width_bytes], filter_buffer[width_bytes..] };
 
         var unfiltered = uncompressed_data.items;
@@ -950,9 +951,10 @@ test "PNG" {
 
     talloc.init(std.heap.page_allocator, &logger);
     const allocator = talloc.get_type_allocator(.all);
+    // const allocator = std.heap.page_allocator;
 
     var start = std.time.Timer.start() catch unreachable;
-    const out = try load_image("test2.png", allocator, .{});
+    const out = try load_image("test2.png", allocator, .{ .requested_channels = 4 });
     const end = start.read();
     std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});
 
