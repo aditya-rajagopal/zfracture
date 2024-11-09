@@ -453,7 +453,6 @@ pub fn create_texture(
     // TODO: This is for reference countintg
     auto_release: bool,
 ) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!Texture {
-    _ = has_transparency;
     _ = auto_release;
     const image_size: vk.DeviceSize = width * height * channel_count;
 
@@ -543,7 +542,7 @@ pub fn create_texture(
 
     internal_data.sampler = self.device.handle.createSampler(&sampler_info, null) catch unreachable;
 
-    out_texture.has_transparency = 0;
+    out_texture.has_transparency = @intFromBool(has_transparency);
     out_texture.generation = @enumFromInt(0);
     return out_texture;
 }

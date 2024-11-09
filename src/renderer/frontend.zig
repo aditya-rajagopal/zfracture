@@ -73,7 +73,10 @@ pub fn init(
         }
     }
 
-    self.default_texture = try self.backend.create_texture(texture_dim, texture_dim, channels, &pixels, false, false);
+    self.default_texture = self.backend.create_texture(texture_dim, texture_dim, channels, &pixels, false, false) catch {
+        self.log.err("Unable to load default texture", .{});
+        return error.InitFailed;
+    };
     self.render_data.textures[0] = &self.default_texture;
 }
 

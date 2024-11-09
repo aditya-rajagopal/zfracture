@@ -202,8 +202,13 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
 
                 pub fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
                     const self: *TAlloc = @ptrCast(@alignCast(ctx));
-                    self.stats.current_memory[@intFromEnum(tag)] += new_len - buf.len;
-                    self.stats.current_total_memory += new_len - buf.len;
+                    if (new_len > buf.len) {
+                        self.stats.current_memory[@intFromEnum(tag)] += new_len - buf.len;
+                        self.stats.current_total_memory += new_len - buf.len;
+                    } else {
+                        self.stats.current_memory[@intFromEnum(tag)] -= buf.len - new_len;
+                        self.stats.current_total_memory -= buf.len - new_len;
+                    }
                     if (self.stats.current_total_memory > self.stats.peak_total_memory) {
                         self.stats.peak_total_memory = self.stats.current_total_memory;
                     }
