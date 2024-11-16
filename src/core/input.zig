@@ -33,82 +33,82 @@ pub fn update(self: *Input) void {
     self.current_mouse_scroll = 0;
 }
 
-pub fn is_key_down(self: *const Input, key: Key) bool {
+pub inline fn is_key_down(self: *const Input, key: Key) bool {
     return self.keys_current_state[@intFromEnum(key)] != 0;
 }
 
-pub fn was_key_down(self: *const Input, key: Key) bool {
+pub inline fn was_key_down(self: *const Input, key: Key) bool {
     return self.keys_previous_state[@intFromEnum(key)] != 0;
 }
 
-pub fn is_key_up(self: *const Input, key: Key) bool {
+pub inline fn is_key_up(self: *const Input, key: Key) bool {
     return self.keys_current_state[@intFromEnum(key)] == 0;
 }
 
-pub fn was_key_up(self: *const Input, key: Key) bool {
+pub inline fn was_key_up(self: *const Input, key: Key) bool {
     return self.keys_previous_state[@intFromEnum(key)] == 0;
 }
 
-pub fn key_pressed_this_frame(self: *const Input, key: Key) bool {
+pub inline fn key_pressed_this_frame(self: *const Input, key: Key) bool {
     return self.keys_current_state[@intFromEnum(key)] != 0 and self.keys_previous_state[@intFromEnum(key)] == 0;
 }
 
-pub fn key_released_this_frame(self: *const Input, key: Key) bool {
+pub inline fn key_released_this_frame(self: *const Input, key: Key) bool {
     return self.keys_current_state[@intFromEnum(key)] == 0 and self.keys_previous_state[@intFromEnum(key)] != 0;
 }
 
-pub fn is_button_down(self: *const Input, button: Button) bool {
+pub inline fn is_button_down(self: *const Input, button: Button) bool {
     return self.buttons_current_state[@intFromEnum(button)] != 0;
 }
 
-pub fn was_button_down(self: *const Input, button: Button) bool {
+pub inline fn was_button_down(self: *const Input, button: Button) bool {
     return self.buttons_previous_state[@intFromEnum(button)] != 0;
 }
 
-pub fn is_button_up(self: *const Input, button: Button) bool {
+pub inline fn is_button_up(self: *const Input, button: Button) bool {
     return self.buttons_current_state[@intFromEnum(button)] == 0;
 }
 
-pub fn was_button_up(self: *const Input, button: Button) bool {
+pub inline fn was_button_up(self: *const Input, button: Button) bool {
     return self.buttons_previous_state[@intFromEnum(button)] == 0;
 }
 
-pub fn button_pressed_this_frame(self: *const Input, button: Button) bool {
+pub inline fn button_pressed_this_frame(self: *const Input, button: Button) bool {
     return (self.buttons_current_state[@intFromEnum(button)] != 0 and self.buttons_previous_state[@intFromEnum(button)] == 0);
 }
 
-pub fn button_released_this_frame(self: *const Input, button: Button) bool {
+pub inline fn button_released_this_frame(self: *const Input, button: Button) bool {
     return self.buttons_current_state[@intFromEnum(button)] == 0 and self.buttons_previous_state[@intFromEnum(button)] != 0;
 }
 
-pub fn mouse_pos(self: *const Input) MousePosition {
+pub inline fn mouse_pos(self: *const Input) MousePosition {
     return self.current_mouse_pos;
 }
 
-pub fn prev_mouse_pos(self: *const Input) MousePosition {
+pub inline fn prev_mouse_pos(self: *const Input) MousePosition {
     return self.previous_mouse_pos;
 }
 
-pub fn is_mouse_moved(self: *const Input) bool {
+pub inline fn is_mouse_moved(self: *const Input) bool {
     return self.current_mouse_pos.x != self.previous_mouse_pos.x or self.current_mouse_pos.y != self.previous_mouse_pos.y;
 }
 
-pub fn mouse_pos_delta(self: *const Input) struct { x_delta: i16, y_delta: i16 } {
+pub inline fn mouse_pos_delta(self: *const Input) struct { x_delta: i16, y_delta: i16 } {
     return .{
         .x_delta = self.current_mouse_pos.x - self.previous_mouse_pos.x,
         .y_delta = self.current_mouse_pos.y - self.previous_mouse_pos.y,
     };
 }
 
-pub fn is_scroll_down(self: *const Input) bool {
+pub inline fn is_scroll_down(self: *const Input) bool {
     return self.current_mouse_scroll < 0;
 }
 
-pub fn is_scroll_up(self: *const Input) bool {
+pub inline fn is_scroll_up(self: *const Input) bool {
     return self.current_mouse_scroll > 0;
 }
 
-pub fn is_scroll(self: *const Input) bool {
+pub inline fn is_scroll(self: *const Input) bool {
     return self.current_mouse_scroll != 0;
 }
 
@@ -204,7 +204,6 @@ pub fn process_mouse_move(self: *Input, event_system: *Event, x: i16, y: i16) vo
 }
 
 pub fn process_mouse_wheel(self: *Input, event_system: *Event, z_delta: i8, mousepos: i32) void {
-    std.debug.print("z_delta: {d}\n", .{z_delta});
     self.current_mouse_scroll = z_delta;
     const data: Event.MouseScrollEventData = .{
         .z_delta = z_delta,

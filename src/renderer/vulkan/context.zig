@@ -50,6 +50,7 @@ object_index_buffer: Buffer,
 geometry_vertex_offset: u64 = 0,
 geometry_index_offset: u64 = 0,
 frame_delta_time: f32 = 0.0,
+default_diffuse: *const Texture,
 
 pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
@@ -76,9 +77,11 @@ pub fn init(
     plat_state: *anyopaque,
     log: T.RendererLog,
     framebuffer_extent: *const math.Extent2D,
+    default_diffuse: *const Texture,
 ) Error!void {
     const internal_plat_state: *T.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     self.log = log;
+    self.default_diffuse = default_diffuse;
     // ========================================== LOAD VULKAN =================================/
 
     self.vulkan_lib = try std.DynLib.open("vulkan-1.dll");
@@ -164,7 +167,7 @@ pub fn init(
     self.last_framebuffer_generation = 0;
 
     // =============================== SHADER OBJECTS AND PIPELINE ============================/
-    self.object_shader = try ObjectShader.create(self);
+    self.object_shader = try ObjectShader.create(self, default_diffuse);
     errdefer self.object_shader.destroy(self);
     self.log.info("Builtin Object Shader loaded Successfully along with pipeline", .{});
 
@@ -455,8 +458,8 @@ pub fn create_texture(
 ) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!Texture {
     _ = auto_release;
     const image_size: vk.DeviceSize = width * height * channel_count;
-
     assert(image_size <= pixels.len);
+
     var out_texture: Texture = undefined;
     out_texture.width = width;
     out_texture.height = height;
@@ -465,8 +468,7 @@ pub fn create_texture(
     out_texture.generation = .null_handle;
     out_texture.id = .null_handle;
 
-    const internal_data = try self.allocator.create(T.TextureData);
-    out_texture.data = @ptrCast(internal_data);
+    const internal_data = out_texture.data_as(T.TextureData);
 
     // Create staging buffer and load data into it.
     const usage = vk.BufferUsageFlags{ .transfer_src_bit = true };
@@ -544,21 +546,22 @@ pub fn create_texture(
 
     out_texture.has_transparency = @intFromBool(has_transparency);
     out_texture.generation = @enumFromInt(0);
+    // TODO: Get id from somewher else
+    out_texture.id = @enumFromInt(0);
+
     return out_texture;
 }
 
 pub fn destory_texture(self: *Context, texture: *Texture) void {
-    if (texture.data) |data| {
+    if (texture.id != .null_handle) {
+        const internal_data: *T.TextureData = texture.data_as(T.TextureData);
         self.device.handle.deviceWaitIdle() catch unreachable;
-        const internal_data: *T.TextureData = @ptrCast(@alignCast(data));
 
         internal_data.image.destroy(self);
         self.device.handle.destroySampler(internal_data.sampler, null);
         internal_data.sampler = .null_handle;
-
-        self.allocator.destroy(internal_data);
+        texture.* = .{ .data = undefined };
     }
-    texture.* = .{};
 }
 
 fn upload_data_range(

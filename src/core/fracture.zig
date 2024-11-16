@@ -23,6 +23,7 @@ pub const Event = @import("event.zig");
 pub const Input = @import("input.zig");
 pub const math = @import("math/math.zig");
 pub const resource = @import("resource.zig");
+pub const image = @import("image.zig");
 
 // pub const MergeEnums = comptime_funcs.MergeEnums;
 // pub const Distinct = comptime_funcs.Distinct;

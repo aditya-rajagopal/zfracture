@@ -6,24 +6,25 @@ const GameLog = core.log.ScopedLogger(core.log.default_log, .GAME, core.log.defa
 
 pub const GameState = struct {
     delta_time: f64,
-    testing: bool = false,
     log: GameLog,
     camera_pos: m.Vec3,
     camera_euler: m.Vec3,
     camera_dirty: bool,
     move_speed: f32,
+    // HACK: temp
+    generation: u32,
 };
 
 pub fn init(engine: *core.Fracture) ?*anyopaque {
     const foo_allocator: std.mem.Allocator = engine.memory.gpa.get_type_allocator(.game);
     const state = foo_allocator.create(GameState) catch return null;
-    state.testing = true;
     state.delta_time = 1.0;
     state.log = GameLog.init(&engine.log_config);
     state.camera_pos = m.vec3s(0, 0, 2.0);
     state.camera_euler = m.Vec3.zeros;
     state.camera_dirty = true;
     state.move_speed = 5.0;
+    state.generation = 0;
     engine.camera_dirty = true;
     // _ = engine.event.register(.KEY_PRESS, state, random_event);
     // _ = engine.event.register(.KEY_RELEASE, state, random_event);
@@ -49,15 +50,22 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
     const frame_alloc = engine.memory.frame_allocator.get_type_allocator(.untagged);
     const temp_data = frame_alloc.alloc(f32, 16) catch return false;
     _ = temp_data;
-    if (state.testing) {
+
+    if (engine.input.is_key_down(.RCONTROL) and engine.input.is_key_down(.P)) {
         engine.memory.gpa.print_memory_stats();
         engine.memory.frame_allocator.print_memory_stats();
-        state.testing = false;
+    }
+    { // HACK: Flipping through textures
+        if (engine.input.key_pressed_this_frame(.T)) {
+            state.log.debug("Changing Texture", .{});
+            var data: core.Event.EventData = undefined;
+            data[0..4].* = @bitCast(state.generation);
+            _ = engine.event.fire_static(.DEBUG0, null, data);
+            state.generation += 1;
+        }
     }
 
-    {
-        // HACK: Setting the camera view in the hacked engine view
-
+    { // HACK: Setting the camera view in the hacked engine view
         const delta_time = engine.delta_time;
 
         if (engine.input.is_key_down(.Q) or engine.input.is_key_down(.LEFT)) {
@@ -103,16 +111,14 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
             velocity = velocity.add(&up);
         }
 
-        if (engine.input.is_key_down(.RCONTROL)) {
+        if (engine.input.is_key_down(.LCONTROL)) {
             const down = engine.view.to_affine().get_down();
             velocity = velocity.add(&down);
         }
 
         if (!velocity.eql_approx(&m.Vec3.zeros, 0.0002)) {
             velocity = velocity.normalize(0.00000001);
-            state.camera_pos.vec[0] += velocity.x() * delta_time * state.move_speed;
-            state.camera_pos.vec[1] += velocity.y() * delta_time * state.move_speed;
-            state.camera_pos.vec[2] += velocity.z() * delta_time * state.move_speed;
+            state.camera_pos = state.camera_pos.add(&velocity.muls(delta_time * state.move_speed));
             state.camera_dirty = true;
         }
 
@@ -122,20 +128,18 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
             state.camera_dirty = true;
         }
 
-        recalculate_camera_view(engine, state);
+        // Re calculate the view matrix
+        if (state.camera_dirty) {
+            const rot = m.Transform.init_rot_xyz(state.camera_euler.x(), state.camera_euler.y(), state.camera_euler.z());
+            const trans = m.Transform.init_trans(&state.camera_pos);
+            engine.view = trans.mul(&rot).inv_tr().to_mat();
+            // engine.view = rot.mul(&trans).inv_tr().to_mat();
+            engine.camera_dirty = true;
+            state.camera_dirty = false;
+        }
     }
 
     return true;
-}
-
-fn recalculate_camera_view(engine: *core.Fracture, state: *GameState) void {
-    if (state.camera_dirty) {
-        const rot = m.Transform.init_rot_xyz(state.camera_euler.x(), state.camera_euler.y(), state.camera_euler.z());
-        const trans = m.Transform.init_trans(&state.camera_pos);
-        engine.view = trans.mul(&rot).inv_tr().to_mat();
-        engine.camera_dirty = true;
-        state.camera_dirty = false;
-    }
 }
 
 inline fn camera_pitch(state: *GameState, amount: f32) void {

@@ -131,6 +131,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
         &app.platform_state,
         &app.engine.log_config,
         &app.engine.extent,
+        &app.engine.event,
     );
     errdefer app.frontend.deinit();
     app.log.info("Renderer initialized", .{});

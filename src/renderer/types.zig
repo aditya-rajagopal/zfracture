@@ -36,9 +36,9 @@ pub const ObjectUO = extern struct {
 
 // NOTE: This is the data that will be passed to the renderer
 pub const RenderData = extern struct {
-    // TODO: Make this a handle
     object_id: MaterialInstanceID,
     model: m.Transform,
+    // TODO: Make these handles
     textures: [16]?*Texture = [_]?*Texture{null} ** 16,
 };
 

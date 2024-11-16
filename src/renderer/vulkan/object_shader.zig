@@ -2,7 +2,9 @@ const vk = @import("vulkan");
 const Context = @import("context.zig");
 const builtin = @import("shaders").builtin;
 const T = @import("types.zig");
-const m = @import("fr_core").math;
+const core = @import("fr_core");
+const m = core.math;
+const Texture = core.resource.Texture;
 
 const Pipeline = @import("pipeline.zig");
 const Buffer = @import("buffer.zig");
@@ -37,6 +39,8 @@ object_states: [T.MAX_MATERIAL_INSTANCES]T.ObjectShaderObjectState,
 
 pipeline: Pipeline,
 
+default_diffuse: *const Texture,
+
 // HACK: Just to see something
 accumulator: f32 = 0.0,
 
@@ -48,7 +52,7 @@ pub const ShaderStage = struct {
 
 pub const Error = error{UnableToLoadShader} || Pipeline.Error;
 
-pub fn create(ctx: *const Context) Error!ObjectShader {
+pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!ObjectShader {
     const device = ctx.device.handle;
     const stage_types = [OBJECT_SHADER_STAGE_COUNT]vk.ShaderStageFlags{
         .{ .vertex_bit = true },
@@ -272,6 +276,7 @@ pub fn create(ctx: *const Context) Error!ObjectShader {
 
     out_shader.accumulator = 0.0;
     out_shader.object_free_list = 0;
+    out_shader.default_diffuse = default_diffuse;
 
     return out_shader;
 }
@@ -310,6 +315,7 @@ pub fn update_global_state(self: *ObjectShader, ctx: *const Context) void {
     const image_index = ctx.swapchain.current_image_index;
     const command_buffer = ctx.graphics_command_buffers[image_index].handle;
     const global_descriptor = self.global_descriptor_sets[image_index];
+    assert(image_index < MAX_DESCRIPTOR_SETS);
 
     // 2. Configure the descriptor for the given index.
     const range: u32 = @sizeOf(T.GlobalUO);
@@ -376,8 +382,10 @@ pub fn update_object(self: *ObjectShader, ctx: *const Context, geometry: T.Rende
     var descriptor_index: u32 = 0;
 
     // Descriptor 0 is the uniform buffer
-    const range: u32 = @sizeOf(T.ObjectUO);
-    const offset: u32 = @intFromEnum(geometry.object_id);
+    const range: u64 = @sizeOf(T.ObjectUO);
+    // We have location in the buffer per descriptor set per material instance
+    // So the offset in memory will be id * MAX_SETS + image_index;
+    const offset: u64 = @sizeOf(T.ObjectUO) * (@intFromEnum(geometry.object_id) * MAX_DESCRIPTOR_SETS + image_index);
 
     // HACK: JUst to see if the local buffer upload is working
     var object_uo: T.ObjectUO = undefined;
@@ -415,12 +423,20 @@ pub fn update_object(self: *ObjectShader, ctx: *const Context, geometry: T.Rende
     var image_infos: [NUM_SAMPLERS]vk.DescriptorImageInfo = undefined;
 
     for (&image_infos, 0..) |*info, i| {
-        const texture = geometry.textures[i];
+        var texture: ?*const Texture = geometry.textures[i];
         const generation = &object_state.descriptor_states[descriptor_index].generations[image_index];
 
         if (texture) |t| {
+            if (t.id == .null_handle or t.generation == .null_handle) {
+                // TODO: Handle other texture maps
+                texture = self.default_diffuse;
+                generation.* = .null_handle;
+            }
+        }
+
+        if (texture) |t| {
             if (generation.* != t.generation or generation.* == .null_handle) {
-                const internal_data: *T.TextureData = @ptrCast(@alignCast(t.data));
+                const internal_data = t.data_as_const(T.TextureData);
                 // We expect this to be only used by the shader
                 info.image_layout = .shader_read_only_optimal;
                 info.image_view = internal_data.image.view;

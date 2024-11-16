@@ -18,9 +18,12 @@ view: math.Mat4,
 near_clip: f32,
 far_clip: f32,
 default_texture: core.resource.Texture,
-
 angle: f32,
 render_data: T.RenderData,
+
+// HACK: Temporaray
+test_diffuse: core.resource.Texture,
+allocator: std.mem.Allocator,
 
 pub const FrontendError = error{ InitFailed, EndFrameFailed } || Context.Error;
 
@@ -31,10 +34,13 @@ pub fn init(
     platform_state: *anyopaque,
     log_config: *core.log.LogConfig,
     framebuffer_extent: *const core.math.Extent2D,
+    // HACK: Event temporary
+    event: *core.Event,
 ) FrontendError!void {
     // TODO: Make this configurable
+    self.allocator = allocator;
     self.log = T.RendererLog.init(log_config);
-    try self.backend.init(allocator, application_name, platform_state, self.log, framebuffer_extent);
+    try self.backend.init(allocator, application_name, platform_state, self.log, framebuffer_extent, &self.default_texture);
     self.angle = 0;
     self.near_clip = 0.1;
     self.far_clip = 1000.0;
@@ -73,16 +79,107 @@ pub fn init(
         }
     }
 
+    // TODO: Create a texture system
+    // TODO: Store the image into Fracture format
+    // const image = core.image.load("assets/textures/cobblestone.png", allocator, .{ .requested_channels = 4 }) catch unreachable;
+    // defer allocator.free(image.data);
+    //
+    // self.default_texture = self.backend.create_texture(image.width, image.height, 4, image.data, false, false) catch {
+    //     self.log.err("Unable to load default texture", .{});
+    //     return error.InitFailed;
+    // };
+
     self.default_texture = self.backend.create_texture(texture_dim, texture_dim, channels, &pixels, false, false) catch {
         self.log.err("Unable to load default texture", .{});
         return error.InitFailed;
     };
-    self.render_data.textures[0] = &self.default_texture;
+    self.default_texture.generation = .null_handle;
+    self.test_diffuse = .{ .data = undefined };
+
+    self.render_data.textures[0] = &self.test_diffuse;
+
+    _ = event.register_static(.DEBUG0, @ptrCast(self), on_debug0_event);
 }
 
 pub fn deinit(self: *Frontend) void {
     self.backend.destory_texture(&self.default_texture);
+    self.backend.destory_texture(&self.test_diffuse);
     self.backend.deinit();
+}
+
+// HACK: Temporary code
+fn load_texture(
+    self: *Frontend,
+    texture: *Texture,
+    texture_name: []const u8,
+    comptime texture_type: core.image.ImageFileType,
+    allocator: std.mem.Allocator,
+) bool {
+    const format_string: []const u8 = "assets/textures/{s}.{s}";
+    var file_name_buffer: [512]u8 = undefined;
+    const file_name = std.fmt.bufPrint(&file_name_buffer, format_string, .{ texture_name, @tagName(texture_type) }) catch unreachable;
+    const required_channel_count = 4;
+
+    const image = core.image.load(file_name, allocator, .{ .requested_channels = required_channel_count }) catch |err| {
+        self.log.err("Unable to load texture image: {s}", .{@errorName(err)});
+        return false;
+    };
+    defer allocator.free(image.data);
+
+    const current_generation = texture.generation;
+    texture.generation = .null_handle;
+
+    var has_transparency: bool = false;
+    if (image.forced_transparency) {
+        has_transparency = true;
+    } else {
+        var index: usize = 3;
+        while (index < image.data.len) : (index += 4) {
+            if (image.data[index] < 255) {
+                has_transparency = true;
+                break;
+            }
+        }
+    }
+
+    var old = texture.*;
+
+    texture.* = self.backend.create_texture(
+        image.width,
+        image.height,
+        required_channel_count,
+        image.data,
+        has_transparency,
+        true,
+    ) catch |err| {
+        self.log.err("Unable to create texture: {s}", .{@errorName(err)});
+        return false;
+    };
+
+    self.backend.destory_texture(&old);
+
+    if (current_generation == .null_handle) {
+        texture.generation = @enumFromInt(0);
+    } else {
+        texture.generation = current_generation.increment();
+    }
+
+    return true;
+}
+
+fn on_debug0_event(
+    event_code: core.Event.EventCode,
+    data: core.Event.EventData,
+    listener: ?*anyopaque,
+    sender: ?*anyopaque,
+) bool {
+    _ = event_code;
+    _ = sender;
+    const index: u32 = @bitCast(data[0..4].*);
+    const names = [_][]const u8{ "cobblestone", "paving", "paving2" };
+    const self: *Frontend = @ptrCast(@alignCast(listener orelse unreachable));
+    _ = self.load_texture(&self.test_diffuse, names[index % 3], .png, self.allocator);
+    return true;
 }
 
 pub inline fn update_global_state(

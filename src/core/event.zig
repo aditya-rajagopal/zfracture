@@ -506,6 +506,12 @@ pub const EventCode = enum(EventCodeBacking) {
     MOUSE_SCROLL = 0x105,
     WINDOW_RESIZE = 0x106,
 
+    DEBUG0 = 0x107,
+    DEBUG1 = 0x108,
+    DEBUG2 = 0x109,
+    DEBUG3 = 0x10a,
+    DEBUG4 = 0x10b,
+
     APPLICATION_EVENTS_START = 0x144,
     _,
 

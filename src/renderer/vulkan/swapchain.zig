@@ -336,7 +336,7 @@ fn init_swapchain_images(ctx: *const Context, swapchain: vk.SwapchainKHR, format
 fn find_surface_format(ctx: *const Context) !vk.SurfaceFormatKHR {
     // NOTE: This should really not fail. All graphics cards should have this
     const preferred_format = vk.SurfaceFormatKHR{
-        .format = .b8g8r8a8_srgb,
+        .format = .b8g8r8a8_unorm,
         .color_space = .srgb_nonlinear_khr,
     };
 

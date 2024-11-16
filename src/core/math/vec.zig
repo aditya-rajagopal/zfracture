@@ -699,8 +699,8 @@ pub fn VectorMixins(comptime T: type, comptime VecT: type, comptime dim: usize) 
 
         /// For floats this function is only accurate for small float values in the vector
         pub inline fn eql_appox(a: *const VecT, b: *const VecT, comptime tolarance: T) bool {
-            const xmm0 = @abs(a.vec - b.vec);
-            const mask = xmm0 < VecT.splat(tolarance).vec;
+            const x0 = @abs(a.vec - b.vec);
+            const mask = x0 < VecT.splat(tolarance).vec;
             return @reduce(.And, mask);
         }
 
