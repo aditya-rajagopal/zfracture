@@ -40,24 +40,25 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+
     shaders.addAnonymousImport(
-        "builtin.ObjectShader.vert",
+        "builtin.MaterialShader.vert",
         .{ .root_source_file = compile_shader(
             b,
             optimize,
             shader_compiler,
-            b.path("assets/shaders/builtin.ObjectShader.vert"),
-            "assets/shaders/builtin.ObjectShader.vert.spv",
+            b.path("assets/shaders/builtin.MaterialShader.vert"),
+            "assets/shaders/builtin.MaterialShader.vert.spv",
         ) },
     );
     shaders.addAnonymousImport(
-        "builtin.ObjectShader.frag",
+        "builtin.MaterialShader.frag",
         .{ .root_source_file = compile_shader(
             b,
             optimize,
             shader_compiler,
-            b.path("assets/shaders/builtin.ObjectShader.frag"),
-            "assets/shaders/builtin.ObjectShader.frag.spv",
+            b.path("assets/shaders/builtin.MaterialShader.frag"),
+            "assets/shaders/builtin.MaterialShader.frag.spv",
         ) },
     );
 

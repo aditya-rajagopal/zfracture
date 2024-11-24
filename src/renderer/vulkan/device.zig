@@ -32,6 +32,7 @@ pdev: vk.PhysicalDevice,
 queues: QueueGroup,
 graphics_command_pool: vk.CommandPool = .null_handle,
 handle: T.LogicalDevice = undefined,
+supports_device_local_host_visable: bool = false,
 
 pub const Error =
     error{ NoPhysicalDeviceFound, CommandLoadFailure } ||
@@ -187,9 +188,18 @@ fn select_physical_device(ctx: *const Context) Error!Device {
             &requirements,
         )) |queue_group| {
             ctx.log.debug("FOUND", .{});
+            var supports_device_local_host_visable: bool = false;
+            const memory_properties = ctx.instance.getPhysicalDeviceMemoryProperties(candidate);
+            for (memory_properties.memory_types[0..memory_properties.memory_type_count]) |mem_type| {
+                if (mem_type.property_flags.contains(.{ .host_visible_bit = true, .device_local_bit = true })) {
+                    supports_device_local_host_visable = true;
+                    break;
+                }
+            }
             return Device{
                 .pdev = candidate,
                 .queues = queue_group,
+                .supports_device_local_host_visable = supports_device_local_host_visable,
             };
         }
     }
@@ -204,7 +214,6 @@ fn check_device_requirements(
 ) !?QueueGroup {
     const properties = ctx.instance.getPhysicalDeviceProperties(device);
     const features = ctx.instance.getPhysicalDeviceFeatures(device);
-    // const memory_properties = ctx.instance.getPhysicalDeviceMemoryProperties(device);
     const uint32_max = std.math.maxInt(u32);
     var dqfamilies: QueueGroup = .{};
 

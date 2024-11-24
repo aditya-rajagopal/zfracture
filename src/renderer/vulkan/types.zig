@@ -77,14 +77,14 @@ pub const CommandBufferState = enum(u8) {
 };
 
 // TODO: Seperate file?
-pub const TextureData = struct {
+pub const vkTextureData = struct {
     image: Image,
     sampler: vk.Sampler,
 };
 
 // TODO: Should this be somehting universal?
 
-pub const OBJECT_SHADER_DESCRIPTOR_COUNT = 2;
+pub const MATERIAL_SHADER_DESCRIPTOR_COUNT = 2;
 
 pub const DescriptorState = extern struct {
     // One per frame
@@ -93,10 +93,10 @@ pub const DescriptorState = extern struct {
 
 pub const ObjectShaderObjectState = extern struct {
     descriptor_sets: [MAX_DESCRIPTOR_SETS]vk.DescriptorSet,
-    descriptor_states: [OBJECT_SHADER_DESCRIPTOR_COUNT]DescriptorState,
+    descriptor_states: [MATERIAL_SHADER_DESCRIPTOR_COUNT]DescriptorState,
 };
 
-const MAX_DESCRIPTOR_SETS = @import("object_shader.zig").MAX_DESCRIPTOR_SETS;
+const MAX_DESCRIPTOR_SETS = @import("material_shader.zig").MAX_DESCRIPTOR_SETS;
 const std = @import("std");
 const builtin = @import("builtin");
 const windows = @import("std").os.windows;

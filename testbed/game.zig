@@ -55,6 +55,7 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         engine.memory.gpa.print_memory_stats();
         engine.memory.frame_allocator.print_memory_stats();
     }
+
     { // HACK: Flipping through textures
         if (engine.input.key_pressed_this_frame(.T)) {
             state.log.debug("Changing Texture", .{});

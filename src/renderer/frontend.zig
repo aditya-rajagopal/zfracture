@@ -46,7 +46,7 @@ pub fn init(
     self.far_clip = 1000.0;
     self.projection = math.Mat4.perspective(math.deg_to_rad(45.0), 1920.0 / 1080.0, self.near_clip, self.far_clip);
     self.view = math.Transform.init_trans(&math.Vec3.init(0.0, 0.0, -2.0)).to_mat();
-    self.render_data.object_id = self.backend.object_shader.acquire_resources(&self.backend);
+    self.render_data.object_id = self.backend.material_shader.acquire_resources(&self.backend);
     self.render_data.model = math.Transform.identity;
 
     // INFO: We are going to create a blue and white checkerboard 256x256 texture as default
@@ -89,10 +89,15 @@ pub fn init(
     //     return error.InitFailed;
     // };
 
-    self.default_texture = self.backend.create_texture(texture_dim, texture_dim, channels, &pixels, false, false) catch {
+    self.default_texture.data = self.backend.create_texture(texture_dim, texture_dim, channels, &pixels) catch {
         self.log.err("Unable to load default texture", .{});
         return error.InitFailed;
     };
+    self.default_texture.width = texture_dim;
+    self.default_texture.height = texture_dim;
+    self.default_texture.channel_count = channels;
+    self.default_texture.has_transparency = 0;
+    self.default_texture.id = @enumFromInt(0);
     self.default_texture.generation = .null_handle;
     self.test_diffuse = .{ .data = undefined };
 
@@ -102,8 +107,8 @@ pub fn init(
 }
 
 pub fn deinit(self: *Frontend) void {
-    self.backend.destory_texture(&self.default_texture);
-    self.backend.destory_texture(&self.test_diffuse);
+    self.backend.destory_texture(&self.default_texture.data);
+    self.backend.destory_texture(&self.test_diffuse.data);
     self.backend.deinit();
 }
 
@@ -144,19 +149,23 @@ fn load_texture(
 
     var old = texture.*;
 
-    texture.* = self.backend.create_texture(
+    texture.width = image.width;
+    texture.height = image.height;
+
+    texture.data = self.backend.create_texture(
         image.width,
         image.height,
         required_channel_count,
         image.data,
-        has_transparency,
-        true,
     ) catch |err| {
         self.log.err("Unable to create texture: {s}", .{@errorName(err)});
         return false;
     };
+    texture.has_transparency = @intFromBool(has_transparency);
+    texture.generation = @enumFromInt(0);
+    texture.id = @enumFromInt(0);
 
-    self.backend.destory_texture(&old);
+    self.backend.destory_texture(&old.data);
 
     if (current_generation == .null_handle) {
         texture.generation = @enumFromInt(0);
@@ -243,15 +252,12 @@ pub inline fn create_texture(
     height: u32,
     channel_count: u8,
     pixels: []const u8,
-    has_transparency: bool,
-    // TODO: This is for reference countintg
-    auto_release: bool,
-) Texture {
-    self.backend.create_texture(width, height, channel_count, pixels, has_transparency, auto_release);
+) Texture.Data {
+    self.backend.create_texture(width, height, channel_count, pixels);
 }
 
-pub inline fn destory_texture(self: *Frontend, texture: *Texture) void {
-    self.backend.destory_texture(texture);
+pub inline fn destory_texture(self: *Frontend, texture_data: *Texture.Data) void {
+    self.backend.destory_texture(texture_data);
 }
 
 test Frontend {

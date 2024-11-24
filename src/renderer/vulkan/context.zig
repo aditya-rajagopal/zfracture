@@ -18,7 +18,7 @@ const Fence = @import("fence.zig");
 const Buffer = @import("buffer.zig");
 const Image = @import("image.zig");
 
-const ObjectShader = @import("object_shader.zig");
+const MaterialShader = @import("material_shader.zig");
 
 const Context = @This();
 
@@ -43,7 +43,7 @@ current_frame: u32,
 main_render_pass: RenderPass,
 graphics_command_buffers: []CommandBuffer,
 framebuffers: []Framebuffer,
-object_shader: ObjectShader,
+material_shader: MaterialShader,
 object_vertex_buffer: Buffer,
 object_index_buffer: Buffer,
 /// Runnint offset that is maintained when using the above buffers
@@ -67,7 +67,7 @@ pub const Error =
     RenderPass.Error ||
     CommandBuffer.Error ||
     Framebuffer.Error ||
-    ObjectShader.Error ||
+    MaterialShader.Error ||
     Buffer.Error;
 
 pub fn init(
@@ -138,11 +138,6 @@ pub fn init(
     errdefer self.swapchain.deinit();
     self.recreating_swapchain = false;
 
-    // self.images_in_flight = try self.allocator.alloc(?*Fence, self.swapchain.images.len);
-    // for (self.images_in_flight) |*img| {
-    //     img.* = null;
-    // }
-
     // ==================================== MAIN RENDERPASS ====================================/
     self.main_render_pass = try RenderPass.create(
         self,
@@ -167,8 +162,8 @@ pub fn init(
     self.last_framebuffer_generation = 0;
 
     // =============================== SHADER OBJECTS AND PIPELINE ============================/
-    self.object_shader = try ObjectShader.create(self, default_diffuse);
-    errdefer self.object_shader.destroy(self);
+    self.material_shader = try MaterialShader.create(self, default_diffuse);
+    errdefer self.material_shader.destroy(self);
     self.log.info("Builtin Object Shader loaded Successfully along with pipeline", .{});
 
     // =========================== CREATE VERTEX AND INDEX BUFFERS ============================/
@@ -218,7 +213,7 @@ pub fn deinit(self: *Context) void {
     self.destroy_buffers();
     self.log.info("Vertex and Index buffers destroyed", .{});
 
-    self.object_shader.destroy(self);
+    self.material_shader.destroy(self);
     self.log.info("Object shader and pipeline destroyed", .{});
 
     self.free_commmand_buffers();
@@ -265,21 +260,21 @@ pub fn update_global_state(
     _ = ambient_colour;
     _ = mode;
 
-    self.object_shader.use(self);
-    self.object_shader.global_uo.view_projection = @bitCast(projection.mul(&view));
+    self.material_shader.use(self);
+    self.material_shader.global_uo.view_projection = projection.mul(&view);
     // TODO: Use the other properties
 
-    self.object_shader.update_global_state(self);
+    self.material_shader.update_global_state(self);
 }
 
 pub fn update_object(self: *Context, geometry: T.RenderData) void {
-    self.object_shader.update_object(self, geometry);
+    self.material_shader.update_object(self, geometry);
 }
 
 pub fn temp_draw_object(self: *Context, geometry: T.RenderData) void {
     const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
 
-    self.object_shader.update_object(self, geometry);
+    self.material_shader.update_object(self, geometry);
 
     // HACK: Temporary code to get something working
     // self.object_shader.use(self);
@@ -452,23 +447,13 @@ pub fn create_texture(
     height: u32,
     channel_count: u8,
     pixels: []const u8,
-    has_transparency: bool,
-    // TODO: This is for reference countintg
-    auto_release: bool,
-) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!Texture {
-    _ = auto_release;
+) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!Texture.Data {
     const image_size: vk.DeviceSize = width * height * channel_count;
     assert(image_size <= pixels.len);
 
-    var out_texture: Texture = undefined;
-    out_texture.width = width;
-    out_texture.height = height;
-    out_texture.channel_count = channel_count;
-    // TODO: used when we create a resource manager
-    out_texture.generation = .null_handle;
-    out_texture.id = .null_handle;
+    var texture_data: Texture.Data = undefined;
 
-    const internal_data = out_texture.data_as(T.TextureData);
+    const internal_data = texture_data.as(T.vkTextureData);
 
     // Create staging buffer and load data into it.
     const usage = vk.BufferUsageFlags{ .transfer_src_bit = true };
@@ -544,23 +529,17 @@ pub fn create_texture(
 
     internal_data.sampler = self.device.handle.createSampler(&sampler_info, null) catch unreachable;
 
-    out_texture.has_transparency = @intFromBool(has_transparency);
-    out_texture.generation = @enumFromInt(0);
-    // TODO: Get id from somewher else
-    out_texture.id = @enumFromInt(0);
-
-    return out_texture;
+    return texture_data;
 }
 
-pub fn destory_texture(self: *Context, texture: *Texture) void {
-    if (texture.id != .null_handle) {
-        const internal_data: *T.TextureData = texture.data_as(T.TextureData);
+pub fn destory_texture(self: *Context, texture_data: *Texture.Data) void {
+    const internal_data: *T.vkTextureData = texture_data.as(T.vkTextureData);
+    if (internal_data.image.handle != .null_handle) {
         self.device.handle.deviceWaitIdle() catch unreachable;
 
         internal_data.image.destroy(self);
         self.device.handle.destroySampler(internal_data.sampler, null);
         internal_data.sampler = .null_handle;
-        texture.* = .{ .data = undefined };
     }
 }
 

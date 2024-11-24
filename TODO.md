@@ -2,6 +2,9 @@
 
 ## Engine general:
 - [ ] Does the data in the engine structure need to be pointers or is it okay to have them flat in the structure.
+- [ ] Create a looped reload system. That will make replay easy. 
+    - [ ] Save inputs
+    - [ ] Save delta times
 - [x] Test if the game can be loaded as a DLL in debug and statically linked in release
     - [x] Game builds as a DLL in debug builds and is loaded dynamically
     - [x] Everything is statically linked in release builds

@@ -10,13 +10,13 @@ const Pipeline = @import("pipeline.zig");
 const Buffer = @import("buffer.zig");
 
 // vertex, frag
-pub const OBJECT_SHADER_STAGE_COUNT = 2;
+pub const MATERIAL_SHADER_STAGE_COUNT = 2;
 pub const MAX_DESCRIPTOR_SETS = 3;
 pub const NUM_SAMPLERS = 1;
 
 const MaterialShader = @This();
 
-stages: [OBJECT_SHADER_STAGE_COUNT]ShaderStage,
+stages: [MATERIAL_SHADER_STAGE_COUNT]ShaderStage,
 
 // This is the actual buffer that holds our uniforms. And this buffer is attached to the descriptor set
 global_uniform_buffer: Buffer,
@@ -54,7 +54,7 @@ pub const Error = error{UnableToLoadShader} || Pipeline.Error;
 
 pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!MaterialShader {
     const device = ctx.device.handle;
-    const stage_types = [OBJECT_SHADER_STAGE_COUNT]vk.ShaderStageFlags{
+    const stage_types = [MATERIAL_SHADER_STAGE_COUNT]vk.ShaderStageFlags{
         .{ .vertex_bit = true },
         .{ .fragment_bit = true },
     };
@@ -68,7 +68,7 @@ pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!Materi
         }
     }
 
-    while (i < OBJECT_SHADER_STAGE_COUNT) : (i += 1) {
+    while (i < MATERIAL_SHADER_STAGE_COUNT) : (i += 1) {
         out_shader.stages[i] = create_shader_module(ctx, stage_types[i], shaders[i]) catch {
             ctx.log.err("Unable to create {s} shader module for Builtin.ObjectShader", .{@tagName(shaders[i].tag)});
             return error.UnableToLoadShader;
@@ -116,12 +116,12 @@ pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!Materi
 
     // INFO: Local Descriptors
 
-    const local_descriptor_types = [T.OBJECT_SHADER_DESCRIPTOR_COUNT]vk.DescriptorType{
+    const local_descriptor_types = [T.MATERIAL_SHADER_DESCRIPTOR_COUNT]vk.DescriptorType{
         .uniform_buffer, // binding = 0 is the uniform buffer
         .combined_image_sampler, // binding = 1 is the diffuse sample layout
     };
 
-    var local_bindings: [T.OBJECT_SHADER_DESCRIPTOR_COUNT]vk.DescriptorSetLayoutBinding = undefined;
+    var local_bindings: [T.MATERIAL_SHADER_DESCRIPTOR_COUNT]vk.DescriptorSetLayoutBinding = undefined;
     for (&local_bindings, 0..) |*binding, index| {
         binding.* = vk.DescriptorSetLayoutBinding{
             .binding = @truncate(index),
@@ -133,14 +133,14 @@ pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!Materi
     }
 
     const local_layout_info = vk.DescriptorSetLayoutCreateInfo{
-        .binding_count = T.OBJECT_SHADER_DESCRIPTOR_COUNT,
+        .binding_count = T.MATERIAL_SHADER_DESCRIPTOR_COUNT,
         .p_bindings = @ptrCast(&local_bindings[0]),
     };
 
     out_shader.local_descriptor_set_layout = ctx.device.handle.createDescriptorSetLayout(&local_layout_info, null) catch unreachable;
     errdefer device.destroyDescriptorSetLayout(out_shader.local_descriptor_set_layout, null);
 
-    const local_descriptor_pool_size = [T.OBJECT_SHADER_DESCRIPTOR_COUNT]vk.DescriptorPoolSize{
+    const local_descriptor_pool_size = [T.MATERIAL_SHADER_DESCRIPTOR_COUNT]vk.DescriptorPoolSize{
         .{
             .type = .uniform_buffer,
             .descriptor_count = T.MAX_OBJECTS,
@@ -153,7 +153,7 @@ pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!Materi
 
     const local_pool_create_info = vk.DescriptorPoolCreateInfo{
         .max_sets = T.MAX_MATERIAL_INSTANCES * MAX_DESCRIPTOR_SETS,
-        .pool_size_count = T.OBJECT_SHADER_DESCRIPTOR_COUNT,
+        .pool_size_count = T.MATERIAL_SHADER_DESCRIPTOR_COUNT,
         .p_pool_sizes = @ptrCast(&local_descriptor_pool_size),
     };
 
@@ -212,8 +212,8 @@ pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!Materi
         out_shader.local_descriptor_set_layout,
     };
 
-    var stage_create_info: [OBJECT_SHADER_STAGE_COUNT]vk.PipelineShaderStageCreateInfo = undefined;
-    for (stage_create_info[0..OBJECT_SHADER_STAGE_COUNT], 0..) |*info, index| {
+    var stage_create_info: [MATERIAL_SHADER_STAGE_COUNT]vk.PipelineShaderStageCreateInfo = undefined;
+    for (stage_create_info[0..MATERIAL_SHADER_STAGE_COUNT], 0..) |*info, index| {
         // info.s_type = out_shader.stages[i].stage_create_info.s_type;
         info.* = out_shader.stages[index].stage_create_info;
     }
@@ -223,7 +223,7 @@ pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!Materi
         ctx.main_render_pass.handle,
         attribute_descriptions[0..attribute_count],
         layouts[0..descriptor_set_layout_count],
-        stage_create_info[0..OBJECT_SHADER_STAGE_COUNT],
+        stage_create_info[0..MATERIAL_SHADER_STAGE_COUNT],
         viewport,
         scissor,
         false,
@@ -320,6 +320,7 @@ pub fn update_global_state(self: *MaterialShader, ctx: *const Context) void {
     const image_index = ctx.swapchain.current_image_index;
     const command_buffer = ctx.graphics_command_buffers[image_index].handle;
     const global_descriptor = self.global_descriptor_sets[image_index];
+
     assert(image_index < MAX_DESCRIPTOR_SETS);
 
     // 2. Configure the descriptor for the given index.
@@ -382,7 +383,7 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     const descriptor_set = object_state.descriptor_sets[image_index];
 
     // We need to check if htis needs to be done
-    var descriptor_writes: [T.OBJECT_SHADER_DESCRIPTOR_COUNT]vk.WriteDescriptorSet = undefined;
+    var descriptor_writes: [T.MATERIAL_SHADER_DESCRIPTOR_COUNT]vk.WriteDescriptorSet = undefined;
     var descriptor_count: u32 = 0;
     var descriptor_index: u32 = 0;
 
@@ -441,7 +442,7 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
 
         if (texture) |t| {
             if (generation.* != t.generation or generation.* == .null_handle) {
-                const internal_data = t.data_as_const(T.TextureData);
+                const internal_data = t.data.as_const(T.vkTextureData);
                 // We expect this to be only used by the shader
                 info.image_layout = .shader_read_only_optimal;
                 info.image_view = internal_data.image.view;
@@ -557,8 +558,8 @@ pub const Shader = struct {
 };
 
 const shaders: []const Shader = &.{
-    .{ .tag = .vertex, .binary = builtin.ObjectShader.vert },
-    .{ .tag = .fragment, .binary = builtin.ObjectShader.frag },
+    .{ .tag = .vertex, .binary = builtin.MaterialShader.vert },
+    .{ .tag = .fragment, .binary = builtin.MaterialShader.frag },
 };
 
 const std = @import("std");
