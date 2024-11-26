@@ -3,8 +3,8 @@ const math = core.math;
 const Texture = core.resource.Texture;
 
 // TODO: Make this configurable from build or other means. TO allow different contexts
-const Context = @import("vulkan/context.zig");
-const T = @import("types.zig");
+const Context = @import("vulkan_backend");
+const T = core.renderer;
 const std = @import("std");
 
 const Frontend = @This();

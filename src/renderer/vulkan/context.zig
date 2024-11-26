@@ -356,9 +356,6 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
     command_buffer.handle.setViewport(0, 1, @ptrCast(&viewport));
     command_buffer.handle.setScissor(0, 1, @ptrCast(&scissor));
 
-    // self.main_render_pass.surface_rect[2] = self.framebuffer_extent.width;
-    // self.main_render_pass.surface_rect[3] = self.framebuffer_extent.height;
-
     self.main_render_pass.begin(
         command_buffer,
         self.framebuffers[self.swapchain.current_image_index].handle,

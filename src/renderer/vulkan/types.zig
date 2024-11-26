@@ -2,12 +2,12 @@ const vk = @import("vulkan");
 const core = @import("fr_core");
 const Image = @import("image.zig");
 
-const T = @import("../types.zig");
+const T = core.renderer;
 pub const RendererLog = T.RendererLog;
 pub const MaterialInstanceID = T.MaterialInstanceID;
 pub const Vertex3D = T.Vertex3D;
 pub const GlobalUO = T.GlobalUO;
-pub const ObjectUO = T.ObjectUO;
+pub const ObjectUO = T.MaterialUO;
 pub const RenderData = T.RenderData;
 
 pub const Generation = core.resource.Generation;

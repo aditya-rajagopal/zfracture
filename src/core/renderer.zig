@@ -1,8 +1,6 @@
 // TODO: Move these to the right places
 pub const MAX_MATERIAL_INSTANCES = 64;
 
-pub const MaterialInstanceID = enum(u32) { null_handle = std.math.maxInt(u32), _ };
-
 pub const RendererLog = log.ScopedLogger(log.default_log, .RENDERER, log.default_level);
 
 pub const Vertex3D = extern struct {
@@ -21,13 +19,16 @@ pub const GlobalUO = extern struct {
 };
 
 // NOTE: This is the per object uniform object
-pub const ObjectUO = extern struct {
+pub const MaterialUO = extern struct {
     diffuse_colour: math.Vec4,
     _reserved_0: math.Vec4,
     _reserved_1: math.Vec4,
     _reserved_2: math.Vec4,
 };
 
+pub const MaterialInstanceID = enum(u32) { null_handle = std.math.maxInt(u32), _ };
+
+// NOTE: This is the data that will be passed to the renderer
 // NOTE: This is the data that will be passed to the renderer
 pub const RenderData = extern struct {
     object_id: MaterialInstanceID,
@@ -44,22 +45,28 @@ pub fn Renderer(renderer_backend: type) type {
     comptime assert(@hasDecl(renderer_backend, "init"));
     comptime assert(@hasDecl(renderer_backend, "deinit"));
     comptime assert(@hasDecl(renderer_backend, "create_texture"));
-    comptime assert(@hasDecl(renderer_backend, "destroy_texture"));
+    comptime assert(@hasDecl(renderer_backend, "destory_texture"));
     comptime assert(@hasDecl(renderer_backend, "begin_frame"));
     comptime assert(@hasDecl(renderer_backend, "end_frame"));
     comptime assert(@hasDecl(renderer_backend, "update_global_state"));
 
-    comptime assert(@hasField(renderer_backend, "Error"));
+    comptime assert(@hasDecl(renderer_backend, "Error"));
 
     return struct {
         backend: renderer_backend,
+        textures: TextureSystemType,
         log: RendererLog,
         projection: math.Mat4,
         view: math.Mat4,
         near_clip: f32,
         far_clip: f32,
-        render_data: RenderData,
+
         allocator: std.mem.Allocator,
+
+        // HACK: This is temporary
+        render_data: RenderData,
+
+        pub const TextureSystemType = TextureSystem(renderer_backend);
 
         pub const Error = error{ InitFailed, EndFrameFailed } || renderer_backend.Error;
 
@@ -87,6 +94,7 @@ pub fn Renderer(renderer_backend: type) type {
             self.far_clip = 1000.0;
             self.projection = math.Mat4.perspective(math.deg_to_rad(45.0), 1920.0 / 1080.0, self.near_clip, self.far_clip);
             self.view = math.Transform.init_trans(&math.Vec3.init(0.0, 0.0, -2.0)).to_mat();
+            // Move to the game
             self.render_data.object_id = self.backend.material_shader.acquire_resources(&self.backend);
             self.render_data.model = math.Transform.identity;
         }
@@ -108,7 +116,7 @@ pub fn Renderer(renderer_backend: type) type {
             self.backend.update_global_state(projection, view, view_position, ambient_colour, mode);
         }
 
-        pub inline fn set_object_view(self: *Self, view: *const math.Mat4) void {
+        pub inline fn set_view(self: *Self, view: *const math.Mat4) void {
             self.view = view.*;
         }
 
@@ -147,20 +155,6 @@ pub fn Renderer(renderer_backend: type) type {
             self.backend.on_resized(new_extent);
         }
 
-        pub inline fn create_texture(
-            self: *Self,
-            width: u32,
-            height: u32,
-            channel_count: u8,
-            pixels: []const u8,
-        ) Texture.Data {
-            self.backend.create_texture(width, height, channel_count, pixels);
-        }
-
-        pub inline fn destory_texture(self: *Self, texture_data: *Texture.Data) void {
-            self.backend.destory_texture(texture_data);
-        }
-
         test Self {
             std.testing.refAllDecls(renderer_backend);
         }
@@ -169,8 +163,10 @@ pub fn Renderer(renderer_backend: type) type {
 
 const math = @import("math/math.zig");
 const log = @import("log.zig");
-const Event = @import("event.zig");
 const Texture = @import("resource.zig").Texture;
+const texture_system = @import("systems/texture.zig");
+const TextureSystem = texture_system.TextureSystem;
+const TextureHandle = texture_system.TextureHandle;
 const img = @import("image.zig");
 const std = @import("std");
 const assert = std.debug.assert;

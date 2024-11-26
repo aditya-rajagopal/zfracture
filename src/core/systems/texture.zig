@@ -2,6 +2,42 @@
 pub const MAX_TEXTURES = 1024;
 pub const MAX_TEXTURE_DIM = 4096;
 
+pub const TextureHandle = enum(u64) {
+    missing_texture = @bitCast(MissingTexture),
+    base_colour = @bitCast(BaseColour),
+    null_handle = @bitCast(NullReference),
+    _,
+};
+
+const NullReference = TextureReference{ .id = .null_handle, .string = 0 };
+
+const DefaultType = enum(u8) {
+    missing_texture = 0,
+    base_colour = 1,
+};
+
+const RESERVED_TEXTUES = std.meta.fields(DefaultType).len;
+
+const MissingTexture = TextureReference{
+    .id = @enumFromInt(@intFromEnum(DefaultType.missing_texture)),
+    .string = 1,
+};
+const MissingTextureName: []const u8 = @tagName(DefaultType.missing_texture);
+
+// Default texture for diffuse
+const BaseColour = TextureReference{
+    .id = @enumFromInt(@intFromEnum(DefaultType.base_colour)),
+    .string = 2,
+};
+const BaseColourName: []const u8 = @tagName(DefaultType.base_colour);
+
+const FREE_SLOTS = MAX_TEXTURES - RESERVED_TEXTUES;
+
+const TextureReference = packed struct(u64) {
+    id: resource.ResourceHandle,
+    string: u32,
+};
+
 pub fn TextureSystem(renderer_backend: type) type {
     const RendererType = Renderer(renderer_backend);
 
@@ -39,41 +75,6 @@ pub fn TextureSystem(renderer_backend: type) type {
         else
             std.AutoHashMap(TextureKey, TextureReference);
 
-        pub const NullReference = TextureReference{ .id = .null_handle, .string = 0 };
-
-        pub const DefaultType = enum(u8) {
-            missing_texture = 0,
-            base_colour = 1,
-        };
-        pub const RESERVED_TEXTUES = std.meta.fields(DefaultType).len;
-
-        pub const MissingTexture = TextureReference{
-            .id = @enumFromInt(@intFromEnum(DefaultType.missing_texture)),
-            .string = 1,
-        };
-        pub const MissingTextureName: []const u8 = @tagName(DefaultType.missing_texture);
-
-        // Default texture for diffuse
-        pub const BaseColour = TextureReference{
-            .id = @enumFromInt(@intFromEnum(DefaultType.base_colour)),
-            .string = 2,
-        };
-        pub const BaseColourName: []const u8 = @tagName(DefaultType.base_colour);
-
-        pub const FREE_SLOTS = MAX_TEXTURES - RESERVED_TEXTUES;
-
-        pub const TextureHandle = enum(u64) {
-            missing_texture = @bitCast(MissingTexture),
-            base_colour = @bitCast(BaseColour),
-            null_handle = @bitCast(NullReference),
-            _,
-        };
-
-        const TextureReference = packed struct(u64) {
-            id: resource.ResourceHandle,
-            string: u32,
-        };
-
         const StringRef = packed struct(u64) {
             start: u32,
             end: u32,
@@ -108,7 +109,7 @@ pub fn TextureSystem(renderer_backend: type) type {
         pub fn deinit(self: *Self) void {
             for (&self.items) |*texture| {
                 if (texture.id != .null_handle) {
-                    self.renderer.destory_texture(&texture.data);
+                    self.renderer.backend.destroy_texture(&texture.data);
                 }
             }
             self.hash_map.deinit();
@@ -218,7 +219,7 @@ pub fn TextureSystem(renderer_backend: type) type {
             if (self.reference_counts[location] == 0 and self.auto_release[location]) {
                 const texture = &self.items[location];
 
-                self.renderer.destory_texture(&texture.data);
+                self.renderer.backend.destroy_texture(&texture.data);
 
                 texture.id = .null_handle;
                 texture.generation = .null_handle;
@@ -274,7 +275,7 @@ pub fn TextureSystem(renderer_backend: type) type {
             texture.width = img.width;
             texture.height = img.height;
 
-            texture.data = self.renderer.create_texture(
+            texture.data = self.renderer.backend.create_texture(
                 img.width,
                 img.height,
                 required_channel_count,
@@ -286,7 +287,7 @@ pub fn TextureSystem(renderer_backend: type) type {
             texture.has_transparency = @intFromBool(has_transparency);
             texture.id = .null_handle;
 
-            self.renderer.destory_texture(&old.data);
+            self.renderer.backend.destroy_texture(&old.data);
 
             if (current_generation == .null_handle) {
                 texture.generation = @enumFromInt(0);
@@ -309,7 +310,7 @@ pub fn TextureSystem(renderer_backend: type) type {
                 const pixel_count = texture_dim * texture_dim;
                 var pixels = [pixel_count * channels]u8{ 255, 0, 255, 255 };
 
-                missing_texture.data = self.renderer.create_texture(
+                missing_texture.data = self.renderer.backend.create_texture(
                     texture_dim,
                     texture_dim,
                     channels,
@@ -337,7 +338,7 @@ pub fn TextureSystem(renderer_backend: type) type {
                 const pixels: [pixel_count * channels]u8 = undefined;
                 @memset(&pixels, 255);
 
-                base_colour.data = self.renderer.create_texture(
+                base_colour.data = self.renderer.backend.create_texture(
                     texture_dim,
                     texture_dim,
                     channels,

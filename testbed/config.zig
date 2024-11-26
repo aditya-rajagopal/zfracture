@@ -14,3 +14,5 @@ pub const app_config: core.AppConfig = .{
     .window_pos = .{ .x = 0, .y = 0, .width = 1920, .height = 1080 },
     .frame_arena_preheat_size = .{ .MB = 512 },
 };
+
+pub const renderer_backend = @import("vulkan_backend");

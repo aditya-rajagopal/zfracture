@@ -1,8 +1,16 @@
+const root = @import("root");
+/// Renderer backend
+pub const renderer_backend: type = if (@hasDecl(root, "config") and @hasDecl(root.config, "renderer_backend"))
+    root.config.renderer_backend
+else
+    @compileError("No renderer backend defined in root.config");
+
 pub const Fracture = struct {
     memory: Memory,
     event: Event,
     input: Input,
     log_config: log.LogConfig,
+    renderer: renderer.Renderer(renderer_backend),
     extent: math.Extent2D = .{
         .width = 1280,
         .height = 720,
@@ -24,6 +32,7 @@ pub const Input = @import("input.zig");
 pub const math = @import("math/math.zig");
 pub const resource = @import("resource.zig");
 pub const image = @import("image.zig");
+pub const renderer = @import("renderer.zig");
 
 // pub const MergeEnums = comptime_funcs.MergeEnums;
 // pub const Distinct = comptime_funcs.Distinct;

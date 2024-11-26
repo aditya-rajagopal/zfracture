@@ -61,13 +61,25 @@ pub fn build(b: *std.Build) !void {
             "assets/shaders/builtin.MaterialShader.frag.spv",
         ) },
     );
+    const vulkan_backend = b.addModule(
+        "vulkan_backend",
+        .{
+            .root_source_file = b.path("src/renderer/vulkan/context.zig"),
+            .imports = &.{
+                .{ .name = "fr_core", .module = core_lib },
+                .{ .name = "vulkan", .module = vulkan },
+                .{ .name = "shaders", .module = shaders },
+            },
+            .target = target,
+            .optimize = optimize,
+        },
+    );
 
     const entrypoint = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/entrypoint.zig"),
         .imports = &.{
             .{ .name = "fr_core", .module = core_lib },
-            .{ .name = "vulkan", .module = vulkan },
-            .{ .name = "shaders", .module = shaders },
+            .{ .name = "vulkan_backend", .module = vulkan_backend },
         },
         .target = target,
         .optimize = optimize,
@@ -82,6 +94,7 @@ pub fn build(b: *std.Build) !void {
     });
     exe.root_module.addImport("entrypoint", entrypoint);
     exe.root_module.addImport("fr_core", core_lib);
+    exe.root_module.addImport("vulkan_backend", vulkan_backend);
 
     b.installArtifact(exe);
 
@@ -113,6 +126,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     game_dll.root_module.addImport("fr_core", core_lib);
+    game_dll.root_module.addImport("vulkan_backend", vulkan_backend);
 
     const dll_step = b.addInstallArtifact(game_dll, .{});
 

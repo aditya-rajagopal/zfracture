@@ -6,7 +6,7 @@
 //            how much memory it needs at startup and give it that much memory to work with forever. Instead of an arena
 const core = @import("fr_core");
 const platform = @import("platform/platform.zig");
-const Frontend = @import("renderer/frontend.zig");
+const Frontend = @import("frontend.zig");
 
 const config = @import("config.zig");
 const application_config = config.app_config;
@@ -221,6 +221,10 @@ pub fn run(self: *Application) ApplicationError!void {
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
+            // TODO: Change the game api to be update and render together
+            // Could we have some parallele command buffers that we can write to and the GPU can do that parallely
+            // TODO(aditya): Change the draw_frame to being and end frame before and after update and render
+            // Within the game the renderer can have commands submitted to it
             if (!self.api.update(&self.engine, self.game_state)) {
                 @branchHint(.cold);
                 core_log.fatal("Client app update failed, shutting down", .{});
