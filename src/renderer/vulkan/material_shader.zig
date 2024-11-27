@@ -27,16 +27,16 @@ global_descriptor_set_layout: vk.DescriptorSetLayout,
 // NOTE: one per frame with 3 max for triple buffering
 global_descriptor_sets: [MAX_DESCRIPTOR_SETS]vk.DescriptorSet,
 
-// NOTE: These are for the per object uniforms
+// NOTE: These are for the per material instance uniforms
 local_descriptor_set_layout: vk.DescriptorSetLayout,
 local_descriptor_pool: vk.DescriptorPool,
-// This will store the uniforms for all the objects
+// This will store the uniforms for all the material instance
 local_uniform_buffer: Buffer,
 // TODO: Make this a free list
-object_free_list: u32,
+material_free_list: u32,
 
 // TODO: Make this dynamic
-object_states: [T.MAX_MATERIAL_INSTANCES]T.ObjectShaderObjectState,
+material_states: [T.MAX_MATERIAL_INSTANCES]T.MaterialShaderObjectState,
 
 pipeline: Pipeline,
 
@@ -71,7 +71,7 @@ pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!M
 
     while (i < MATERIAL_SHADER_STAGE_COUNT) : (i += 1) {
         out_shader.stages[i] = create_shader_module(ctx, stage_types[i], shaders[i]) catch {
-            ctx.log.err("Unable to create {s} shader module for Builtin.ObjectShader", .{@tagName(shaders[i].tag)});
+            ctx.log.err("Unable to create {s} shader module for Builtin.MaterialShader", .{@tagName(shaders[i].tag)});
             return error.UnableToLoadShader;
         };
     }
@@ -270,7 +270,7 @@ pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!M
 
     out_shader.local_uniform_buffer = Buffer.create(
         ctx,
-        @sizeOf(T.ObjectUO) * T.MAX_MATERIAL_INSTANCES * MAX_DESCRIPTOR_SETS,
+        @sizeOf(T.MaterialUO) * T.MAX_MATERIAL_INSTANCES * MAX_DESCRIPTOR_SETS,
         .{ .transfer_dst_bit = true, .uniform_buffer_bit = true },
         // device_local_bit maybe not needed since this is updated every frame
         .{ .host_visible_bit = true, .host_coherent_bit = true },
@@ -281,7 +281,7 @@ pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!M
     };
 
     out_shader.accumulator = 0.0;
-    out_shader.object_free_list = 0;
+    out_shader.material_free_list = 0;
     out_shader.textures = texture_system;
 
     return out_shader;
@@ -378,9 +378,9 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
         @ptrCast(&geometry.model),
     );
 
-    assert(@intFromEnum(geometry.object_id) < self.object_states.len);
+    assert(@intFromEnum(geometry.object_id) < self.material_states.len);
 
-    const object_state = &self.object_states[@intFromEnum(geometry.object_id)];
+    const object_state = &self.material_states[@intFromEnum(geometry.object_id)];
     const descriptor_set = object_state.descriptor_sets[image_index];
 
     // We need to check if htis needs to be done
@@ -389,13 +389,13 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     var descriptor_index: u32 = 0;
 
     // Descriptor 0 is the uniform buffer
-    const range: u64 = @sizeOf(T.ObjectUO);
+    const range: u64 = @sizeOf(T.MaterialUO);
     // We have location in the buffer per descriptor set per material instance
     // So the offset in memory will be id * MAX_SETS + image_index;
-    const offset: u64 = @sizeOf(T.ObjectUO) * (@intFromEnum(geometry.object_id) * MAX_DESCRIPTOR_SETS + image_index);
+    const offset: u64 = @sizeOf(T.MaterialUO) * (@intFromEnum(geometry.object_id) * MAX_DESCRIPTOR_SETS + image_index);
 
     // HACK: JUst to see if the local buffer upload is working
-    var object_uo: T.ObjectUO = undefined;
+    var object_uo: T.MaterialUO = undefined;
     self.accumulator += ctx.frame_delta_time;
     const s = (@sin(self.accumulator * m.pi) + 1.0) / 2.0;
     object_uo.diffuse_colour = m.vec4s(s, s, s, 1.0);
@@ -485,13 +485,13 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
 }
 
 pub fn acquire_resources(self: *MaterialShader, ctx: *const Context) T.MaterialInstanceID {
-    const id = self.object_free_list;
-    self.object_free_list += 1;
-    assert(self.object_free_list < T.MAX_MATERIAL_INSTANCES);
+    const id = self.material_free_list;
+    self.material_free_list += 1;
+    assert(self.material_free_list < T.MAX_MATERIAL_INSTANCES);
 
     // Reset the object state
-    const object_state = &self.object_states[id];
-    for (&object_state.descriptor_states) |*state| {
+    const material_state = &self.material_states[id];
+    for (&material_state.descriptor_states) |*state| {
         for (&state.generations) |*gen| {
             gen.* = .null_handle;
         }
@@ -513,23 +513,23 @@ pub fn acquire_resources(self: *MaterialShader, ctx: *const Context) T.MaterialI
 
     ctx.device.handle.allocateDescriptorSets(
         &alloc_info,
-        @ptrCast(&object_state.descriptor_sets[0]),
+        @ptrCast(&material_state.descriptor_sets[0]),
     ) catch |err| {
         @branchHint(.cold);
-        ctx.log.err("Unable to allocate descriptor sets for object id: {d} with error: {s}", .{ id, @errorName(err) });
+        ctx.log.err("Unable to allocate descriptor sets for material_id: {d} with error: {s}", .{ id, @errorName(err) });
         unreachable;
     };
 
     return @enumFromInt(id);
 }
 
-pub fn release_resources(self: *MaterialShader, ctx: *const Context, object_id: T.MaterialInstanceID) void {
-    const id: u32 = @intFromEnum(object_id);
+pub fn release_resources(self: *MaterialShader, ctx: *const Context, material_id: T.MaterialInstanceID) void {
+    const id: u32 = @intFromEnum(material_id);
 
     ctx.device.handle.freeDescriptorSets(
         self.local_descriptor_pool,
         MAX_DESCRIPTOR_SETS,
-        @ptrCast(&self.object_states[id].descriptor_sets[0]),
+        @ptrCast(&self.material_states[id].descriptor_sets[0]),
     ) catch unreachable;
 }
 

@@ -7,7 +7,7 @@ pub const RendererLog = T.RendererLog;
 pub const MaterialInstanceID = T.MaterialInstanceID;
 pub const Vertex3D = T.Vertex3D;
 pub const GlobalUO = T.GlobalUO;
-pub const ObjectUO = T.MaterialUO;
+pub const MaterialUO = T.MaterialUO;
 pub const RenderData = T.RenderData;
 
 pub const Generation = core.resource.Generation;
@@ -93,7 +93,7 @@ pub const DescriptorState = extern struct {
     ids: [MAX_DESCRIPTOR_SETS]ResourceHandle,
 };
 
-pub const ObjectShaderObjectState = extern struct {
+pub const MaterialShaderObjectState = extern struct {
     descriptor_sets: [MAX_DESCRIPTOR_SETS]vk.DescriptorSet,
     descriptor_states: [MATERIAL_SHADER_DESCRIPTOR_COUNT]DescriptorState,
 };

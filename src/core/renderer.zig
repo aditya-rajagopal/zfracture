@@ -19,7 +19,7 @@ pub const GlobalUO = extern struct {
     _reserved_2: math.Mat4,
 };
 
-// NOTE: This is the per object uniform object
+// NOTE: This is the per object material object
 pub const MaterialUO = extern struct {
     diffuse_colour: math.Vec4,
     _reserved_0: math.Vec4,
