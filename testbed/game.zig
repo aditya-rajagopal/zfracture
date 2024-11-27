@@ -39,7 +39,7 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     state.far_clip = 1000.0;
     state.projection = m.Mat4.perspective(m.deg_to_rad(45.0), 1920.0 / 1080.0, state.near_clip, state.far_clip);
     state.view = m.Transform.init_trans(&m.Vec3.init(0.0, 0.0, -2.0)).to_mat();
-    state.render_data.object_id = engine.renderer.shader_acquire_resource();
+    state.render_data.material_id = engine.renderer.shader_acquire_resource();
     state.render_data.model = m.Transform.identity;
     state.render_data.textures[0] = .missing_texture;
     state.textures = [_]core.renderer.texture_system.TextureHandle{.null_handle} ** 3;

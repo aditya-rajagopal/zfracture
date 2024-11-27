@@ -19,7 +19,7 @@ pub const GlobalUO = extern struct {
     _reserved_2: math.Mat4,
 };
 
-// NOTE: This is the per object material object
+// NOTE: This is the per material instance uniform
 pub const MaterialUO = extern struct {
     diffuse_colour: math.Vec4,
     _reserved_0: math.Vec4,
@@ -32,7 +32,7 @@ pub const MaterialInstanceID = enum(u32) { null_handle = std.math.maxInt(u32), _
 // NOTE: This is the data that will be passed to the renderer
 // NOTE: This is the data that will be passed to the renderer
 pub const RenderData = extern struct {
-    object_id: MaterialInstanceID,
+    material_id: MaterialInstanceID,
     model: math.Transform,
     textures: [16]TextureHandle = [_]TextureHandle{.null_handle} ** 16,
 };

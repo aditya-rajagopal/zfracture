@@ -378,10 +378,10 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
         @ptrCast(&geometry.model),
     );
 
-    assert(@intFromEnum(geometry.object_id) < self.material_states.len);
+    assert(@intFromEnum(geometry.material_id) < self.material_states.len);
 
-    const object_state = &self.material_states[@intFromEnum(geometry.object_id)];
-    const descriptor_set = object_state.descriptor_sets[image_index];
+    const material_state = &self.material_states[@intFromEnum(geometry.material_id)];
+    const descriptor_set = material_state.descriptor_sets[image_index];
 
     // We need to check if htis needs to be done
     var descriptor_writes: [T.MATERIAL_SHADER_DESCRIPTOR_COUNT]vk.WriteDescriptorSet = undefined;
@@ -392,17 +392,17 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     const range: u64 = @sizeOf(T.MaterialUO);
     // We have location in the buffer per descriptor set per material instance
     // So the offset in memory will be id * MAX_SETS + image_index;
-    const offset: u64 = @sizeOf(T.MaterialUO) * (@intFromEnum(geometry.object_id) * MAX_DESCRIPTOR_SETS + image_index);
+    const offset: u64 = @sizeOf(T.MaterialUO) * (@intFromEnum(geometry.material_id) * MAX_DESCRIPTOR_SETS + image_index);
 
     // HACK: JUst to see if the local buffer upload is working
-    var object_uo: T.MaterialUO = undefined;
+    var material_uo: T.MaterialUO = undefined;
     self.accumulator += ctx.frame_delta_time;
     const s = (@sin(self.accumulator * m.pi) + 1.0) / 2.0;
-    object_uo.diffuse_colour = m.vec4s(s, s, s, 1.0);
+    material_uo.diffuse_colour = m.vec4s(s, s, s, 1.0);
 
-    self.local_uniform_buffer.load_data(offset, range, .{}, ctx, @ptrCast(&object_uo));
+    self.local_uniform_buffer.load_data(offset, range, .{}, ctx, @ptrCast(&material_uo));
 
-    if (object_state.descriptor_states[descriptor_index].generations[image_index] == .null_handle) {
+    if (material_state.descriptor_states[descriptor_index].generations[image_index] == .null_handle) {
         const buffer_info = vk.DescriptorBufferInfo{
             .buffer = self.local_uniform_buffer.handle,
             .range = range,
@@ -423,7 +423,7 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
         descriptor_count += 1;
 
         // NOTE: We only need to do this once because once the memory is mapped we just need to update the buffer
-        object_state.descriptor_states[descriptor_index].generations[image_index] = @enumFromInt(1);
+        material_state.descriptor_states[descriptor_index].generations[image_index] = @enumFromInt(1);
     }
     descriptor_index += 1;
 
@@ -432,8 +432,8 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     for (&image_infos, 0..) |*info, i| {
         var texture: TextureSystem.Handle = geometry.textures[i];
         const tex_id, const tex_gen = self.textures.get_info(texture);
-        const generation = &object_state.descriptor_states[descriptor_index].generations[image_index];
-        const id = &object_state.descriptor_states[descriptor_index].ids[image_index];
+        const generation = &material_state.descriptor_states[descriptor_index].generations[image_index];
+        const id = &material_state.descriptor_states[descriptor_index].ids[image_index];
 
         if (tex_id == .null_handle or tex_gen == .null_handle) {
             // TODO: Handle other texture maps
