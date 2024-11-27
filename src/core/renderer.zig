@@ -1,3 +1,4 @@
+pub const texture_system = @import("systems/texture.zig");
 // TODO: Move these to the right places
 pub const MAX_MATERIAL_INSTANCES = 64;
 
@@ -41,30 +42,33 @@ pub const Packet = struct {
     delta_time: f32,
 };
 
+// TODO: Create an interface definition for backend
+
 pub fn Renderer(renderer_backend: type) type {
     comptime assert(@hasDecl(renderer_backend, "init"));
     comptime assert(@hasDecl(renderer_backend, "deinit"));
     comptime assert(@hasDecl(renderer_backend, "create_texture"));
-    comptime assert(@hasDecl(renderer_backend, "destory_texture"));
+    comptime assert(@hasDecl(renderer_backend, "destroy_texture"));
     comptime assert(@hasDecl(renderer_backend, "begin_frame"));
     comptime assert(@hasDecl(renderer_backend, "end_frame"));
+
+    // HACK: This should be in the shader/material system
     comptime assert(@hasDecl(renderer_backend, "update_global_state"));
+    comptime assert(@hasDecl(renderer_backend, "update_object"));
 
     comptime assert(@hasDecl(renderer_backend, "Error"));
 
     return struct {
-        backend: renderer_backend,
+        /// Texture system to load and unload textures.
         textures: TextureSystemType,
-        log: RendererLog,
-        projection: math.Mat4,
-        view: math.Mat4,
-        near_clip: f32,
-        far_clip: f32,
 
+        /// Allocator tagged with the renderer type in debug
         allocator: std.mem.Allocator,
 
-        // HACK: This is temporary
-        render_data: RenderData,
+        /// Private logger for the renderer subsystem. Dont use this directly if you can.
+        _log: RendererLog,
+        /// Private instance of a renderer backend. Do not access this directly unless you know what you are doing
+        _backend: renderer_backend,
 
         pub const TextureSystemType = TextureSystem(renderer_backend);
 
@@ -82,77 +86,61 @@ pub fn Renderer(renderer_backend: type) type {
         ) Error!void {
             // TODO: Make this configurable
             self.allocator = allocator;
-            self.log = RendererLog.init(log_config);
-            try self.backend.init(
+            self._log = RendererLog.init(log_config);
+            try self._backend.init(
                 allocator,
                 application_name,
                 platform_state,
-                self.log,
+                self._log,
                 framebuffer_extent,
+                &self.textures.items[0],
             );
-            self.near_clip = 0.1;
-            self.far_clip = 1000.0;
-            self.projection = math.Mat4.perspective(math.deg_to_rad(45.0), 1920.0 / 1080.0, self.near_clip, self.far_clip);
-            self.view = math.Transform.init_trans(&math.Vec3.init(0.0, 0.0, -2.0)).to_mat();
-            // Move to the game
-            self.render_data.object_id = self.backend.material_shader.acquire_resources(&self.backend);
-            self.render_data.model = math.Transform.identity;
+            try self.textures.init(self, allocator);
         }
 
         pub fn deinit(self: *Self) void {
-            self.backend.destory_texture(&self.default_texture.data);
-            self.backend.destory_texture(&self.test_diffuse.data);
-            self.backend.deinit();
+            self.textures.deinit();
+            self._backend.deinit();
         }
 
+        pub fn begin_frame(self: *Self, delta_time: f32) bool {
+            self._backend.frame_delta_time = delta_time;
+            return self._backend.begin_frame(delta_time);
+        }
+
+        pub fn end_frame(self: *Self, delta_time: f32) bool {
+            self._backend.current_frame += 1;
+            return self._backend.end_frame(delta_time);
+        }
+
+        // TODO: Pass camera information here
+        // TODO: Make a shader system and camera system to provide for global state
+        // HACK: This should be in the shader/material system
         pub inline fn update_global_state(
             self: *Self,
-            projection: math.Transform,
-            view: math.Transform,
+            projection: math.Mat4,
+            view: math.Mat4,
             view_position: math.Vec3,
             ambient_colour: math.Vec4,
             mode: i32,
         ) void {
-            self.backend.update_global_state(projection, view, view_position, ambient_colour, mode);
+            self._backend.update_global_state(projection, view, view_position, ambient_colour, mode);
         }
 
-        pub inline fn set_view(self: *Self, view: *const math.Mat4) void {
-            self.view = view.*;
+        pub inline fn shader_acquire_resource(self: *Self) MaterialInstanceID {
+            return self._backend.material_shader.acquire_resources(&self._backend);
         }
 
-        pub fn begin_frame(self: *Self, delta_time: f32) bool {
-            return self.backend.begin_frame(delta_time);
+        pub inline fn shader_release_resource(self: *Self, id: MaterialInstanceID) void {
+            self._backend.material_shader.release_resources(&self._backend, id);
         }
 
-        pub fn end_frame(self: *Self, delta_time: f32) bool {
-            self.backend.current_frame += 1;
-            return self.backend.end_frame(delta_time);
-        }
-
-        // Does this need to be an error or can it just be a bool?
-        pub fn draw_frame(self: *Self, packet: Packet) Error!void {
-            self.backend.frame_delta_time = packet.delta_time;
-            // Only if the begin frame is successful can we continue with the mid frame operations
-            if (self.begin_frame(packet.delta_time)) {
-                self.backend.update_global_state(self.projection, self.view, math.Vec3.zeros, math.Vec4.ones, 0);
-
-                self.backend.temp_draw_object(self.render_data);
-
-                // If the end frame fails it is likely irrecoverable
-                if (!self.end_frame(packet.delta_time)) {
-                    return Error.EndFrameFailed;
-                }
-            }
-        }
-
-        pub inline fn update_object(self: *Self, geometry: RenderData) void {
-            self.backend.update_object(geometry);
+        pub inline fn draw_temp_object(self: *Self, render_data: RenderData) void {
+            self._backend.temp_draw_object(render_data);
         }
 
         pub fn on_resize(self: *Self, new_extent: math.Extent2D) void {
-            const aspect_ratio = @as(f32, @floatFromInt(new_extent.width)) / @as(f32, @floatFromInt(new_extent.height));
-            self.projection = math.Mat4.perspective(math.deg_to_rad(45.0), aspect_ratio, self.near_clip, self.far_clip);
-            self.backend.on_resized(new_extent);
+            self._backend.on_resized(new_extent);
         }
 
         test Self {
@@ -164,7 +152,6 @@ pub fn Renderer(renderer_backend: type) type {
 const math = @import("math/math.zig");
 const log = @import("log.zig");
 const Texture = @import("resource.zig").Texture;
-const texture_system = @import("systems/texture.zig");
 const TextureSystem = texture_system.TextureSystem;
 const TextureHandle = texture_system.TextureHandle;
 const img = @import("image.zig");

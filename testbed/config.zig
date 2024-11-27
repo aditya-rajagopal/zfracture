@@ -4,8 +4,7 @@ const game = @import("game.zig");
 pub const app_api: core.API = .{
     .init = game.init,
     .deinit = game.deinit,
-    .update = game.update,
-    .render = game.render,
+    .update_and_render = game.update_and_render,
     .on_resize = game.on_resize,
 };
 

@@ -262,8 +262,8 @@ pub fn update_global_state(
 
     self.material_shader.use(self);
     self.material_shader.global_uo.view_projection = projection.mul(&view);
-    // TODO: Use the other properties
 
+    // TODO: Use the other properties
     self.material_shader.update_global_state(self);
 }
 
@@ -277,7 +277,6 @@ pub fn temp_draw_object(self: *Context, geometry: T.RenderData) void {
     self.material_shader.update_object(self, geometry);
 
     // HACK: Temporary code to get something working
-    // self.object_shader.use(self);
 
     const offsets = [_]vk.DeviceSize{0};
     command_buffer.handle.bindVertexBuffers(0, 1, @ptrCast(&self.object_vertex_buffer.handle), @ptrCast(&offsets));
@@ -529,7 +528,7 @@ pub fn create_texture(
     return texture_data;
 }
 
-pub fn destory_texture(self: *Context, texture_data: *Texture.Data) void {
+pub fn destroy_texture(self: *Context, texture_data: *Texture.Data) void {
     const internal_data: *T.vkTextureData = texture_data.as(T.vkTextureData);
     if (internal_data.image.handle != .null_handle) {
         self.device.handle.deviceWaitIdle() catch unreachable;

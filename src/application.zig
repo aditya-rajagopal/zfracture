@@ -6,7 +6,6 @@
 //            how much memory it needs at startup and give it that much memory to work with forever. Instead of an arena
 const core = @import("fr_core");
 const platform = @import("platform/platform.zig");
-const Frontend = @import("frontend.zig");
 
 const config = @import("config.zig");
 const application_config = config.app_config;
@@ -25,7 +24,7 @@ engine: core.Fracture = undefined,
 log: EngineLog,
 platform_state: platform.PlatformState = undefined,
 
-frontend: Frontend = undefined,
+// frontend: Frontend = undefined,
 game_state: *anyopaque,
 api: core.API,
 dll: DLL,
@@ -39,7 +38,7 @@ const ApplicationError =
     core.log.LoggerError ||
     std.fs.File.OpenError ||
     std.fs.File.StatError ||
-    Frontend.FrontendError;
+    core.Renderer.Error;
 
 pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     var start = std.time.Timer.start() catch unreachable;
@@ -125,18 +124,24 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Renderer
     const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
-    try app.frontend.init(
+    // try app.frontend.init(
+    //     renderer_allocator,
+    //     app_config.application_name,
+    //     &app.platform_state,
+    //     &app.engine.log_config,
+    //     &app.engine.extent,
+    //     &app.engine.event,
+    // );
+    try app.engine.renderer.init(
         renderer_allocator,
         app_config.application_name,
         &app.platform_state,
         &app.engine.log_config,
         &app.engine.extent,
-        &app.engine.event,
     );
-    errdefer app.frontend.deinit();
+    // errdefer app.frontend.deinit();
+    errdefer app.engine.renderer.deinit();
     app.log.info("Renderer initialized", .{});
-
-    app.engine.view = app.frontend.view;
 
     // Application
     app.game_state = app.api.init(&app.engine) orelse {
@@ -162,7 +167,7 @@ pub fn deinit(self: *Application) void {
     self.log.info("Client application has been shutdown", .{});
 
     // Renderer shutdown
-    self.frontend.deinit();
+    self.engine.renderer.deinit();
     self.log.info("Renderer has been shutdown", .{});
 
     // Platform shutdown
@@ -221,45 +226,29 @@ pub fn run(self: *Application) ApplicationError!void {
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
-            // TODO: Change the game api to be update and render together
-            // Could we have some parallele command buffers that we can write to and the GPU can do that parallely
-            // TODO(aditya): Change the draw_frame to being and end frame before and after update and render
-            // Within the game the renderer can have commands submitted to it
-            if (!self.api.update(&self.engine, self.game_state)) {
-                @branchHint(.cold);
-                core_log.fatal("Client app update failed, shutting down", .{});
-                err = ApplicationError.FailedUpdate;
-                break;
-            }
+            if (self.engine.renderer.begin_frame(self.engine.delta_time)) {
+                if (!self.api.update_and_render(&self.engine, self.game_state)) {
+                    @branchHint(.cold);
+                    core_log.fatal("Client app update failed, shutting down", .{});
+                    err = ApplicationError.FailedUpdate;
+                    break;
+                }
 
-            if (self.engine.camera_dirty) {
-                self.frontend.set_object_view(&self.engine.view);
-                self.engine.camera_dirty = false;
-            }
+                if (!self.engine.renderer.end_frame(self.engine.delta_time)) {
+                    self.engine.is_running = false;
+                    continue;
+                }
 
-            if (!self.api.render(&self.engine, self.game_state)) {
-                @branchHint(.cold);
-                core_log.fatal("Client app render failed, shutting down", .{});
-                err = ApplicationError.FailedRender;
-                break;
-            }
+                delta_time += end;
+                frame_time += end;
+                frame_count += 1;
 
-            // HACK: Temporary packet passing
-            self.frontend.draw_frame(.{ .delta_time = self.engine.delta_time }) catch |e| {
-                err = e;
-                self.engine.is_running = false;
-                continue;
-            };
-
-            delta_time += end;
-            frame_time += end;
-            frame_count += 1;
-
-            if (frame_time > frame_rate_interval) {
-                current_frame_rate = @as(f32, @floatFromInt(frame_count - last_frame_count)) / @as(f32, @floatFromInt(frame_time));
-                current_frame_rate *= @as(f32, @floatFromInt(std.time.ns_per_s));
-                frame_time = 0;
-                last_frame_count = frame_count;
+                if (frame_time > frame_rate_interval) {
+                    current_frame_rate = @as(f32, @floatFromInt(frame_count - last_frame_count)) / @as(f32, @floatFromInt(frame_time));
+                    current_frame_rate *= @as(f32, @floatFromInt(std.time.ns_per_s));
+                    frame_time = 0;
+                    last_frame_count = frame_count;
+                }
             }
         }
 
@@ -329,7 +318,8 @@ pub fn on_event(self: *Application, comptime event_code: core.Event.EventCode, e
 
                     if (self.engine.is_running) {
                         _ = self.engine.event.fire(.WINDOW_RESIZE, &self.engine, event_data);
-                        self.frontend.on_resize(self.engine.extent);
+                        self.engine.renderer.on_resize(self.engine.extent);
+                        self.api.on_resize(&self.engine, self.game_state, self.engine.extent.width, self.engine.extent.height);
                     }
                 }
             }
@@ -347,13 +337,11 @@ fn reload_library(self: *Application) bool {
     self.dll.instance = platform.load_library(new_name) orelse return false;
     const init_fn = platform.library_lookup(self.dll.instance, "init", core.InitFn) orelse return false;
     const deinit_fn = platform.library_lookup(self.dll.instance, "deinit", core.DeinitFn) orelse return false;
-    const update = platform.library_lookup(self.dll.instance, "update", core.UpdateFn) orelse return false;
-    const render = platform.library_lookup(self.dll.instance, "render", core.RenderFn) orelse return false;
+    const update_and_render = platform.library_lookup(self.dll.instance, "update_and_render", core.UpdateAndRenderFn) orelse return false;
     const on_resize = platform.library_lookup(self.dll.instance, "on_resize", core.OnResizeFn) orelse return false;
     self.api.init = init_fn;
     self.api.deinit = deinit_fn;
-    self.api.update = update;
-    self.api.render = render;
+    self.api.update_and_render = update_and_render;
     self.api.on_resize = on_resize;
     return true;
 }

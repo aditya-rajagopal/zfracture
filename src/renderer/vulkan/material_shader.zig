@@ -431,17 +431,19 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     for (&image_infos, 0..) |*info, i| {
         var texture: ?*const Texture = geometry.textures[i];
         const generation = &object_state.descriptor_states[descriptor_index].generations[image_index];
+        const id = &object_state.descriptor_states[descriptor_index].ids[image_index];
 
         if (texture) |t| {
             if (t.id == .null_handle or t.generation == .null_handle) {
                 // TODO: Handle other texture maps
                 texture = self.default_diffuse;
                 generation.* = .null_handle;
+                id.* = .null_handle;
             }
         }
 
         if (texture) |t| {
-            if (generation.* != t.generation or generation.* == .null_handle) {
+            if (generation.* != t.generation or generation.* == .null_handle or id.* != t.id or id.* == .null_handle) {
                 const internal_data = t.data.as_const(T.vkTextureData);
                 // We expect this to be only used by the shader
                 info.image_layout = .shader_read_only_optimal;
@@ -466,6 +468,9 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
                 if (t.generation != .null_handle) {
                     generation.* = t.generation;
                 }
+                if (t.id != .null_handle) {
+                    id.* = t.id;
+                }
                 descriptor_index += 1;
             }
         }
@@ -489,6 +494,9 @@ pub fn acquire_resources(self: *MaterialShader, ctx: *const Context) T.MaterialI
     for (&object_state.descriptor_states) |*state| {
         for (&state.generations) |*gen| {
             gen.* = .null_handle;
+        }
+        for (&state.ids) |*resource_id| {
+            resource_id.* = .null_handle;
         }
     }
 

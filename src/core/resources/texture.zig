@@ -9,11 +9,11 @@ pub const Texture = struct {
     height: u32 = 0,
     channel_count: u8 = 0,
     has_transparency: u8 = 0,
-    data: Data,
+    data: Data = .{},
 
     /// Opaque data that is managed by the renderer
     pub const Data = struct {
-        data: [DataSize]u64,
+        data: [DataSize]u64 = [_]u64{0} ** DataSize,
 
         pub fn as(self: *Data, comptime E: type) *E {
             const size = @sizeOf(E);

@@ -82,38 +82,40 @@ pub fn TextureSystem(renderer_backend: type) type {
 
         // TODO: Best way to handle this
 
-        pub fn init(self: *Self, renderer: *Renderer, allocator: std.mem.Allocator) !void {
+        pub fn init(self: *Self, renderer: *RendererType, allocator: std.mem.Allocator) !void {
             self.free_list_ptr = 0;
-            for (RESERVED_TEXTUES..MAX_TEXTURES) |i| {
-                self.free_list[i] = i;
+            for (0..MAX_TEXTURES - RESERVED_TEXTUES) |i| {
+                self.free_list[i] = @as(u16, @truncate(i)) + @as(u16, RESERVED_TEXTUES);
             }
-            self.re = renderer;
+            self.renderer = renderer;
+            @memset(&self.items, Texture{});
             @memset(&self.reference_counts, 0);
             @memset(&self.auto_release, false);
 
             // INFO: Load the default texture
             self.hash_map = TextureNameMap.init(allocator);
 
-            self.create_defaults();
+            try self.create_defaults();
 
             // TODO: This wont work when multithreaded
             self.image_arena = std.heap.ArenaAllocator.init(allocator);
-            self.image_arena.allocator().alloc(u8, MAX_TEXTURE_DIM * MAX_TEXTURE_DIM * 4);
-            self.image_arena.reset(.retain_capacity);
+            _ = try self.image_arena.allocator().alloc(u8, MAX_TEXTURE_DIM * MAX_TEXTURE_DIM * 4);
+            _ = self.image_arena.reset(.retain_capacity);
 
-            self.string_cache = std.ArrayList(u8).initCapacity(allocator, 4096);
-            self.string_reference = std.ArrayList(StringRef).initCapacity(allocator, 4096);
-            self.string_reference.appendNTimesAssumeCapacity(0, RESERVED_TEXTUES + 1);
+            self.string_cache = try std.ArrayList(u8).initCapacity(allocator, 4096);
+            self.string_reference = try std.ArrayList(StringRef).initCapacity(allocator, 4096);
+            self.string_reference.appendNTimesAssumeCapacity(.{ .start = 0, .end = 0 }, RESERVED_TEXTUES + 1);
         }
 
         pub fn deinit(self: *Self) void {
             for (&self.items) |*texture| {
                 if (texture.id != .null_handle) {
-                    self.renderer.backend.destroy_texture(&texture.data);
+                    self.renderer._backend.destroy_texture(&texture.data);
                 }
             }
             self.hash_map.deinit();
             self.string_cache.deinit();
+            self.string_reference.deinit();
             self.image_arena.deinit();
         }
 
@@ -123,14 +125,14 @@ pub fn TextureSystem(renderer_backend: type) type {
 
         pub fn create(self: *Self, name: []const u8, auto_release: bool) TextureHandle {
             if (std.mem.eql(u8, name, BaseColourName)) {
-                self.renderer.log.warn(
+                self.renderer._log.warn(
                     "Trying to create base colour texture. Just use .base_colour",
                     .{},
                 );
                 return TextureHandle.base_colour;
             }
             if (std.mem.eql(u8, name, MissingTextureName)) {
-                self.renderer.log.warn(
+                self.renderer._log.warn(
                     "Trying to create base colour texture. Just use .missing_texture",
                     .{},
                 );
@@ -149,7 +151,7 @@ pub fn TextureSystem(renderer_backend: type) type {
 
                 gop.value_ptr.* = .{
                     .id = .null_handle,
-                    .string = self.string_reference.items.len - 1,
+                    .string = @truncate(self.string_reference.items.len - 1),
                 };
             }
 
@@ -159,22 +161,23 @@ pub fn TextureSystem(renderer_backend: type) type {
             if (handle.id == .null_handle) {
                 // INFO: Texture does not exist so load the texture
                 assert(self.free_list_ptr < MAX_TEXTURES);
-                var texture: Texture = undefined;
-                defer self.image_arena.reset(.retain_capacity);
-                if (!load_texture(self.image_arena.allocator(), &texture, name, .png)) {
-                    self.renderer.log.err("Unable to open texture: {s}", .{name});
+                var texture: Texture = .{};
+                if (!self.load_texture(&texture, self.image_arena.allocator(), name, .png)) {
+                    self.renderer._log.err("Unable to open texture: {s}", .{name});
                     return TextureHandle.missing_texture;
                 }
+                _ = self.image_arena.reset(.retain_capacity);
 
                 const free_index = self.free_list[self.free_list_ptr];
                 location = free_index;
+                assert(self.items[free_index].id == .null_handle);
                 texture.id = @enumFromInt(free_index);
                 handle.id = @enumFromInt(free_index);
-                self.free_list_ptr += 1;
-                assert(self.items[free_index].id == .null_handle);
+                self.items[free_index] = texture;
                 self.items[free_index] = texture;
                 gop.value_ptr.* = @bitCast(handle);
-                self.reference_counts[location] = 0;
+                self.reference_counts[free_index] = 0;
+                self.free_list_ptr += 1;
             }
 
             if (self.reference_counts[location] == 0) {
@@ -183,18 +186,19 @@ pub fn TextureSystem(renderer_backend: type) type {
                 assert(self.auto_release[location] == auto_release);
             }
 
-            return @bitCast(handle);
+            return @enumFromInt(@as(u64, @bitCast(handle)));
         }
 
         pub fn acquire(self: *Self, handle: TextureHandle) *Texture {
-            const reference: TextureReference = @bitCast(handle);
-            if (reference.id == .null_handle or reference.string <= self.string_reference.items.len) {
-                self.renderer.log.err("Invalid handle: {any}\n", reference);
+            const reference: TextureReference = @bitCast(@intFromEnum(handle));
+            self.renderer._log.debug("Requesting texture {any}", .{reference});
+            if (reference.id == .null_handle or reference.string >= self.string_reference.items.len) {
+                self.renderer._log.err("Invalid handle: {any}", .{reference});
                 return &self.items[0];
             }
             const location: u32 = @intFromEnum(reference.id);
             if (self.items[location].id == .null_handle) {
-                self.renderer.log.err("Expired handle: {any}. Texture not available\n", reference);
+                self.renderer._log.err("Expired handle: {any}. Texture not available", .{reference});
                 return &self.items[0];
             }
 
@@ -204,12 +208,12 @@ pub fn TextureSystem(renderer_backend: type) type {
 
         pub fn release(self: *Self, handle: TextureHandle) void {
             if (handle == .null_handle or handle == .missing_texture or handle == .base_colour) {
-                self.renderer.log.err("Freeing static textures", .{});
+                self.renderer._log.err("Freeing static textures", .{});
                 return;
             }
             const reference: TextureReference = @bitCast(handle);
             if (reference.id == .null_handle) {
-                self.renderer.log.err("Freeing invalid texture", .{});
+                self.renderer._log.err("Freeing invalid texture", .{});
                 return;
             }
             const location = @intFromEnum(reference.id);
@@ -219,7 +223,7 @@ pub fn TextureSystem(renderer_backend: type) type {
             if (self.reference_counts[location] == 0 and self.auto_release[location]) {
                 const texture = &self.items[location];
 
-                self.renderer.backend.destroy_texture(&texture.data);
+                self.renderer._backend.destroy_texture(&texture.data);
 
                 texture.id = .null_handle;
                 texture.generation = .null_handle;
@@ -238,8 +242,8 @@ pub fn TextureSystem(renderer_backend: type) type {
 
         fn load_texture(
             self: *Self,
-            allocator: std.mem.Allocator,
             texture: *Texture,
+            allocator: std.mem.Allocator,
             texture_name: []const u8,
             comptime texture_type: image.ImageFileType,
         ) bool {
@@ -250,7 +254,7 @@ pub fn TextureSystem(renderer_backend: type) type {
             const required_channel_count = 4;
 
             const img = image.load(file_name, allocator, .{ .requested_channels = required_channel_count }) catch |err| {
-                self.renderer.log.err("Unable to load texture image: {s}", .{@errorName(err)});
+                self.renderer._log.err("Unable to load texture image: {s}", .{@errorName(err)});
                 return false;
             };
 
@@ -274,20 +278,21 @@ pub fn TextureSystem(renderer_backend: type) type {
 
             texture.width = img.width;
             texture.height = img.height;
+            texture.channel_count = required_channel_count;
 
-            texture.data = self.renderer.backend.create_texture(
+            texture.data = self.renderer._backend.create_texture(
                 img.width,
                 img.height,
                 required_channel_count,
                 img.data,
             ) catch |err| {
-                self.renderer.log.err("Unable to create texture: {s}", .{@errorName(err)});
+                self.renderer._log.err("Unable to create texture: {s}", .{@errorName(err)});
                 return false;
             };
             texture.has_transparency = @intFromBool(has_transparency);
             texture.id = .null_handle;
 
-            self.renderer.backend.destroy_texture(&old.data);
+            self.renderer._backend.destroy_texture(&old.data);
 
             if (current_generation == .null_handle) {
                 texture.generation = @enumFromInt(0);
@@ -300,7 +305,7 @@ pub fn TextureSystem(renderer_backend: type) type {
 
         fn create_defaults(self: *Self) !void {
             { // INFO: Default Missing Texture
-                self.log.debug("Creating missing texture", .{});
+                self.renderer._log.debug("Creating missing texture", .{});
 
                 const missing_texture = &self.items[0];
                 missing_texture.generation = .null_handle;
@@ -310,48 +315,48 @@ pub fn TextureSystem(renderer_backend: type) type {
                 const pixel_count = texture_dim * texture_dim;
                 var pixels = [pixel_count * channels]u8{ 255, 0, 255, 255 };
 
-                missing_texture.data = self.renderer.backend.create_texture(
+                missing_texture.data = self.renderer._backend.create_texture(
                     texture_dim,
                     texture_dim,
                     channels,
                     &pixels,
                 ) catch {
-                    self.log.err("Unable to load default missing texture", .{});
+                    self.renderer._log.err("Unable to load default missing texture", .{});
                     return error.InitFailed;
                 };
                 missing_texture.width = 1;
                 missing_texture.height = 1;
-                missing_texture.channel_count = 1;
+                missing_texture.channel_count = 4;
                 missing_texture.has_transparency = 0;
-                self.hash_map.put(MissingTextureName, @bitCast(missing_texture)) catch return error.InitFailed;
+                self.hash_map.put(MissingTextureName, MissingTexture) catch return error.InitFailed;
             }
 
-            { // INFO: Default Missing Texture
-                self.log.debug("Creating base colour", .{});
+            { // INFO: Default White Base Colour Texture
+                self.renderer._log.debug("Creating base colour", .{});
 
-                const base_colour = &self.items[0];
+                const base_colour = &self.items[1];
                 base_colour.generation = .null_handle;
                 base_colour.id = BaseColour.id;
                 const texture_dim = 1;
                 const channels = 4;
                 const pixel_count = texture_dim * texture_dim;
-                const pixels: [pixel_count * channels]u8 = undefined;
+                var pixels: [pixel_count * channels]u8 = undefined;
                 @memset(&pixels, 255);
 
-                base_colour.data = self.renderer.backend.create_texture(
+                base_colour.data = self.renderer._backend.create_texture(
                     texture_dim,
                     texture_dim,
                     channels,
                     &pixels,
                 ) catch {
-                    self.log.err("Unable to load default missing texture", .{});
+                    self.renderer._log.err("Unable to load default missing texture", .{});
                     return error.InitFailed;
                 };
                 base_colour.width = 1;
                 base_colour.height = 1;
-                base_colour.channel_count = 1;
+                base_colour.channel_count = 4;
                 base_colour.has_transparency = 0;
-                self.hash_map.put(BaseColourName, @bitCast(base_colour)) catch return error.InitFailed;
+                self.hash_map.put(BaseColourName, BaseColour) catch return error.InitFailed;
             }
         }
 

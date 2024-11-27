@@ -11,6 +11,7 @@ pub const ObjectUO = T.MaterialUO;
 pub const RenderData = T.RenderData;
 
 pub const Generation = core.resource.Generation;
+pub const ResourceHandle = core.resource.ResourceHandle;
 
 pub const MAX_MATERIAL_INSTANCES = T.MAX_MATERIAL_INSTANCES;
 
@@ -89,6 +90,7 @@ pub const MATERIAL_SHADER_DESCRIPTOR_COUNT = 2;
 pub const DescriptorState = extern struct {
     // One per frame
     generations: [MAX_DESCRIPTOR_SETS]Generation,
+    ids: [MAX_DESCRIPTOR_SETS]ResourceHandle,
 };
 
 pub const ObjectShaderObjectState = extern struct {

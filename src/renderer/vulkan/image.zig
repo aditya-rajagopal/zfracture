@@ -42,7 +42,7 @@ pub fn create(
             .depth = 1,
         },
         // TODO: Need to support mipmapping
-        .mip_levels = 4,
+        .mip_levels = 1,
         // TODO: support multiple layers
         .array_layers = 1,
         .format = format,

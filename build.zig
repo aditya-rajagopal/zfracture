@@ -142,6 +142,7 @@ pub fn build(b: *std.Build) !void {
     });
     exe_check.root_module.addImport("entrypoint", entrypoint);
     exe_check.root_module.addImport("fr_core", core_lib);
+    exe_check.root_module.addImport("vulkan_backend", vulkan_backend);
 
     const check_step = b.step("check", "Check if the app compiles");
     check_step.dependOn(&exe_check.step);
