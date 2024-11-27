@@ -5,6 +5,7 @@ const T = @import("types.zig");
 const core = @import("fr_core");
 const m = core.math;
 const Texture = core.resource.Texture;
+const TextureSystem = core.Renderer.TextureSystemType;
 
 const Pipeline = @import("pipeline.zig");
 const Buffer = @import("buffer.zig");
@@ -39,7 +40,7 @@ object_states: [T.MAX_MATERIAL_INSTANCES]T.ObjectShaderObjectState,
 
 pipeline: Pipeline,
 
-default_diffuse: *const Texture,
+textures: *const TextureSystem,
 
 // HACK: Just to see something
 accumulator: f32 = 0.0,
@@ -52,7 +53,7 @@ pub const ShaderStage = struct {
 
 pub const Error = error{UnableToLoadShader} || Pipeline.Error;
 
-pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!MaterialShader {
+pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!MaterialShader {
     const device = ctx.device.handle;
     const stage_types = [MATERIAL_SHADER_STAGE_COUNT]vk.ShaderStageFlags{
         .{ .vertex_bit = true },
@@ -281,7 +282,7 @@ pub fn create(ctx: *const Context, default_diffuse: *const Texture) Error!Materi
 
     out_shader.accumulator = 0.0;
     out_shader.object_free_list = 0;
-    out_shader.default_diffuse = default_diffuse;
+    out_shader.textures = texture_system;
 
     return out_shader;
 }
@@ -429,22 +430,21 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     var image_infos: [NUM_SAMPLERS]vk.DescriptorImageInfo = undefined;
 
     for (&image_infos, 0..) |*info, i| {
-        var texture: ?*const Texture = geometry.textures[i];
+        var texture: TextureSystem.Handle = geometry.textures[i];
+        const tex_id, const tex_gen = self.textures.get_info(texture);
         const generation = &object_state.descriptor_states[descriptor_index].generations[image_index];
         const id = &object_state.descriptor_states[descriptor_index].ids[image_index];
 
-        if (texture) |t| {
-            if (t.id == .null_handle or t.generation == .null_handle) {
-                // TODO: Handle other texture maps
-                texture = self.default_diffuse;
-                generation.* = .null_handle;
-                id.* = .null_handle;
-            }
+        if (tex_id == .null_handle or tex_gen == .null_handle) {
+            // TODO: Handle other texture maps
+            texture = .missing_texture;
+            generation.* = .null_handle;
+            id.* = .null_handle;
         }
 
-        if (texture) |t| {
-            if (generation.* != t.generation or generation.* == .null_handle or id.* != t.id or id.* == .null_handle) {
-                const internal_data = t.data.as_const(T.vkTextureData);
+        if (texture != .null_handle) {
+            if (generation.* != tex_gen or generation.* == .null_handle or id.* != tex_id or id.* == .null_handle) {
+                const internal_data = self.textures.get_data(texture).as_const(T.vkTextureData);
                 // We expect this to be only used by the shader
                 info.image_layout = .shader_read_only_optimal;
                 info.image_view = internal_data.image.view;
@@ -465,11 +465,11 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
                 descriptor_writes[descriptor_count] = descriptor;
                 descriptor_count += 1;
 
-                if (t.generation != .null_handle) {
-                    generation.* = t.generation;
+                if (tex_gen != .null_handle) {
+                    generation.* = tex_gen;
                 }
-                if (t.id != .null_handle) {
-                    id.* = t.id;
+                if (tex_id != .null_handle) {
+                    id.* = tex_id;
                 }
                 descriptor_index += 1;
             }

@@ -80,6 +80,8 @@ pub fn TextureSystem(renderer_backend: type) type {
             end: u32,
         };
 
+        pub const Handle = TextureHandle;
+
         // TODO: Best way to handle this
 
         pub fn init(self: *Self, renderer: *RendererType, allocator: std.mem.Allocator) !void {
@@ -187,6 +189,36 @@ pub fn TextureSystem(renderer_backend: type) type {
             }
 
             return @enumFromInt(@as(u64, @bitCast(handle)));
+        }
+
+        pub fn reload_texture(self: *Self, handle: TextureHandle) bool {
+            _ = self;
+            _ = handle;
+            @compileError("NOT IMPLEMENTED");
+        }
+
+        pub fn replace_texture(self: *Self, handle: Handle) bool {
+            _ = self;
+            _ = handle;
+            @compileError("NOT IMPLEMENTED");
+        }
+
+        pub fn get_info(self: *const Self, handle: TextureHandle) struct { ResourceHandle, Generation } {
+            if (handle == .null_handle) {
+                return .{ .null_handle, .null_handle };
+            }
+            const reference: TextureReference = @bitCast(@intFromEnum(handle));
+            const location: u32 = @intFromEnum(reference.id);
+            assert(location < self.items.len);
+            return .{ self.items[location].id, self.items[location].generation };
+        }
+
+        pub fn get_data(self: *const Self, handle: TextureHandle) *const Texture.Data {
+            assert(handle != .null_handle);
+            const reference: TextureReference = @bitCast(@intFromEnum(handle));
+            const location: u32 = @intFromEnum(reference.id);
+            assert(location < self.items.len);
+            return &self.items[location].data;
         }
 
         pub fn acquire(self: *Self, handle: TextureHandle) *Texture {
@@ -369,6 +401,8 @@ pub fn TextureSystem(renderer_backend: type) type {
 const std = @import("std");
 const assert = std.debug.assert;
 const resource = @import("../resource.zig");
+const ResourceHandle = resource.ResourceHandle;
+const Generation = resource.Generation;
 const Texture = resource.Texture;
 const math = @import("../math/math.zig");
 const image = @import("../image.zig");

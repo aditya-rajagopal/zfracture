@@ -7,6 +7,7 @@ const T = @import("types.zig");
 const core = @import("fr_core");
 const math = core.math;
 const Texture = core.resource.Texture;
+const TextureSystem = core.Renderer.TextureSystemType;
 
 const platform = @import("platform.zig");
 const Device = @import("device.zig");
@@ -50,7 +51,7 @@ object_index_buffer: Buffer,
 geometry_vertex_offset: u64 = 0,
 geometry_index_offset: u64 = 0,
 frame_delta_time: f32 = 0.0,
-default_diffuse: *const Texture,
+textures: *const TextureSystem,
 
 pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
@@ -77,11 +78,11 @@ pub fn init(
     plat_state: *anyopaque,
     log: T.RendererLog,
     framebuffer_extent: *const math.Extent2D,
-    default_diffuse: *const Texture,
+    texture_system: *const TextureSystem,
 ) Error!void {
     const internal_plat_state: *T.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     self.log = log;
-    self.default_diffuse = default_diffuse;
+    self.textures = texture_system;
     // ========================================== LOAD VULKAN =================================/
 
     self.vulkan_lib = try std.DynLib.open("vulkan-1.dll");
@@ -162,7 +163,7 @@ pub fn init(
     self.last_framebuffer_generation = 0;
 
     // =============================== SHADER OBJECTS AND PIPELINE ============================/
-    self.material_shader = try MaterialShader.create(self, default_diffuse);
+    self.material_shader = try MaterialShader.create(self, texture_system);
     errdefer self.material_shader.destroy(self);
     self.log.info("Builtin Object Shader loaded Successfully along with pipeline", .{});
 

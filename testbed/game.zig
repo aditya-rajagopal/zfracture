@@ -41,7 +41,7 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     state.view = m.Transform.init_trans(&m.Vec3.init(0.0, 0.0, -2.0)).to_mat();
     state.render_data.object_id = engine.renderer.shader_acquire_resource();
     state.render_data.model = m.Transform.identity;
-    state.render_data.textures[0] = engine.renderer.textures.acquire(.missing_texture);
+    state.render_data.textures[0] = .missing_texture;
     state.textures = [_]core.renderer.texture_system.TextureHandle{.null_handle} ** 3;
     const names = [_][]const u8{ "paving", "cobblestone", "paving2" };
     for (names, 0..) |name, i| {
@@ -73,7 +73,7 @@ pub fn update_and_render(engine: *core.Fracture, game_state: *anyopaque) bool {
             state.log.debug("Changing Texture", .{});
             const index = state.generation % 3;
             state.generation += 1;
-            state.render_data.textures[0] = engine.renderer.textures.acquire(state.textures[index]);
+            state.render_data.textures[0] = state.textures[index];
         }
     }
 

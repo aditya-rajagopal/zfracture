@@ -34,8 +34,7 @@ pub const MaterialInstanceID = enum(u32) { null_handle = std.math.maxInt(u32), _
 pub const RenderData = extern struct {
     object_id: MaterialInstanceID,
     model: math.Transform,
-    // TODO: Make these handles
-    textures: [16]?*Texture = [_]?*Texture{null} ** 16,
+    textures: [16]TextureHandle = [_]TextureHandle{.null_handle} ** 16,
 };
 
 pub const Packet = struct {
@@ -93,7 +92,7 @@ pub fn Renderer(renderer_backend: type) type {
                 platform_state,
                 self._log,
                 framebuffer_extent,
-                &self.textures.items[0],
+                &self.textures,
             );
             try self.textures.init(self, allocator);
         }
