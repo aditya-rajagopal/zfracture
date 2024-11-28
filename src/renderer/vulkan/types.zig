@@ -91,9 +91,10 @@ pub const DescriptorState = extern struct {
     // One per frame
     generations: [MAX_DESCRIPTOR_SETS]Generation,
     ids: [MAX_DESCRIPTOR_SETS]ResourceHandle,
+    external_handles: [MAX_DESCRIPTOR_SETS]u64,
 };
 
-pub const MaterialShaderObjectState = extern struct {
+pub const MaterialShaderInstanceState = extern struct {
     descriptor_sets: [MAX_DESCRIPTOR_SETS]vk.DescriptorSet,
     descriptor_states: [MATERIAL_SHADER_DESCRIPTOR_COUNT]DescriptorState,
 };

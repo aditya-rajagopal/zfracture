@@ -59,7 +59,7 @@ pub fn Renderer(renderer_backend: type) type {
 
     return struct {
         /// Texture system to load and unload textures.
-        textures: TextureSystemType,
+        textures: TexturesType,
 
         /// Allocator tagged with the renderer type in debug
         allocator: std.mem.Allocator,
@@ -69,7 +69,7 @@ pub fn Renderer(renderer_backend: type) type {
         /// Private instance of a renderer backend. Do not access this directly unless you know what you are doing
         _backend: renderer_backend,
 
-        pub const TextureSystemType = TextureSystem(renderer_backend);
+        pub const TexturesType = Textures(renderer_backend);
 
         pub const Error = error{ InitFailed, EndFrameFailed } || renderer_backend.Error;
 
@@ -150,8 +150,7 @@ pub fn Renderer(renderer_backend: type) type {
 
 const math = @import("math/math.zig");
 const log = @import("log.zig");
-const Texture = @import("resource.zig").Texture;
-const TextureSystem = texture_system.TextureSystem;
+const Textures = texture_system.Textures;
 const TextureHandle = texture_system.TextureHandle;
 const img = @import("image.zig");
 const std = @import("std");

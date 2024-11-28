@@ -6,8 +6,7 @@ const vk = @import("vulkan");
 const T = @import("types.zig");
 const core = @import("fr_core");
 const math = core.math;
-const Texture = core.resource.Texture;
-const TextureSystem = core.Renderer.TextureSystemType;
+const Textures = core.Renderer.TexturesType;
 
 const platform = @import("platform.zig");
 const Device = @import("device.zig");
@@ -51,7 +50,7 @@ object_index_buffer: Buffer,
 geometry_vertex_offset: u64 = 0,
 geometry_index_offset: u64 = 0,
 frame_delta_time: f32 = 0.0,
-textures: *const TextureSystem,
+textures: *Textures,
 
 pub const Error =
     error{ FailedProcAddrPFN, FailedToFindValidationLayer, FailedToFindDepthFormat, NotSuitableMemoryType } ||
@@ -78,7 +77,7 @@ pub fn init(
     plat_state: *anyopaque,
     log: T.RendererLog,
     framebuffer_extent: *const math.Extent2D,
-    texture_system: *const TextureSystem,
+    texture_system: *Textures,
 ) Error!void {
     const internal_plat_state: *T.VulkanPlatform = @ptrCast(@alignCast(plat_state));
     self.log = log;
@@ -165,7 +164,7 @@ pub fn init(
     // =============================== SHADER OBJECTS AND PIPELINE ============================/
     self.material_shader = try MaterialShader.create(self, texture_system);
     errdefer self.material_shader.destroy(self);
-    self.log.info("Builtin Object Shader loaded Successfully along with pipeline", .{});
+    self.log.info("Builtin Material Shader loaded Successfully along with pipeline", .{});
 
     // =========================== CREATE VERTEX AND INDEX BUFFERS ============================/
     try self.create_buffers();
@@ -215,7 +214,7 @@ pub fn deinit(self: *Context) void {
     self.log.info("Vertex and Index buffers destroyed", .{});
 
     self.material_shader.destroy(self);
-    self.log.info("Object shader and pipeline destroyed", .{});
+    self.log.info("Material shader and pipeline destroyed", .{});
 
     self.free_commmand_buffers();
     self.log.info("Graphics CommandBuffers Freed", .{});
@@ -444,11 +443,11 @@ pub fn create_texture(
     height: u32,
     channel_count: u8,
     pixels: []const u8,
-) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!Texture.Data {
+) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!Textures.Data {
     const image_size: vk.DeviceSize = width * height * channel_count;
     assert(image_size <= pixels.len);
 
-    var texture_data: Texture.Data = undefined;
+    var texture_data: Textures.Data = undefined;
 
     const internal_data = texture_data.as(T.vkTextureData);
 
@@ -529,7 +528,7 @@ pub fn create_texture(
     return texture_data;
 }
 
-pub fn destroy_texture(self: *Context, texture_data: *Texture.Data) void {
+pub fn destroy_texture(self: *Context, texture_data: *Textures.Data) void {
     const internal_data: *T.vkTextureData = texture_data.as(T.vkTextureData);
     if (internal_data.image.handle != .null_handle) {
         self.device.handle.deviceWaitIdle() catch unreachable;

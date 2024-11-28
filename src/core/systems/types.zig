@@ -10,8 +10,8 @@ pub const Generation = enum(u32) {
 };
 
 pub const Handle = extern struct {
-    id: ResourceHandle,
-    generation: Generation,
+    id: ResourceHandle = .null_handle,
+    generation: Generation = .null_handle,
 };
 
 const max_u32 = @import("std").math.maxInt(u32);

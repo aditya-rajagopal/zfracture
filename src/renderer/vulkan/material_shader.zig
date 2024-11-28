@@ -4,8 +4,7 @@ const builtin = @import("shaders").builtin;
 const T = @import("types.zig");
 const core = @import("fr_core");
 const m = core.math;
-const Texture = core.resource.Texture;
-const TextureSystem = core.Renderer.TextureSystemType;
+const Textures = core.Renderer.TexturesType;
 
 const Pipeline = @import("pipeline.zig");
 const Buffer = @import("buffer.zig");
@@ -34,13 +33,12 @@ local_descriptor_pool: vk.DescriptorPool,
 local_uniform_buffer: Buffer,
 // TODO: Make this a free list
 material_free_list: u32,
-
 // TODO: Make this dynamic
-material_states: [T.MAX_MATERIAL_INSTANCES]T.MaterialShaderObjectState,
+instance_states: [T.MAX_MATERIAL_INSTANCES]T.MaterialShaderInstanceState,
 
 pipeline: Pipeline,
 
-textures: *const TextureSystem,
+textures: *Textures,
 
 // HACK: Just to see something
 accumulator: f32 = 0.0,
@@ -53,7 +51,7 @@ pub const ShaderStage = struct {
 
 pub const Error = error{UnableToLoadShader} || Pipeline.Error;
 
-pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!MaterialShader {
+pub fn create(ctx: *const Context, texture_system: *Textures) Error!MaterialShader {
     const device = ctx.device.handle;
     const stage_types = [MATERIAL_SHADER_STAGE_COUNT]vk.ShaderStageFlags{
         .{ .vertex_bit = true },
@@ -144,11 +142,11 @@ pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!M
     const local_descriptor_pool_size = [T.MATERIAL_SHADER_DESCRIPTOR_COUNT]vk.DescriptorPoolSize{
         .{
             .type = .uniform_buffer,
-            .descriptor_count = T.MAX_OBJECTS,
+            .descriptor_count = T.MAX_MATERIAL_INSTANCES,
         },
         .{
             .type = .combined_image_sampler,
-            .descriptor_count = T.MAX_OBJECTS * NUM_SAMPLERS,
+            .descriptor_count = T.MAX_MATERIAL_INSTANCES * NUM_SAMPLERS,
         },
     };
 
@@ -156,6 +154,7 @@ pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!M
         .max_sets = T.MAX_MATERIAL_INSTANCES * MAX_DESCRIPTOR_SETS,
         .pool_size_count = T.MATERIAL_SHADER_DESCRIPTOR_COUNT,
         .p_pool_sizes = @ptrCast(&local_descriptor_pool_size),
+        .flags = .{ .free_descriptor_set_bit = true },
     };
 
     out_shader.local_descriptor_pool = ctx.device.handle.createDescriptorPool(&local_pool_create_info, null) catch unreachable;
@@ -215,7 +214,6 @@ pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!M
 
     var stage_create_info: [MATERIAL_SHADER_STAGE_COUNT]vk.PipelineShaderStageCreateInfo = undefined;
     for (stage_create_info[0..MATERIAL_SHADER_STAGE_COUNT], 0..) |*info, index| {
-        // info.s_type = out_shader.stages[i].stage_create_info.s_type;
         info.* = out_shader.stages[index].stage_create_info;
     }
 
@@ -253,8 +251,6 @@ pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!M
     // NOTE: We are using the same layout for all 3 sets which are associated with each swapchain image
     const global_layouts = [_]vk.DescriptorSetLayout{
         out_shader.global_descriptor_set_layout,
-        // out_shader.global_descriptor_set_layout,
-        // out_shader.global_descriptor_set_layout,
     } ** MAX_DESCRIPTOR_SETS;
 
     const alloc_info = vk.DescriptorSetAllocateInfo{
@@ -289,8 +285,6 @@ pub fn create(ctx: *const Context, texture_system: *const TextureSystem) Error!M
 
 pub fn destroy(self: *MaterialShader, ctx: *const Context) void {
     const device = ctx.device.handle;
-
-    // device.freeDescriptorSets(self.global_descriptor_pool, 3, @ptrCast(&self.global_descriptor_sets[0])) catch unreachable;
 
     self.local_uniform_buffer.destroy(ctx);
 
@@ -378,10 +372,10 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
         @ptrCast(&geometry.model),
     );
 
-    assert(@intFromEnum(geometry.material_id) < self.material_states.len);
+    assert(@intFromEnum(geometry.material_id) < self.instance_states.len);
 
-    const material_state = &self.material_states[@intFromEnum(geometry.material_id)];
-    const descriptor_set = material_state.descriptor_sets[image_index];
+    const instance_state = &self.instance_states[@intFromEnum(geometry.material_id)];
+    const descriptor_set = instance_state.descriptor_sets[image_index];
 
     // We need to check if htis needs to be done
     var descriptor_writes: [T.MATERIAL_SHADER_DESCRIPTOR_COUNT]vk.WriteDescriptorSet = undefined;
@@ -402,7 +396,7 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
 
     self.local_uniform_buffer.load_data(offset, range, .{}, ctx, @ptrCast(&material_uo));
 
-    if (material_state.descriptor_states[descriptor_index].generations[image_index] == .null_handle) {
+    if (instance_state.descriptor_states[descriptor_index].generations[image_index] == .null_handle) {
         const buffer_info = vk.DescriptorBufferInfo{
             .buffer = self.local_uniform_buffer.handle,
             .range = range,
@@ -423,28 +417,35 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
         descriptor_count += 1;
 
         // NOTE: We only need to do this once because once the memory is mapped we just need to update the buffer
-        material_state.descriptor_states[descriptor_index].generations[image_index] = @enumFromInt(1);
+        instance_state.descriptor_states[descriptor_index].generations[image_index] = @enumFromInt(1);
     }
     descriptor_index += 1;
 
     var image_infos: [NUM_SAMPLERS]vk.DescriptorImageInfo = undefined;
 
     for (&image_infos, 0..) |*info, i| {
-        var texture: TextureSystem.Handle = geometry.textures[i];
-        const tex_id, const tex_gen = self.textures.get_info(texture);
-        const generation = &material_state.descriptor_states[descriptor_index].generations[image_index];
-        const id = &material_state.descriptor_states[descriptor_index].ids[image_index];
+        var texture = geometry.textures[i];
+        const handle = self.textures.get_info(texture);
+        const generation = &instance_state.descriptor_states[descriptor_index].generations[image_index];
+        const id = &instance_state.descriptor_states[descriptor_index].ids[image_index];
+        const external_handle = &instance_state.descriptor_states[descriptor_index].external_handles[image_index];
 
-        if (tex_id == .null_handle or tex_gen == .null_handle) {
+        if (handle.id == .null_handle or handle.generation == .null_handle) {
             // TODO: Handle other texture maps
             texture = .missing_texture;
-            generation.* = .null_handle;
-            id.* = .null_handle;
+            const missing_texture_handle = self.textures.get_info(texture);
+            generation.* = missing_texture_handle.generation;
+            id.* = missing_texture_handle.id;
+            external_handle.* = @intFromEnum(texture);
         }
 
         if (texture != .null_handle) {
-            if (generation.* != tex_gen or generation.* == .null_handle or id.* != tex_id or id.* == .null_handle) {
-                const internal_data = self.textures.get_data(texture).as_const(T.vkTextureData);
+            if (id.* != handle.id or generation.* != handle.generation or generation.* == .null_handle or id.* == .null_handle) {
+                // TODO: When this texture changes try to release the old texture
+                if (id.* != handle.id) {
+                    self.textures.release(@enumFromInt(external_handle.*));
+                }
+                const internal_data = self.textures.acquire(texture).as_const(T.vkTextureData);
                 // We expect this to be only used by the shader
                 info.image_layout = .shader_read_only_optimal;
                 info.image_view = internal_data.image.view;
@@ -465,12 +466,13 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
                 descriptor_writes[descriptor_count] = descriptor;
                 descriptor_count += 1;
 
-                if (tex_gen != .null_handle) {
-                    generation.* = tex_gen;
+                if (handle.generation != .null_handle) {
+                    generation.* = handle.generation;
                 }
-                if (tex_id != .null_handle) {
-                    id.* = tex_id;
+                if (handle.id != .null_handle) {
+                    id.* = handle.id;
                 }
+                external_handle.* = @intFromEnum(texture);
                 descriptor_index += 1;
             }
         }
@@ -490,13 +492,16 @@ pub fn acquire_resources(self: *MaterialShader, ctx: *const Context) T.MaterialI
     assert(self.material_free_list < T.MAX_MATERIAL_INSTANCES);
 
     // Reset the object state
-    const material_state = &self.material_states[id];
+    const material_state = &self.instance_states[id];
     for (&material_state.descriptor_states) |*state| {
         for (&state.generations) |*gen| {
             gen.* = .null_handle;
         }
         for (&state.ids) |*resource_id| {
             resource_id.* = .null_handle;
+        }
+        for (&state.external_handles) |*handle| {
+            handle.* = std.math.maxInt(u64);
         }
     }
 
@@ -529,7 +534,7 @@ pub fn release_resources(self: *MaterialShader, ctx: *const Context, material_id
     ctx.device.handle.freeDescriptorSets(
         self.local_descriptor_pool,
         MAX_DESCRIPTOR_SETS,
-        @ptrCast(&self.material_states[id].descriptor_sets[0]),
+        @ptrCast(&self.instance_states[id].descriptor_sets[0]),
     ) catch unreachable;
 }
 

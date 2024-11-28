@@ -9,7 +9,12 @@ pub const TextureHandle = enum(u64) {
     _,
 };
 
-const NullReference = TextureReference{ .id = .null_handle, .string = 0 };
+pub const TextureUse = enum(u8) {
+    unknown = 0,
+    diffuse,
+};
+
+const NullReference = TextureReference{ .id = .null_handle, .string = std.math.maxInt(u32) };
 
 const DefaultType = enum(u8) {
     missing_texture = 0,
@@ -34,18 +39,24 @@ const BaseColourName: []const u8 = @tagName(DefaultType.base_colour);
 const FREE_SLOTS = MAX_TEXTURES - RESERVED_TEXTUES;
 
 const TextureReference = packed struct(u64) {
-    id: resource.ResourceHandle,
+    id: T.ResourceHandle,
     string: u32,
 };
 
-pub fn TextureSystem(renderer_backend: type) type {
+pub fn Textures(renderer_backend: type) type {
     const RendererType = Renderer(renderer_backend);
 
     return struct {
         pub const Self = @This();
         //TODO: Should this be dynamic?
         //TODO: Make this safe when more textures are available. Overwrite the oldest texture?
-        items: [MAX_TEXTURES]Texture,
+        // items: [MAX_TEXTURES]Texture,
+        /// Texture Data
+        handles: [MAX_TEXTURES]T.Handle,
+        uses: [MAX_TEXTURES]TextureUse,
+        infos: [MAX_TEXTURES]Texture.Info,
+        data: [MAX_TEXTURES]Data,
+
         reference_counts: [MAX_TEXTURES]u16,
         auto_release: [MAX_TEXTURES]bool,
 
@@ -80,7 +91,39 @@ pub fn TextureSystem(renderer_backend: type) type {
             end: u32,
         };
 
-        pub const Handle = TextureHandle;
+        // TODO: Make this configurable
+        pub const DataSize = 8;
+
+        pub const Texture = struct {
+            handle: T.Handle = .{},
+            use: TextureUse = .unknown,
+            info: Info = .{},
+            data: Data = .{},
+
+            pub const Info = struct {
+                width: u32 = 0,
+                height: u32 = 0,
+                has_transparency: u8 = 0,
+                channel_count: u8 = 0,
+            };
+        };
+
+        /// Opaque data that is managed by the renderer
+        pub const Data = struct {
+            data: [DataSize]u64 = [_]u64{0} ** DataSize,
+
+            pub fn as(self: *Data, comptime E: type) *E {
+                const size = @sizeOf(E);
+                comptime assert(size <= DataSize * 8);
+                return @alignCast(std.mem.bytesAsValue(E, &self.data[0]));
+            }
+
+            pub fn as_const(self: *const Data, comptime E: type) *const E {
+                const size = @sizeOf(E);
+                comptime assert(size <= DataSize * 8);
+                return @alignCast(std.mem.bytesAsValue(E, &self.data[0]));
+            }
+        };
 
         // TODO: Best way to handle this
 
@@ -90,7 +133,10 @@ pub fn TextureSystem(renderer_backend: type) type {
                 self.free_list[i] = @as(u16, @truncate(i)) + @as(u16, RESERVED_TEXTUES);
             }
             self.renderer = renderer;
-            @memset(&self.items, Texture{});
+            @memset(&self.handles, .{});
+            @memset(&self.uses, .unknown);
+            @memset(&self.infos, .{});
+            @memset(&self.data, .{});
             @memset(&self.reference_counts, 0);
             @memset(&self.auto_release, false);
 
@@ -110,9 +156,9 @@ pub fn TextureSystem(renderer_backend: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            for (&self.items) |*texture| {
-                if (texture.id != .null_handle) {
-                    self.renderer._backend.destroy_texture(&texture.data);
+            for (self.handles, 0..) |handle, i| {
+                if (handle.id != .null_handle) {
+                    self.renderer._backend.destroy_texture(&self.data[i]);
                 }
             }
             self.hash_map.deinit();
@@ -122,7 +168,15 @@ pub fn TextureSystem(renderer_backend: type) type {
         }
 
         pub fn get_default(self: *const Self) *const Texture {
-            return &self.items[1];
+            return Texture{
+                .handle = self.handles[1],
+                .use = self.uses[1],
+                .width = self.widths[1],
+                .height = self.heights[1],
+                .channel_count = self.channel_counts[1],
+                .has_transparency = self.has_transparencys[1],
+                .data = self.data[1],
+            };
         }
 
         pub fn create(self: *Self, name: []const u8, auto_release: bool) TextureHandle {
@@ -172,11 +226,15 @@ pub fn TextureSystem(renderer_backend: type) type {
 
                 const free_index = self.free_list[self.free_list_ptr];
                 location = free_index;
-                assert(self.items[free_index].id == .null_handle);
-                texture.id = @enumFromInt(free_index);
+                assert(self.handles[free_index].id == .null_handle);
+                texture.handle.id = @enumFromInt(free_index);
                 handle.id = @enumFromInt(free_index);
-                self.items[free_index] = texture;
-                self.items[free_index] = texture;
+
+                self.handles[free_index] = texture.handle;
+                self.uses[free_index] = texture.use;
+                self.data[free_index] = texture.data;
+                self.infos[free_index] = texture.info;
+
                 gop.value_ptr.* = @bitCast(handle);
                 self.reference_counts[free_index] = 0;
                 self.free_list_ptr += 1;
@@ -197,45 +255,36 @@ pub fn TextureSystem(renderer_backend: type) type {
             @compileError("NOT IMPLEMENTED");
         }
 
-        pub fn replace_texture(self: *Self, handle: Handle) bool {
+        pub fn replace_texture(self: *Self, handle: TextureHandle) bool {
             _ = self;
             _ = handle;
             @compileError("NOT IMPLEMENTED");
         }
 
-        pub fn get_info(self: *const Self, handle: TextureHandle) struct { ResourceHandle, Generation } {
+        pub fn get_info(self: *const Self, handle: TextureHandle) T.Handle {
             if (handle == .null_handle) {
-                return .{ .null_handle, .null_handle };
+                return .{};
             }
             const reference: TextureReference = @bitCast(@intFromEnum(handle));
             const location: u32 = @intFromEnum(reference.id);
-            assert(location < self.items.len);
-            return .{ self.items[location].id, self.items[location].generation };
+            assert(location < MAX_TEXTURES);
+            return self.handles[location];
         }
 
-        pub fn get_data(self: *const Self, handle: TextureHandle) *const Texture.Data {
-            assert(handle != .null_handle);
+        pub fn acquire(self: *Self, handle: TextureHandle) *const Data {
             const reference: TextureReference = @bitCast(@intFromEnum(handle));
-            const location: u32 = @intFromEnum(reference.id);
-            assert(location < self.items.len);
-            return &self.items[location].data;
-        }
-
-        pub fn acquire(self: *Self, handle: TextureHandle) *Texture {
-            const reference: TextureReference = @bitCast(@intFromEnum(handle));
-            self.renderer._log.debug("Requesting texture {any}", .{reference});
             if (reference.id == .null_handle or reference.string >= self.string_reference.items.len) {
                 self.renderer._log.err("Invalid handle: {any}", .{reference});
-                return &self.items[0];
+                return &self.data[0];
             }
             const location: u32 = @intFromEnum(reference.id);
-            if (self.items[location].id == .null_handle) {
+            assert(location < MAX_TEXTURES);
+            if (self.handles[location].id == .null_handle) {
                 self.renderer._log.err("Expired handle: {any}. Texture not available", .{reference});
-                return &self.items[0];
+                return &self.data[0];
             }
-
             self.reference_counts[location] += 1;
-            return &self.items[location];
+            return &self.data[location];
         }
 
         pub fn release(self: *Self, handle: TextureHandle) void {
@@ -243,7 +292,7 @@ pub fn TextureSystem(renderer_backend: type) type {
                 self.renderer._log.err("Freeing static textures", .{});
                 return;
             }
-            const reference: TextureReference = @bitCast(handle);
+            const reference: TextureReference = @bitCast(@intFromEnum(handle));
             if (reference.id == .null_handle) {
                 self.renderer._log.err("Freeing invalid texture", .{});
                 return;
@@ -253,19 +302,19 @@ pub fn TextureSystem(renderer_backend: type) type {
             self.reference_counts[location] -= 1;
 
             if (self.reference_counts[location] == 0 and self.auto_release[location]) {
-                const texture = &self.items[location];
+                // const texture = &self.items[location];
 
-                self.renderer._backend.destroy_texture(&texture.data);
+                self.renderer._backend.destroy_texture(&self.data[location]);
 
-                texture.id = .null_handle;
-                texture.generation = .null_handle;
-                texture.has_transparency = 0;
-                texture.channel_count = 0;
-                texture.width = 0;
-                texture.height = 0;
+                self.handles[location].id = .null_handle;
+                self.handles[location].generation = .null_handle;
+                self.infos[location].has_transparency = 0;
+                self.infos[location].channel_count = 0;
+                self.infos[location].width = 0;
+                self.infos[location].height = 0;
 
                 assert(reference.string <= self.string_reference.items.len);
-                const string_ref = self.string_reference.items[reference.ref_count];
+                const string_ref = self.string_reference.items[reference.string];
                 const string = self.string_cache.items[string_ref.start..string_ref.end];
                 const handle_ref = self.hash_map.getPtr(string) orelse unreachable;
                 handle_ref.id = .null_handle;
@@ -290,8 +339,8 @@ pub fn TextureSystem(renderer_backend: type) type {
                 return false;
             };
 
-            const current_generation = texture.generation;
-            texture.generation = .null_handle;
+            const current_generation = texture.handle.generation;
+            texture.handle.generation = .null_handle;
 
             var has_transparency: bool = false;
             if (img.forced_transparency) {
@@ -308,9 +357,9 @@ pub fn TextureSystem(renderer_backend: type) type {
 
             var old = texture.*;
 
-            texture.width = img.width;
-            texture.height = img.height;
-            texture.channel_count = required_channel_count;
+            texture.info.width = img.width;
+            texture.info.height = img.height;
+            texture.info.channel_count = required_channel_count;
 
             texture.data = self.renderer._backend.create_texture(
                 img.width,
@@ -321,15 +370,15 @@ pub fn TextureSystem(renderer_backend: type) type {
                 self.renderer._log.err("Unable to create texture: {s}", .{@errorName(err)});
                 return false;
             };
-            texture.has_transparency = @intFromBool(has_transparency);
-            texture.id = .null_handle;
+            texture.info.has_transparency = @intFromBool(has_transparency);
+            texture.handle.id = .null_handle;
 
             self.renderer._backend.destroy_texture(&old.data);
 
             if (current_generation == .null_handle) {
-                texture.generation = @enumFromInt(0);
+                texture.handle.generation = @enumFromInt(0);
             } else {
-                texture.generation = current_generation.increment();
+                texture.handle.generation = current_generation.increment();
             }
 
             return true;
@@ -339,15 +388,16 @@ pub fn TextureSystem(renderer_backend: type) type {
             { // INFO: Default Missing Texture
                 self.renderer._log.debug("Creating missing texture", .{});
 
-                const missing_texture = &self.items[0];
-                missing_texture.generation = .null_handle;
-                missing_texture.id = MissingTexture.id;
+                const missing_texture = 0;
+                self.handles[missing_texture].generation = .null_handle;
+                self.handles[missing_texture].id = MissingTexture.id;
+                self.uses[missing_texture] = .diffuse;
+
                 const texture_dim = 1;
                 const channels = 4;
-                const pixel_count = texture_dim * texture_dim;
-                var pixels = [pixel_count * channels]u8{ 255, 0, 255, 255 };
+                var pixels = [4]u8{ 255, 0, 255, 255 };
 
-                missing_texture.data = self.renderer._backend.create_texture(
+                self.data[missing_texture] = self.renderer._backend.create_texture(
                     texture_dim,
                     texture_dim,
                     channels,
@@ -356,26 +406,27 @@ pub fn TextureSystem(renderer_backend: type) type {
                     self.renderer._log.err("Unable to load default missing texture", .{});
                     return error.InitFailed;
                 };
-                missing_texture.width = 1;
-                missing_texture.height = 1;
-                missing_texture.channel_count = 4;
-                missing_texture.has_transparency = 0;
+                const missing_texture_info = &self.infos[missing_texture];
+                missing_texture_info.width = 1;
+                missing_texture_info.height = 1;
+                missing_texture_info.channel_count = 4;
+                missing_texture_info.has_transparency = 0;
                 self.hash_map.put(MissingTextureName, MissingTexture) catch return error.InitFailed;
             }
 
             { // INFO: Default White Base Colour Texture
                 self.renderer._log.debug("Creating base colour", .{});
 
-                const base_colour = &self.items[1];
-                base_colour.generation = .null_handle;
-                base_colour.id = BaseColour.id;
+                const base_colour = 1;
+                self.handles[base_colour].generation = .null_handle;
+                self.handles[base_colour].id = MissingTexture.id;
+                self.uses[base_colour] = .diffuse;
+
                 const texture_dim = 1;
                 const channels = 4;
-                const pixel_count = texture_dim * texture_dim;
-                var pixels: [pixel_count * channels]u8 = undefined;
-                @memset(&pixels, 255);
+                var pixels = [4]u8{ 255, 255, 255, 255 };
 
-                base_colour.data = self.renderer._backend.create_texture(
+                self.data[base_colour] = self.renderer._backend.create_texture(
                     texture_dim,
                     texture_dim,
                     channels,
@@ -384,11 +435,12 @@ pub fn TextureSystem(renderer_backend: type) type {
                     self.renderer._log.err("Unable to load default missing texture", .{});
                     return error.InitFailed;
                 };
-                base_colour.width = 1;
-                base_colour.height = 1;
-                base_colour.channel_count = 4;
-                base_colour.has_transparency = 0;
-                self.hash_map.put(BaseColourName, BaseColour) catch return error.InitFailed;
+                const base_colour_info = &self.infos[base_colour];
+                base_colour_info.width = 1;
+                base_colour_info.height = 1;
+                base_colour_info.channel_count = 4;
+                base_colour_info.has_transparency = 0;
+                self.hash_map.put(MissingTextureName, MissingTexture) catch return error.InitFailed;
             }
         }
 
@@ -400,10 +452,7 @@ pub fn TextureSystem(renderer_backend: type) type {
 
 const std = @import("std");
 const assert = std.debug.assert;
-const resource = @import("../resource.zig");
-const ResourceHandle = resource.ResourceHandle;
-const Generation = resource.Generation;
-const Texture = resource.Texture;
+const T = @import("types.zig");
 const math = @import("../math/math.zig");
 const image = @import("../image.zig");
 const Renderer = @import("../renderer.zig").Renderer;
