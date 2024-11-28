@@ -441,8 +441,8 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
 
         if (texture != .null_handle) {
             if (id.* != handle.id or generation.* != handle.generation or generation.* == .null_handle or id.* == .null_handle) {
-                // TODO: When this texture changes try to release the old texture
-                if (id.* != handle.id) {
+                // TODO: keep an eye on this. This seems fishy
+                if (id.* != handle.id or generation.* != handle.generation) {
                     self.textures.release(@enumFromInt(external_handle.*));
                 }
                 const internal_data = self.textures.acquire(texture).as_const(T.vkTextureData);
