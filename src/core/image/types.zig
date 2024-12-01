@@ -12,6 +12,7 @@ pub const ImageLoadConfig = struct {
 
 pub const Image = struct {
     forced_transparency: bool,
+    channels: u8,
     width: u32,
     height: u32,
     data: []u8,

@@ -261,7 +261,7 @@ pub fn Textures(renderer_backend: type) type {
             @compileError("NOT IMPLEMENTED");
         }
 
-        pub fn get_info(self: *const Self, handle: TextureHandle) T.Handle {
+        pub fn get_resource(self: *const Self, handle: TextureHandle) T.Handle {
             if (handle == .null_handle) {
                 return .{};
             }
@@ -328,13 +328,10 @@ pub fn Textures(renderer_backend: type) type {
             texture_name: []const u8,
             comptime texture_type: image.ImageFileType,
         ) bool {
-            // TODO: This needs to be configurable
-            const format_string: []const u8 = "assets/textures/{s}.{s}";
-            var file_name_buffer: [512]u8 = undefined;
-            const file_name = std.fmt.bufPrint(&file_name_buffer, format_string, .{ texture_name, @tagName(texture_type) }) catch unreachable;
-            const required_channel_count = 4;
-
-            const img = image.load(file_name, allocator, .{ .requested_channels = required_channel_count }) catch |err| {
+            // TODO: Revisit this to see if there is something that can be done to streamline this
+            var img: image.Image = undefined;
+            var resource: Resource = .{ .tag = .image, .data = @ptrCast(&img) };
+            resource.load(.{ .image = .{ .requested_image_type = .rgba, .extension = texture_type } }, allocator, texture_name) catch |err| {
                 self.renderer._log.err("Unable to load texture image: {s}", .{@errorName(err)});
                 return false;
             };
@@ -359,12 +356,12 @@ pub fn Textures(renderer_backend: type) type {
 
             texture.info.width = img.width;
             texture.info.height = img.height;
-            texture.info.channel_count = required_channel_count;
+            texture.info.channel_count = img.channels;
 
             texture.data = self.renderer._backend.create_texture(
                 img.width,
                 img.height,
-                required_channel_count,
+                img.channels,
                 img.data,
             ) catch |err| {
                 self.renderer._log.err("Unable to create texture: {s}", .{@errorName(err)});
@@ -455,4 +452,5 @@ const assert = std.debug.assert;
 const T = @import("types.zig");
 const math = @import("../math/math.zig");
 const image = @import("../image.zig");
+const Resource = @import("../resource.zig").Resource;
 const Renderer = @import("../renderer.zig").Renderer;

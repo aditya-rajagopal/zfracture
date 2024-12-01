@@ -425,17 +425,17 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
 
     for (&image_infos, 0..) |*info, i| {
         var texture = geometry.textures[i];
-        const handle = self.textures.get_info(texture);
         const generation = &instance_state.descriptor_states[descriptor_index].generations[image_index];
         const id = &instance_state.descriptor_states[descriptor_index].ids[image_index];
         const external_handle = &instance_state.descriptor_states[descriptor_index].external_handles[image_index];
 
+        var handle = self.textures.get_resource(texture);
         if (handle.id == .null_handle or handle.generation == .null_handle) {
             // TODO: Handle other texture maps
             texture = .missing_texture;
-            const missing_texture_handle = self.textures.get_info(texture);
-            generation.* = missing_texture_handle.generation;
-            id.* = missing_texture_handle.id;
+            handle = self.textures.get_resource(texture);
+            generation.* = handle.generation;
+            id.* = handle.id;
             external_handle.* = @intFromEnum(texture);
         }
 
