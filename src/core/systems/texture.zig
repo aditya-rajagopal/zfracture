@@ -339,6 +339,7 @@ pub fn Textures(renderer_backend: type) type {
             const current_generation = texture.handle.generation;
             texture.handle.generation = .null_handle;
 
+            // TODO: This seems unnecessary
             var has_transparency: bool = false;
             if (img.forced_transparency) {
                 has_transparency = true;
