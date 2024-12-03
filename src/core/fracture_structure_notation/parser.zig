@@ -25,6 +25,7 @@ pub const States = union(enum(u8)) {
 
 pub const Result = enum(u8) {
     success,
+    out_of_memory,
     invalid_fsd_incomplete,
     @"invalid_fsd_expected_@_at_start",
     invalid_fsd_required_header,
@@ -34,6 +35,12 @@ pub const Result = enum(u8) {
     @"invalid_fsd_missing_=",
     @"invalid_fsd_missing_:",
     invalid_fsd_incompatable_type,
+    @"invalid_fsd_missing_{",
+    invalid_fsd_invalid_float,
+    invalid_fsd_invalid_integer,
+    invalid_fsd_insufficient_array_elements,
+    invalid_fsd_string_too_long,
+    @"invalid_fsd_invalid_sting_missing_\"",
 };
 
 pub fn init(self: *FSDParser, allocator: std.mem.Allocator) !void {
@@ -44,7 +51,21 @@ pub fn init(self: *FSDParser, allocator: std.mem.Allocator) !void {
     self.allocator = allocator;
 }
 
-pub fn parse(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *file_type.get_struct(), file_name: []const u8) !Result {
+pub fn reset(self: *FSDParser) void {
+    self.state_ptr = 0;
+    self.initialized = 1;
+    self.line_number = 0;
+    self.column_number = 0;
+}
+
+const Field = struct {
+    name: []const u8,
+    dtype: DataType,
+    data: *anyopaque,
+    // extra_data: ?*anyopaque = null,
+};
+
+pub fn load_fsd(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *file_type.get_struct(), file_name: []const u8) !Result {
     assert(self.initialized > 0);
 
     const file = try std.fs.cwd().openFile(file_name, .{});
@@ -63,35 +84,55 @@ pub fn parse(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *f
 
     self.push(.end_parser);
 
-    const Field = struct {
-        name: []const u8,
-        dtype: DataType,
-        data: *anyopaque,
-    };
-
     var fields: [struct_info.fields.len - 1]Field = undefined;
     inline for (struct_info.fields[1..], 0..) |field, i| {
         const field_type = field.type;
         const field_info = @typeInfo(field_type);
-        std.debug.print("Field name: {s}", .{@typeName(field_type)});
 
-        const dtype = switch (field_info) {
+        const dtype = dtype: switch (field_info) {
             .bool => .{ .base = .bool },
             .int, .float => .{ .base = comptime std.meta.stringToEnum(BaseTypes, @typeName(field_type)).? },
-            .array => |array| .{ .static_array = .{
-                .base = comptime std.meta.stringToEnum(BaseTypes, @typeName(array.child)).?,
-                .num_elements = array.len,
-            } },
+            .array => |array| {
+                if (array.child == u8) {
+                    break :dtype .{ .string = .{ .max_len = array.len, .is_static = true, .is_const = false } };
+                }
+                const child_info = @typeInfo(array.child);
+                switch (child_info) {
+                    .float => {
+                        switch (array.len) {
+                            2 => break :dtype .{ .base = .vec2s },
+                            3 => break :dtype .{ .base = .vec3s },
+                            4 => break :dtype .{ .base = .vec4s },
+                            else => {},
+                        }
+                    },
+                    .int => {},
+                    .bool => {},
+                    else => @compileError("Unsupported array type" ++ @typeName(field_type))
+                }
+
+                break .{ .static_array = .{
+                    .base = comptime std.meta.stringToEnum(BaseTypes, @typeName(array.child)).?,
+                    .num_elements = array.len,
+                } };
+            },
             .pointer => |pointer| {
                 comptime assert(pointer.size == .Slice);
-                break .{ .dynamic_array = comptime std.meta.stringToEnum(BaseTypes, @typeName(pointer.child)).? };
+                fields[i].name = field.name;
+                fields[i].data = @ptrCast(&@field(out_data, field.name));
+                if (pointer.child == u8) {
+                    fields[i].dtype = .{ .string = .{ .max_len = undefined, .is_static = false, .is_const = pointer.is_const } };
+                } else {
+                    fields[i].dtype = .{ .dynamic_array = comptime std.meta.stringToEnum(BaseTypes, @typeName(pointer.child)).? };
+                }
+                self.push(.read_statement);
+                continue;
             },
             inline else => @compileError("Invalid field type for struct.")
         };
         fields[i] = Field{ .name = field.name, .dtype = dtype, .data = @ptrCast(&@field(out_data, field.name)) };
         self.push(.read_statement);
     }
-    std.debug.print("Fields: {any}\n", .{fields});
 
     self.push(.read_header);
     self.push(.read_data);
@@ -104,6 +145,7 @@ pub fn parse(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *f
     var field_number: usize = 0;
 
     // TODO: while loop might be better here but this is cool. See if this needs to be replaced
+    // TODO: Should this be in a seperate function?
     const result: Result = blk: switch (self.states[self.state_ptr - 1]) {
         .read_data => {
             var len: usize = 0;
@@ -203,7 +245,6 @@ pub fn parse(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *f
             continue :blk self.states[self.state_ptr - 1];
         },
         .read_statement => {
-            std.debug.print("Data: {s}\n", .{data});
             if (data.len == 0) {
                 self.push(.read_data);
                 continue :blk self.states[self.state_ptr - 1];
@@ -254,6 +295,35 @@ pub fn parse(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *f
                         break :blk Result.invalid_fsd_incompatable_type;
                     }
                 },
+                .string => |*str_info| str_blk: {
+                    if (std.mem.eql(u8, "string", data[0..index])) {
+                        break :str_blk;
+                    }
+                    if (data[0] == '[') {
+                        var pos: usize = 1;
+                        self.column_number += 1;
+                        while (pos < index) : (pos += 1) {
+                            if (data[pos] == ']') {
+                                if (pos == 1) {} else {
+                                    const len = std.fmt.parseUnsigned(usize, data[1..pos], 10) catch {
+                                        break :blk Result.invalid_fsd_invalid_integer;
+                                    };
+                                    if (len > str_info.max_len) {
+                                        break :blk Result.invalid_fsd_string_too_long;
+                                    }
+                                    str_info.max_len = @truncate(len);
+                                }
+                                self.column_number += @truncate(pos - 1);
+                                if (!std.mem.eql(u8, "u8", data[pos + 1 .. index])) {
+                                    break;
+                                }
+                                self.column_number += 2;
+                                break :str_blk;
+                            }
+                        }
+                    }
+                    break :blk Result.invalid_fsd_incompatable_type;
+                },
                 else => unreachable,
             }
             data = data[index + 1 ..];
@@ -263,17 +333,168 @@ pub fn parse(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *f
             continue :blk self.states[self.state_ptr - 1];
         },
         .read_value => {
-            std.debug.print("value: \"{s}\"\n", .{data[0 .. index - 1]});
             switch (fields[field_number].dtype) {
                 .base => |b| {
                     switch (b) {
                         .u8 => {
-                            const ptr: *u8 = @ptrCast(fields[field_number].data);
-                            ptr.* = std.fmt.parseInt(u8, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_version;
+                            const ptr: *u8 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseUnsigned(u8, data[0 .. index - 1], 10) catch {
+                                break :blk Result.invalid_fsd_invalid_integer;
                             };
                         },
+                        .u16 => {
+                            const ptr: *u16 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseUnsigned(u16, data[0 .. index - 1], 10) catch {
+                                break :blk Result.invalid_fsd_invalid_integer;
+                            };
+                        },
+                        .u32 => {
+                            const ptr: *u32 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseUnsigned(u32, data[0 .. index - 1], 10) catch {
+                                break :blk Result.invalid_fsd_invalid_integer;
+                            };
+                        },
+                        .u64 => {
+                            const ptr: *u64 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseUnsigned(u64, data[0 .. index - 1], 10) catch {
+                                break :blk Result.invalid_fsd_invalid_integer;
+                            };
+                        },
+                        .i8 => {
+                            const ptr: *i8 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseInt(i8, data[0 .. index - 1], 10) catch {
+                                break :blk Result.invalid_fsd_invalid_integer;
+                            };
+                        },
+                        .i16 => {
+                            const ptr: *i16 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseInt(i16, data[0 .. index - 1], 10) catch {
+                                break :blk Result.invalid_fsd_invalid_integer;
+                            };
+                        },
+                        .i32 => {
+                            const ptr: *i32 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseInt(i32, data[0 .. index - 1], 10) catch {
+                                break :blk Result.invalid_fsd_invalid_integer;
+                            };
+                        },
+                        .i64 => {
+                            const ptr: *i64 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseInt(i64, data[0 .. index - 1], 10) catch {
+                                break :blk Result.invalid_fsd_invalid_integer;
+                            };
+                        },
+                        .f32 => {
+                            const ptr: *f32 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseFloat(f32, data[0 .. index - 1]) catch {
+                                break :blk Result.invalid_fsd_invalid_float;
+                            };
+                        },
+                        .f64 => {
+                            const ptr: *f64 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.* = std.fmt.parseFloat(f64, data[0 .. index - 1]) catch {
+                                break :blk Result.invalid_fsd_invalid_float;
+                            };
+                        },
+                        .vec2s, .vec3s, .vec4s => |t| {
+                            // TODO: This is not robust. Can make this faster.
+                            if (data[0] != '{') {
+                                break :blk Result.@"invalid_fsd_missing_{";
+                            }
+                            var start: usize = 1;
+                            while (data[start] == ' ') {
+                                start += 1;
+                            }
+
+                            const ptr: [*]f32 = @ptrCast(@alignCast(fields[field_number].data));
+
+                            var pos: usize = start;
+                            var num: usize = 0;
+                            const max_num: usize = switch (t) {
+                                .vec2s => 2,
+                                .vec3s => 3,
+                                .vec4s => 4,
+                                else => unreachable,
+                            };
+
+                            while (num < max_num and pos < index - 1) {
+                                if (data[pos] == ',') {
+                                    ptr[num] = std.fmt.parseFloat(f32, data[start..pos]) catch {
+                                        break :blk Result.invalid_fsd_invalid_float;
+                                    };
+
+                                    pos += 1;
+                                    while (data[pos] == ' ') {
+                                        pos += 1;
+                                    }
+                                    num += 1;
+                                    start = pos;
+                                    continue;
+                                }
+                                if (data[pos] == '}') {
+                                    var local_pos: usize = pos;
+                                    while (data[pos - 1] == ' ') {
+                                        local_pos -= 1;
+                                    }
+                                    ptr[num] = std.fmt.parseFloat(f32, data[start..local_pos]) catch {
+                                        break :blk Result.invalid_fsd_invalid_float;
+                                    };
+                                    num += 1;
+                                    break;
+                                }
+                                pos += 1;
+                            }
+
+                            if (num != max_num) {
+                                break :blk Result.invalid_fsd_insufficient_array_elements;
+                            }
+
+                            if (data[pos] != '}') {
+                                break :blk Result.@"invalid_fsd_missing_{";
+                            }
+                        },
                         else => unreachable
+                    }
+                },
+                .string => |str_info| {
+                    if (data[0] != '"') {
+                        break :blk Result.@"invalid_fsd_invalid_sting_missing_\"";
+                    }
+                    var pos: usize = 1;
+                    while (pos < index - 2) : (pos += 1) {
+                        if (data[pos] == '"') {
+                            break;
+                        }
+                        // TODO: Deal with " in string
+                        // if (data[pos] == '\\' and pos < index - 3 and data[pos + 1] == '"') {
+                        //     pos += 1;
+                        // }
+                    }
+                    if (data[pos] != '"') {
+                        break :blk Result.@"invalid_fsd_invalid_sting_missing_\"";
+                    }
+                    const string = data[1..pos];
+
+                    if (str_info.is_static) {
+                        if (string.len > str_info.max_len) {
+                            break :blk Result.invalid_fsd_string_too_long;
+                        }
+                        const ptr: [*]u8 = @ptrCast(@alignCast(fields[field_number].data));
+                        @memset(ptr[string.len..str_info.max_len], 0);
+                        @memcpy(ptr[0..string.len], string);
+                    } else {
+                        const out_string = self.allocator.dupe(u8, string) catch {
+                            break :blk Result.out_of_memory;
+                        };
+                        if (str_info.is_const) {
+                            const ptr: *[]const u8 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.ptr = out_string.ptr;
+                            ptr.len = out_string.len;
+                        } else {
+                            const ptr: *[]u8 = @ptrCast(@alignCast(fields[field_number].data));
+                            ptr.ptr = out_string.ptr;
+                            ptr.len = out_string.len;
+                        }
                     }
                 },
                 else => unreachable,
@@ -290,8 +511,6 @@ pub fn parse(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *f
             break :blk .success;
         },
     };
-
-    std.debug.print("Result: {s}\n", .{@tagName(result)});
 
     return result;
 }
@@ -326,6 +545,12 @@ pub const DefinitionTypes = enum(u8) {
 pub const MaterialConfig = struct {
     version: Version = .{},
     data: u8 = 0,
+    data2: i8 = 0,
+    data3: f32 = 0,
+    data4: [3]f32 = [_]f32{ 0.0, 0.0, 0.0 },
+    data5: [4]f32 = [_]f32{ 0.0, 0.0, 0.0, 0.0 },
+    data6: [2]f32 = [_]f32{ 0.0, 0.0 },
+    data7: [16]u8 = undefined,
 };
 
 pub const Version = packed struct(u32) {
@@ -346,13 +571,17 @@ pub const BaseTypes = enum(u8) {
     f32,
     f64,
     bool,
+    vec2s,
+    vec3s,
+    vec4s,
 };
 
 pub const DataType = union(enum(u8)) {
     Texture,
     base: BaseTypes,
-    static_array: struct { num_elements: usize, base: BaseTypes },
-    dynamic_array: struct { base: BaseTypes },
+    static_array: struct { base: BaseTypes, num_elements: u32 },
+    dynamic_array: BaseTypes,
+    string: struct { max_len: u32, is_static: bool, is_const: bool },
 };
 
 test FSDParser {
@@ -360,8 +589,15 @@ test FSDParser {
     try parser.init(std.testing.allocator);
 
     var material: MaterialConfig = undefined;
-    _ = try parser.parse(.material, &material, "test.fsd");
+    var start = std.time.Timer.start() catch unreachable;
+    const result = try parser.load_fsd(.material, &material, "test.fsd");
+    const end = start.read();
+    std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});
+    std.debug.print("Resul: {s}\n", .{@tagName(result)});
+
     std.debug.print("Material: {any}\n", .{material});
+    std.debug.print("Data7: {s}\n", .{material.data7});
+    // std.testing.allocator.free(material.data7);
 }
 
 const std = @import("std");
