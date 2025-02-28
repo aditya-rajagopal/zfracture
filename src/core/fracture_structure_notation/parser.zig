@@ -28,6 +28,7 @@ pub const Result = enum(u8) {
     out_of_memory,
     invalid_fsd_incomplete,
     @"invalid_fsd_expected_@_at_start",
+    invalid_fsd_missing_def,
     invalid_fsd_required_header,
     invalid_fsd_invalid_file_type,
     invalid_fsd_version,
@@ -65,7 +66,12 @@ const Field = struct {
     // extra_data: ?*anyopaque = null,
 };
 
-pub fn load_fsd(self: *FSDParser, comptime file_type: DefinitionTypes, out_data: *file_type.get_struct(), file_name: []const u8) !Result {
+pub fn load_fsd(
+    self: *FSDParser,
+    comptime file_type: DefinitionTypes,
+    out_data: *file_type.get_struct(),
+    file_name: []const u8,
+) !Result {
     assert(self.initialized > 0);
 
     const file = try std.fs.cwd().openFile(file_name, .{});
@@ -146,6 +152,7 @@ pub fn load_fsd(self: *FSDParser, comptime file_type: DefinitionTypes, out_data:
 
     // TODO: while loop might be better here but this is cool. See if this needs to be replaced
     // TODO: Should this be in a seperate function?
+    // TODO: Convert to loop with a max states limit. Prevent infinite loops somehow
     const result: Result = blk: switch (self.states[self.state_ptr - 1]) {
         .read_data => {
             var len: usize = 0;
@@ -173,7 +180,7 @@ pub fn load_fsd(self: *FSDParser, comptime file_type: DefinitionTypes, out_data:
             const def: [4]u8 = .{ 'd', 'e', 'f', ' ' };
 
             if (@as(u32, @bitCast(data[1..5].*)) != @as(u32, @bitCast(def))) {
-                break :blk Result.invalid_fsd_required_header;
+                break :blk Result.invalid_fsd_missing_def;
             }
             data = data[5..];
             self.column_number = 4;
@@ -195,6 +202,8 @@ pub fn load_fsd(self: *FSDParser, comptime file_type: DefinitionTypes, out_data:
             continue :blk self.states[self.state_ptr - 1];
         },
         .expect_version => {
+            // TODO: Instead of storing the version in the outdata outdata default should have a version that needs
+            // to match with the version in the file atleast till the minor level.
             var i: usize = 0;
             while (i < index) : (i += 1) {
                 if (data[i] == '.') {
@@ -483,6 +492,8 @@ pub fn load_fsd(self: *FSDParser, comptime file_type: DefinitionTypes, out_data:
                         @memset(ptr[string.len..str_info.max_len], 0);
                         @memcpy(ptr[0..string.len], string);
                     } else {
+                        // TODO: Should this come from a static allocation? Or should there be no dynamic allocations
+                        // at all
                         const out_string = self.allocator.dupe(u8, string) catch {
                             break :blk Result.out_of_memory;
                         };
