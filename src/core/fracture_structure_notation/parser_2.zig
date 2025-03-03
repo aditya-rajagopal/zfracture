@@ -46,9 +46,14 @@ pub const Definition = union(StructureType) {
     }
 };
 
-pub fn load(comptime s_type: Definition, file_path: []const u8, out_data: *s_type.get_type()) void {
-    _ = file_path;
+const MAX_ITERATIONS = 4096;
 
+pub const LoadError = error{
+    fsd_too_many_iterations,
+    invalid_fsd_incomplete,
+} || std.fs.File.OpenError;
+
+pub fn load(comptime s_type: Definition, file_path: []const u8, out_data: *s_type.get_type()) LoadError!void {
     const T = s_type.get_type();
 
     // TODO: Figure out a way to capture enum fields as strings
@@ -59,11 +64,65 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, out_data: *s_typ
     for (out_fields) |field| {
         std.debug.print("\t{any}\n", .{field});
     }
+
+    var field_buffer: [32][]Field = undefined;
+    var field_stack = std.ArrayListUnmanaged([]Field).initBuffer(&field_buffer);
+
+    const root_struct = out_fields[0].dtype.@"struct";
+    const root_fields = out_fields[root_struct.fields_start..root_struct.fields_end];
+    field_stack.appendAssumeCapacity(root_fields);
+
+    const file = try std.fs.cwd().openFile(file_path, .{});
+    const reader = file.reader();
+    defer file.close();
+
+    var parser_stack_buffer: [1024]ParserState = undefined;
+    var parser_stack = std.ArrayListUnmanaged(ParserState).initBuffer(&parser_stack_buffer);
+
+    parser_stack.appendAssumeCapacity(.end_parsing);
+    parser_stack.appendNTimesAssumeCapacity(.read_statement, out_fields.len - 1);
+    parser_stack.appendAssumeCapacity(.read_header);
+
+    var buffer: [4096]u8 = undefined;
+    var data: []const u8 = undefined;
+    data.len = 0;
+
+    parser_stack.appendAssumeCapacity(.read_data);
+
+    for (0..MAX_ITERATIONS) |_| {
+        switch (parser_stack.getLast()) {
+            .read_data => {
+                var len: usize = 0;
+                if (data.len == 0) {
+                    len = try reader.read(&buffer);
+                } else {
+                    std.mem.copyForwards(u8, &buffer, data);
+                    len = try reader.read(buffer[data.len..]);
+                }
+                if (len == 0) {
+                    return LoadError.invalid_fsd_incomplete;
+                }
+                len += data.len;
+                data = buffer[0..len];
+                parser_stack.pop();
+            },
+            .end_parsing => break,
+        }
+    } else {
+        return LoadError.fsd_too_many_iterations;
+    }
 }
 
-fn get_recursive_field_len(structure_t: type) usize {
+const ParserState = enum(u8) {
+    read_data,
+    read_statement,
+    read_header,
+    end_parsing,
+};
+
+fn get_recursive_field_len(T: type) usize {
     comptime {
-        const type_info = @typeInfo(structure_t);
+        const type_info = @typeInfo(T);
         assert(type_info == .@"struct");
         const struct_info = type_info.@"struct";
         var structs: [1024]std.builtin.Type.Struct = undefined;
@@ -97,10 +156,10 @@ fn get_recursive_field_len(structure_t: type) usize {
     }
 }
 
-fn get_fields(structure_t: type) [get_recursive_field_len(structure_t) + 1]Field {
+fn get_fields(T: type) [get_recursive_field_len(T) + 1]Field {
     comptime {
-        const count = get_recursive_field_len(structure_t);
-        const type_info = @typeInfo(structure_t);
+        const count = get_recursive_field_len(T);
+        const type_info = @typeInfo(T);
         assert(type_info == .@"struct");
         const struct_info = type_info.@"struct";
 
@@ -114,8 +173,6 @@ fn get_fields(structure_t: type) [get_recursive_field_len(structure_t) + 1]Field
         };
         var buffer: [1024]internal_data = undefined;
         var structs = std.ArrayListUnmanaged(internal_data).initBuffer(&buffer);
-        // var stack: [32][]const u8 = undefined;
-        // var field_stack = std.ArrayListUnmanaged([]const u8).initBuffer(&stack);
 
         fields[0] = Field{
             .name = "root",
@@ -150,9 +207,6 @@ fn get_fields(structure_t: type) [get_recursive_field_len(structure_t) + 1]Field
                         continue :field_loop;
                     },
                     .array => |array| {
-                        if (array.child == u8) {
-                            break :dtype .{ .string = .{ .max_len = array.len, .is_static = true, .is_const = false } };
-                        }
                         const child_info = @typeInfo(array.child);
                         switch (child_info) {
                             .float => {
@@ -167,10 +221,10 @@ fn get_fields(structure_t: type) [get_recursive_field_len(structure_t) + 1]Field
                             .bool => {},
                             else => @compileError("Unsupported array type" ++ @typeName(field.type))
                         }
-
-                        break .{ .static_array = .{
+                        //TODO: Deal with array of structs
+                        break :dtype .{ .array = .{
                             .base = std.meta.stringToEnum(BaseType, @typeName(array.child)).?,
-                            .num_elements = array.len,
+                            .len = array.len,
                         } };
                     },
                     inline else => @compileError("Invalid field type for struct.")
@@ -185,11 +239,11 @@ fn get_fields(structure_t: type) [get_recursive_field_len(structure_t) + 1]Field
 }
 
 fn fill_pointers(
-    structure_t: type,
+    T: type,
     comptime fields: []const Field,
-    data: *structure_t,
-) [get_recursive_field_len(structure_t) + 1]Field {
-    const count = comptime get_recursive_field_len(structure_t);
+    data: *T,
+) [get_recursive_field_len(T) + 1]Field {
+    const count = comptime get_recursive_field_len(T);
     comptime assert(fields.len == count + 1);
     comptime assert(std.mem.eql(u8, fields[0].name, "root"));
 
@@ -199,15 +253,14 @@ fn fill_pointers(
     };
     comptime var buffer: [32]tracking_t = undefined;
     comptime var struct_stack = std.ArrayListUnmanaged(tracking_t).initBuffer(&buffer);
+    comptime var index: usize = 1;
 
     var out_fields: [count + 1]Field = undefined;
     out_fields[0] = fields[0];
 
-    comptime var index: usize = 1;
-
     inline for (0..count) |_| {
         switch (fields[index].dtype) {
-            .base => {
+            .base, .array => {
                 const local_stack = comptime blk: {
                     var ret_fields: [struct_stack.items.len + 1][]const u8 = undefined;
                     for (struct_stack.items, 0..) |item, i| {
@@ -217,8 +270,8 @@ fn fill_pointers(
                     break :blk ret_fields;
                 };
                 out_fields[index] = fields[index];
-                const T = comp.get_access_type(structure_t, &local_stack);
-                const ptr = comp.get_nested(T, data, &local_stack);
+                const access_t = comp.get_access_type(T, &local_stack);
+                const ptr = comp.get_nested(access_t, data, &local_stack);
                 out_fields[index].data = @ptrCast(ptr);
             },
             .@"struct" => |s| {
@@ -227,7 +280,6 @@ fn fill_pointers(
                 index = s.fields_start;
                 continue;
             },
-            .array => {},
             else => {
                 @compileError("Not implemented");
             },
@@ -295,11 +347,12 @@ const Field = struct {
 const DType = union(enum(u8)) {
     base: BaseType,
     texture: struct { len: u64 },
-    array: struct { base: BaseType, len: u64 },
+    array: ArrayInfo,
     @"enum": BaseType,
     @"struct": StructInfo,
 
     const StructInfo = struct { fields_start: u32, fields_end: u32 };
+    const ArrayInfo = struct { base: BaseType, len: u64 };
 };
 
 const BaseType = enum(u8) {
@@ -330,7 +383,7 @@ const assert = std.debug.assert;
 test Parser {
     const CustomStructure = struct {
         data: u8 = 0,
-        data_2: struct { _x0: u8 = 0, _x2: u32 = 0 } = .{},
+        data_2: struct { _x0: u8 = 0, _x2: [3]u32 = [_]u32{0} ** 3 } = .{},
         pub const version: types.Version = types.Version.init(0, 0, 1);
     };
     var a = CustomStructure{};
@@ -339,9 +392,9 @@ test Parser {
     for (out_fields) |field| {
         std.debug.print("\t{any}\n", .{field});
     }
-    const val_ptr: *u32 = @alignCast(@ptrCast(out_fields[4].data.?));
-    val_ptr.* = 69;
-    try std.testing.expectEqual(a.data_2._x2, 69);
+    const val_ptr: *[3]u32 = @alignCast(@ptrCast(out_fields[4].data.?));
+    val_ptr[0] = 69;
+    try std.testing.expectEqual(a.data_2._x2[0], 69);
 
     // std.debug.print("{d}\n", .{comptime get_recursive_field_len(CustomStructure)});
     // var fsd: FSD = undefined;
