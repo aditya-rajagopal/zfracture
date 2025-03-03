@@ -7,6 +7,8 @@
 ```
 
 # Specification
+TODO: Add specification to be able to reference other files to load into structures
+
 ```
 @def <definition_type> <major: u4>.<minor: u12>.<patch: u16>
 @<field>: <type> = <data>

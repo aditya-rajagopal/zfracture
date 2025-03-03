@@ -607,7 +607,6 @@ test FSDParser {
     std.debug.print("Resul: {s}\n", .{@tagName(result)});
 
     std.debug.print("Material: {any}\n", .{material});
-    std.debug.print("Data7: {s}\n", .{material.data7});
     // std.testing.allocator.free(material.data7);
 }
 

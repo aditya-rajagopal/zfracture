@@ -51,7 +51,14 @@ const MAX_ITERATIONS = 4096;
 pub const LoadError = error{
     fsd_too_many_iterations,
     invalid_fsd_incomplete,
-} || std.fs.File.OpenError;
+    invalid_fsd_missing_def,
+    @"invalid_fsd_expected_@_at_start",
+    invalid_fsd_invalid_file_type,
+    invalid_fsd_version,
+    fsd_major_version_mismatch,
+    fsd_minor_version_mismatch,
+    fsd_patch_version_mismatch,
+} || std.fs.File.OpenError || std.fs.File.ReadError;
 
 pub fn load(comptime s_type: Definition, file_path: []const u8, out_data: *s_type.get_type()) LoadError!void {
     const T = s_type.get_type();
@@ -60,10 +67,13 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, out_data: *s_typ
 
     out_data.* = .{};
     const fields = comptime get_fields(T);
-    const out_fields = fill_pointers(T, &fields, out_data);
-    for (out_fields) |field| {
-        std.debug.print("\t{any}\n", .{field});
-    }
+    var out_fields = fill_pointers(T, &fields, out_data);
+
+    const struct_name = comptime blk: {
+        const type_name = @typeName(T);
+        var iter = std.mem.splitBackwardsScalar(u8, type_name, '.');
+        break :blk iter.first();
+    };
 
     var field_buffer: [32][]Field = undefined;
     var field_stack = std.ArrayListUnmanaged([]Field).initBuffer(&field_buffer);
@@ -88,7 +98,11 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, out_data: *s_typ
     data.len = 0;
 
     parser_stack.appendAssumeCapacity(.read_data);
+    var column_number: u32 = 0;
+    var line_number: u32 = 0;
+    var read_head: u32 = 0;
 
+    // TODO: Make this return a result object instead of an error along with info about the error
     for (0..MAX_ITERATIONS) |_| {
         switch (parser_stack.getLast()) {
             .read_data => {
@@ -104,9 +118,100 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, out_data: *s_typ
                 }
                 len += data.len;
                 data = buffer[0..len];
-                parser_stack.pop();
+                _ = parser_stack.pop();
+            },
+            .read_header => {
+                assert(data.len >= 5);
+                if (data[0] != '@') {
+                    return LoadError.@"invalid_fsd_expected_@_at_start";
+                }
+
+                const def: [4]u8 = .{ 'd', 'e', 'f', ' ' };
+
+                if (@as(u32, @bitCast(data[1..5].*)) != @as(u32, @bitCast(def))) {
+                    return LoadError.invalid_fsd_missing_def;
+                }
+                data = data[5..];
+                column_number = 5;
+
+                // Expect the string to be the type of the structure
+                search: while (read_head < data.len) : (read_head += 1) {
+                    if (data[read_head] == ' ') {
+                        break :search;
+                    }
+                } else {
+                    column_number += read_head;
+                    return LoadError.invalid_fsd_incomplete;
+                }
+
+                if (!std.mem.eql(u8, data[0..read_head], struct_name)) {
+                    return LoadError.invalid_fsd_invalid_file_type;
+                }
+                data = data[read_head + 1 ..];
+                column_number += @truncate(read_head + 1);
+                read_head = 0;
+
+                // Read the version
+                search: while (read_head < data.len) : (read_head += 1) {
+                    if (data[read_head] == '\n') {
+                        break :search;
+                    }
+                } else {
+                    column_number += read_head;
+                    return LoadError.invalid_fsd_incomplete;
+                }
+
+                var i: u32 = 0;
+
+                const version: types.Version = T.version;
+
+                while (i < read_head) : (i += 1) {
+                    if (data[i] == '.') {
+                        const major = std.fmt.parseInt(u4, data[0..i], 10) catch {
+                            return LoadError.invalid_fsd_version;
+                        };
+                        if (version.major != major) {
+                            return LoadError.fsd_major_version_mismatch;
+                        }
+                        break;
+                    }
+                }
+
+                data = data[i + 1 ..];
+                read_head -= i + 1;
+                column_number += @truncate(i + 1);
+                i = 0;
+
+                while (i < read_head) : (i += 1) {
+                    if (data[i] == '.') {
+                        const minor = std.fmt.parseInt(u4, data[0..i], 10) catch {
+                            return LoadError.invalid_fsd_version;
+                        };
+                        if (version.minor != minor) {
+                            return LoadError.fsd_minor_version_mismatch;
+                        }
+                        break;
+                    }
+                }
+                read_head -= i + 1;
+                data = data[i + 1 ..];
+                column_number += @truncate(i + 1);
+
+                const patch = std.fmt.parseInt(u16, data[0 .. read_head - 1], 10) catch {
+                    return LoadError.invalid_fsd_version;
+                };
+                if (version.patch != patch) {
+                    return LoadError.fsd_patch_version_mismatch;
+                }
+                data = data[read_head + 1 ..];
+                read_head = 0;
+                line_number += 1;
+
+                _ = parser_stack.pop();
+                break;
             },
             .end_parsing => break,
+            else => {}
         }
     } else {
         return LoadError.fsd_too_many_iterations;
@@ -381,33 +486,30 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 test Parser {
-    const CustomStructure = struct {
-        data: u8 = 0,
-        data_2: struct { _x0: u8 = 0, _x2: [3]u32 = [_]u32{0} ** 3 } = .{},
-        pub const version: types.Version = types.Version.init(0, 0, 1);
-    };
-    var a = CustomStructure{};
-    const fields = comptime get_fields(CustomStructure);
-    const out_fields = fill_pointers(CustomStructure, &fields, &a);
-    for (out_fields) |field| {
-        std.debug.print("\t{any}\n", .{field});
-    }
-    const val_ptr: *[3]u32 = @alignCast(@ptrCast(out_fields[4].data.?));
-    val_ptr[0] = 69;
-    try std.testing.expectEqual(a.data_2._x2[0], 69);
+    // const CustomStructure = struct {
+    //     data: u8 = 0,
+    //     data_2: struct { _x0: u8 = 0, _x2: [3]u32 = [_]u32{0} ** 3 } = .{},
+    //     pub const version: types.Version = types.Version.init(0, 0, 1);
+    // };
+    // var a = CustomStructure{};
+    // const fields = comptime get_fields(CustomStructure);
+    // const out_fields = fill_pointers(CustomStructure, &fields, &a);
+    // for (out_fields) |field| {
+    //     std.debug.print("\t{any}\n", .{field});
+    // }
+    // const val_ptr: *[3]u32 = @alignCast(@ptrCast(out_fields[4].data.?));
+    // val_ptr[0] = 69;
+    // try std.testing.expectEqual(a.data_2._x2[0], 69);
 
     // std.debug.print("{d}\n", .{comptime get_recursive_field_len(CustomStructure)});
     // var fsd: FSD = undefined;
     // try fsd.init(std.testing.allocator);
-    //
-    // var material: types.MaterialConfig = undefined;
-    // var start = std.time.Timer.start() catch unreachable;
-    // const result = try fsd.load_fsd(.material, &material, "test.fsd");
-    // const end = start.read();
-    // std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});
-    // std.debug.print("Resul: {s}\n", .{@tagName(result)});
-    //
-    // std.debug.print("Material: {any}\n", .{material});
-    // std.debug.print("Data7: {s}\n", .{material.data7});
-    // std.testing.allocator.free(material.data7);
+
+    var material: types.MaterialConfig = undefined;
+    var start = std.time.Timer.start() catch unreachable;
+    try load(.material, "test.fsd", &material);
+    const end = start.read();
+    std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});
+
+    std.debug.print("Material: {any}\n", .{material});
 }
