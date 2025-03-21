@@ -181,12 +181,13 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
                         .vtable = &.{
                             .alloc = alloc,
                             .resize = resize,
+                            .remap = remap,
                             .free = free,
                         },
                     };
                 }
 
-                pub fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
+                pub fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
                     const self: *TAlloc = @ptrCast(@alignCast(ctx));
                     self.stats.current_memory[@intFromEnum(tag)] += len;
                     self.stats.current_total_memory += len;
@@ -200,7 +201,7 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
                     return self.backing_allocator.rawAlloc(len, ptr_align, ret_addr);
                 }
 
-                pub fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
+                pub fn resize(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
                     const self: *TAlloc = @ptrCast(@alignCast(ctx));
                     if (new_len > buf.len) {
                         self.stats.current_memory[@intFromEnum(tag)] += new_len - buf.len;
@@ -218,7 +219,31 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
                     return self.backing_allocator.rawResize(buf, buf_align, new_len, ret_addr);
                 }
 
-                pub fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
+                pub fn remap(
+                    ctx: *anyopaque,
+                    memory: []u8,
+                    alignment: std.mem.Alignment,
+                    new_len: usize,
+                    ret_addr: usize,
+                ) ?[*]u8 {
+                    const self: *TAlloc = @ptrCast(@alignCast(ctx));
+                    if (new_len > memory.len) {
+                        self.stats.current_memory[@intFromEnum(tag)] += new_len - memory.len;
+                        self.stats.current_total_memory += new_len - memory.len;
+                    } else {
+                        self.stats.current_memory[@intFromEnum(tag)] -= memory.len - new_len;
+                        self.stats.current_total_memory -= memory.len - new_len;
+                    }
+                    if (self.stats.current_total_memory > self.stats.peak_total_memory) {
+                        self.stats.peak_total_memory = self.stats.current_total_memory;
+                    }
+                    if (self.stats.current_memory[@intFromEnum(tag)] > self.stats.peak_memory[@intFromEnum(tag)]) {
+                        self.stats.peak_memory[@intFromEnum(tag)] = self.stats.current_memory[@intFromEnum(tag)];
+                    }
+                    return self.backing_allocator.rawRemap(memory, alignment, new_len, ret_addr);
+                }
+
+                pub fn free(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
                     const self: *TAlloc = @ptrCast(@alignCast(ctx));
                     self.stats.current_memory[@intFromEnum(tag)] -= buf.len;
                     self.stats.current_total_memory -= buf.len;

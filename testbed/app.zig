@@ -3,6 +3,7 @@ const entrypoint = @import("entrypoint");
 pub const main = entrypoint.main;
 
 export fn init(engine: *core.Fracture) ?*anyopaque {
+    std.debug.print("In the first call: {*}\n", .{engine});
     return game.init(engine);
 }
 
@@ -22,3 +23,4 @@ pub const config = @import("config.zig");
 const builtin = @import("builtin");
 const core = @import("fr_core");
 const game = @import("game.zig");
+const std = @import("std");

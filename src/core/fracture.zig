@@ -8,17 +8,17 @@ else
 pub const Renderer = renderer.Renderer(renderer_backend);
 
 pub const Fracture = struct {
+    renderer: Renderer,
     memory: Memory,
     event: Event,
-    input: Input,
     log_config: log.LogConfig,
-    renderer: Renderer,
+    last_time: f64 = 0,
     extent: math.Extent2D = .{
         .width = 1280,
         .height = 720,
     },
-    last_time: f64 = 0,
     delta_time: f32 = 0,
+    input: Input,
     is_suspended: bool = false,
     is_running: bool = false,
 };
@@ -60,10 +60,22 @@ pub const ArenaMemoryTags = enum(u8) {
     untagged = 0,
 };
 
-pub const InitFn = *const fn (engine: *Fracture) ?*anyopaque;
-pub const DeinitFn = *const fn (engine: *Fracture, game_state: *anyopaque) void;
-pub const UpdateAndRenderFn = *const fn (engine: *Fracture, game_state: *anyopaque) bool;
-pub const OnResizeFn = *const fn (engine: *Fracture, game_state: *anyopaque, width: u32, height: u32) void;
+pub const InitFn = switch (builtin.mode) {
+    .Debug => *const fn (engine: *Fracture) callconv(.c) ?*anyopaque,
+    else => *const fn (engine: *Fracture) ?*anyopaque,
+};
+pub const DeinitFn = switch (builtin.mode) {
+    .Debug => *const fn (engine: *Fracture, game_state: *anyopaque) callconv(.c) void,
+    else => *const fn (engine: *Fracture, game_state: *anyopaque) void,
+};
+pub const UpdateAndRenderFn = switch (builtin.mode) {
+    .Debug => *const fn (engine: *Fracture, game_state: *anyopaque) callconv(.c) bool,
+    else => *const fn (engine: *Fracture, game_state: *anyopaque) bool,
+};
+pub const OnResizeFn = switch (builtin.mode) {
+    .Debug => *const fn (engine: *Fracture, game_state: *anyopaque, width: u32, height: u32) callconv(.c) void,
+    else => *const fn (engine: *Fracture, game_state: *anyopaque, width: u32, height: u32) void,
+};
 
 /// Game API that must be defined by the application
 /// The GameData is passed to these functions as context
@@ -102,6 +114,7 @@ pub fn not_implemented(comptime src: std.builtin.SourceLocation) void {
 // }
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const comptime_funcs = @import("comptime.zig");
 const static_array_list = @import("containers/static_array_list.zig");

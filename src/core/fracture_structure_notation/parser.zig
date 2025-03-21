@@ -556,12 +556,12 @@ pub const DefinitionTypes = enum(u8) {
 pub const MaterialConfig = struct {
     version: Version = .{},
     data: u8 = 0,
-    data2: i8 = 0,
-    data3: f32 = 0,
-    data4: [3]f32 = [_]f32{ 0.0, 0.0, 0.0 },
-    data5: [4]f32 = [_]f32{ 0.0, 0.0, 0.0, 0.0 },
-    data6: [2]f32 = [_]f32{ 0.0, 0.0 },
-    data7: [16]u8 = undefined,
+    // data2: i8 = 0,
+    // data3: f32 = 0,
+    // data4: [3]f32 = [_]f32{ 0.0, 0.0, 0.0 },
+    // data5: [4]f32 = [_]f32{ 0.0, 0.0, 0.0, 0.0 },
+    // data6: [2]f32 = [_]f32{ 0.0, 0.0 },
+    // data7: [16]u8 = undefined,
 };
 
 pub const Version = packed struct(u32) {
@@ -601,8 +601,14 @@ test FSDParser {
 
     var material: MaterialConfig = undefined;
     var start = std.time.Timer.start() catch unreachable;
-    const result = try parser.load_fsd(.material, &material, "test.fsd");
-    const end = start.read();
+    var result: Result = undefined;
+
+    const iterations = 1000;
+    for (0..iterations) |_| {
+        result = try parser.load_fsd(.material, &material, "test.fsd");
+        parser.reset();
+    }
+    const end = start.read() / iterations;
     std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});
     std.debug.print("Resul: {s}\n", .{@tagName(result)});
 

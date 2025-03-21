@@ -720,7 +720,7 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
             return value;
         },
         .pointer => |target_type_info| switch (target_type_info.size) {
-            .One, .Many, .C => {
+            .one, .many, .c => {
                 switch (@typeInfo(@TypeOf(value))) {
                     .comptime_int, .int => {
                         const usize_value = if (value >= 0) value else @as(usize, @bitCast(@as(isize, value)));

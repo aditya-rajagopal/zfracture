@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) !void {
     // ====================================== Shader Compile =======================/
 
     const shader_compiler = b.dependency("shader_compiler", .{
-        .target = b.host,
+        .target = b.graph.host,
         .optimize = .ReleaseFast,
     }).artifact("shader_compiler");
 
@@ -119,11 +119,15 @@ pub fn build(b: *std.Build) !void {
     docs_step.dependOn(&install_docs.step);
 
     // ==================================== GAME DLL ==================================/
-    const game_dll = b.addSharedLibrary(.{
-        .name = "dynamic_game",
+    const dll_module = b.addModule("dynamic_game", .{
         .root_source_file = b.path("testbed/app.zig"),
         .target = target,
         .optimize = optimize,
+    });
+    const game_dll = b.addLibrary(.{
+        .name = "dynamic_game",
+        .linkage = .dynamic,
+        .root_module = dll_module,
     });
     game_dll.root_module.addImport("fr_core", core_lib);
     game_dll.root_module.addImport("vulkan_backend", vulkan_backend);

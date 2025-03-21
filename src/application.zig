@@ -8,10 +8,11 @@ const core = @import("fr_core");
 const platform = @import("platform/platform.zig");
 
 const config = @import("config.zig");
-const application_config = config.app_config;
+const app_config = config.app_config;
 const DLL = switch (builtin.mode) {
     .Debug => struct {
-        instance: platform.LibraryHandle,
+        // instance: platform.LibraryHandle,
+        instance: std.DynLib,
         time_stamp: i128 align(8),
     },
     else => void,
@@ -49,7 +50,6 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     app.engine.is_running = false;
     app.engine.is_suspended = false;
-    const app_config = application_config;
     switch (builtin.mode) {
         .Debug => {
             const file: std.fs.File = try std.fs.cwd().openFile(config.dll_name, .{});
@@ -144,6 +144,8 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.log.info("Renderer initialized", .{});
 
     // Application
+    app.log.info("Engine memory: {any}\n", .{app.engine.memory.gpa});
+    app.log.debug("Engine address: {*}\n", .{&app.engine});
     app.game_state = app.api.init(&app.engine) orelse {
         @branchHint(.cold);
         app.log.fatal("Client application failed to initialize", .{});
@@ -262,7 +264,8 @@ pub fn run(self: *Application) ApplicationError!void {
                 if (self.dll.time_stamp != stats.mtime) {
                     self.log.debug("New DLL detected", .{});
                     self.dll.time_stamp = stats.mtime;
-                    _ = platform.free_library(self.dll.instance);
+                    // _ = platform.free_library(self.dll.instance);
+                    self.dll.instance.close();
                     _ = self.reload_library();
                 }
             },
@@ -334,11 +337,12 @@ fn reload_library(self: *Application) bool {
         return false;
     }
 
-    self.dll.instance = platform.load_library(new_name) orelse return false;
-    const init_fn = platform.library_lookup(self.dll.instance, "init", core.InitFn) orelse return false;
-    const deinit_fn = platform.library_lookup(self.dll.instance, "deinit", core.DeinitFn) orelse return false;
-    const update_and_render = platform.library_lookup(self.dll.instance, "update_and_render", core.UpdateAndRenderFn) orelse return false;
-    const on_resize = platform.library_lookup(self.dll.instance, "on_resize", core.OnResizeFn) orelse return false;
+    self.dll.instance = std.DynLib.open(new_name) catch return false;
+    const init_fn = self.dll.instance.lookup(core.InitFn, "init") orelse return false;
+    const deinit_fn = self.dll.instance.lookup(core.DeinitFn, "deinit") orelse return false;
+    const update_and_render = self.dll.instance.lookup(core.UpdateAndRenderFn, "update_and_render") orelse return false;
+    const on_resize = self.dll.instance.lookup(core.OnResizeFn, "on_resize") orelse return false;
+
     self.api.init = init_fn;
     self.api.deinit = deinit_fn;
     self.api.update_and_render = update_and_render;
