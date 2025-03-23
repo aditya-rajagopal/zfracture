@@ -83,7 +83,7 @@ pub fn load_fsd(
     comptime assert(type_info == .@"struct");
     const struct_info = type_info.@"struct";
     inline for (struct_info.fields) |field| {
-        comptime assert(field.default_value != null);
+        comptime assert(field.defaultValue() != null);
     }
 
     out_data.* = .{};
@@ -95,7 +95,7 @@ pub fn load_fsd(
         const field_type = field.type;
         const field_info = @typeInfo(field_type);
 
-        const dtype = dtype: switch (field_info) {
+        const dtype: DataType = dtype: switch (field_info) {
             .bool => .{ .base = .bool },
             .int, .float => .{ .base = comptime std.meta.stringToEnum(BaseTypes, @typeName(field_type)).? },
             .array => |array| {
@@ -192,9 +192,9 @@ pub fn load_fsd(
             continue :blk self.states[self.state_ptr - 1];
         },
         .expect_struct_type => {
-            if (!std.mem.eql(u8, data[0..index], @tagName(file_type))) {
-                break :blk Result.invalid_fsd_invalid_file_type;
-            }
+            // if (!std.mem.eql(u8, data[0..index], @tagName(file_type))) {
+            //     break :blk Result.invalid_fsd_invalid_file_type;
+            // }
             data = data[index + 1 ..];
             self.column_number += @truncate(index + 1);
             index = 0;
@@ -603,7 +603,7 @@ test FSDParser {
     var start = std.time.Timer.start() catch unreachable;
     var result: Result = undefined;
 
-    const iterations = 1000;
+    const iterations = 100000;
     for (0..iterations) |_| {
         result = try parser.load_fsd(.material, &material, "test.fsd");
         parser.reset();

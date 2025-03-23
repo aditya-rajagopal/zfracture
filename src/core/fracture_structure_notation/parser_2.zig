@@ -26,7 +26,7 @@ pub const Definition = union(StructureType) {
         // All members must have a default value
         // TODO: Validate the fields have acceptable types
         inline for (struct_info.fields) |field| {
-            comptime assert(field.default_value != null);
+            comptime assert(field.defaultValue() != null);
         }
 
         return T;
@@ -117,241 +117,250 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
     // TODO: Allow arrays of arrays
     // TODO: Allow comments
 
-    iter_loop: for (0..MAX_ITERATIONS) |_| {
-        // Eat white spaces
-        if (data.len > 0 and read_head == 0) {
-            while (read_head < data.len and (data[read_head] == ' ' or data[read_head] == '\t')) : (read_head += 1) {}
-            data = data[read_head..];
-            column_number += read_head;
+    const result: ?LoadError = loop: switch (parser_stack.getLast()) {
+        .read_data => {
+            var len: usize = 0;
+            if (data.len == 0) {
+                len = try reader.read(&buffer);
+            } else {
+                std.mem.copyForwards(u8, &buffer, data);
+                len = try reader.read(buffer[data.len..]);
+            }
+            if (len == 0) {
+                break :loop LoadError.invalid_fsd_incomplete;
+            }
+            len += data.len;
+            data = buffer[0..len];
+            _ = parser_stack.pop();
+            continue :loop parser_stack.getLast();
+        },
+        .read_header => {
+            assert(data.len >= 5);
+            if (data[0] != '@') {
+                break :loop LoadError.@"invalid_fsd_expected_@_at_start";
+            }
+
+            const def: [4]u8 = .{ 'd', 'e', 'f', ' ' };
+
+            if (@as(u32, @bitCast(data[1..5].*)) != @as(u32, @bitCast(def))) {
+                return LoadError.invalid_fsd_missing_def;
+            }
+            data = data[5..];
+            column_number = 5;
+
+            // Expect the string to be the type of the structure
+            search: while (read_head < data.len) : (read_head += 1) {
+                if (data[read_head] == ' ') {
+                    break :search;
+                }
+            } else {
+                column_number += read_head;
+                break :loop LoadError.invalid_fsd_incomplete;
+            }
+
+            if (!std.mem.eql(u8, data[0..read_head], struct_name)) {
+                break :loop LoadError.invalid_fsd_invalid_file_type;
+            }
+            data = data[read_head + 1 ..];
+            column_number += @truncate(read_head + 1);
             read_head = 0;
-        }
-        switch (parser_stack.getLast()) {
-            .read_data => {
-                var len: usize = 0;
-                if (data.len == 0) {
-                    len = try reader.read(&buffer);
+
+            // Read the version
+            search: while (read_head < data.len) : (read_head += 1) {
+                if (data[read_head] == '\n') {
+                    break :search;
+                }
+            } else {
+                column_number += read_head;
+                break :loop LoadError.invalid_fsd_incomplete;
+            }
+
+            var i: u32 = 0;
+
+            const version: types.Version = T.version;
+
+            while (i < read_head and data[i] != '.') : (i += 1) {}
+
+            const major = std.fmt.parseInt(u4, data[0..i], 10) catch {
+                break :loop LoadError.invalid_fsd_version;
+            };
+            if (version.major != major) {
+                break :loop LoadError.fsd_major_version_mismatch;
+            }
+
+            data = data[i + 1 ..];
+            read_head -= i + 1;
+            column_number += @truncate(i + 1);
+            i = 0;
+
+            while (i < read_head and data[i] != '.') : (i += 1) {}
+
+            const minor = std.fmt.parseInt(u4, data[0..i], 10) catch {
+                return LoadError.invalid_fsd_version;
+            };
+            if (version.minor != minor) {
+                return LoadError.fsd_minor_version_mismatch;
+            }
+
+            read_head -= i + 1;
+            data = data[i + 1 ..];
+            column_number += @truncate(i + 1);
+
+            const patch = std.fmt.parseInt(u16, data[0 .. read_head - 1], 10) catch {
+                return LoadError.invalid_fsd_version;
+            };
+            if (version.patch != patch) {
+                return LoadError.fsd_patch_version_mismatch;
+            }
+            data = data[read_head + 1 ..];
+            read_head = 0;
+            line_number += 1;
+
+            _ = parser_stack.pop();
+            continue :loop .read_statement;
+        },
+        .read_statement => {
+            if (data.len == 0) {
+                parser_stack.appendAssumeCapacity(.read_data);
+                continue :loop .read_data;
+            }
+            if (data[0] != '@') {
+                break :loop LoadError.@"invalid_fsd_expected_@_at_start";
+            }
+            data = data[1..];
+            column_number += 1;
+            _ = parser_stack.pop();
+            parser_stack.appendAssumeCapacity(.end_statement);
+            parser_stack.appendAssumeCapacity(.read_till_next_line);
+            parser_stack.appendAssumeCapacity(.read_value);
+            parser_stack.appendAssumeCapacity(.read_next_token);
+            parser_stack.appendAssumeCapacity(.assert_equal);
+            parser_stack.appendAssumeCapacity(.read_next_token);
+            parser_stack.appendAssumeCapacity(.read_type);
+            parser_stack.appendAssumeCapacity(.read_next_token);
+            parser_stack.appendAssumeCapacity(.read_field);
+            parser_stack.appendAssumeCapacity(.read_next_token);
+            continue :loop .read_next_token;
+        },
+        .read_next_token => {
+            search: while (read_head < data.len) : (read_head += 1) {
+                if (data[read_head] != ' ' and data[read_head] != '\n' and data[read_head] != '\t') {
+                    continue :search;
                 } else {
-                    std.mem.copyForwards(u8, &buffer, data);
-                    len = try reader.read(buffer[data.len..]);
+                    _ = parser_stack.pop();
+                    continue :loop parser_stack.getLast();
                 }
-                if (len == 0) {
-                    return LoadError.invalid_fsd_incomplete;
+            }
+            parser_stack.appendAssumeCapacity(.read_data);
+            continue :loop .read_data;
+        },
+        .read_till_next_line => {
+            while (read_head < data.len) : (read_head += 1) {
+                if (data[read_head] == '\n') {
+                    _ = parser_stack.pop();
+                    line_number += 1;
+                    continue :loop .end_statement;
                 }
-                len += data.len;
-                data = buffer[0..len];
-                _ = parser_stack.pop();
-            },
-            .read_header => {
-                assert(data.len >= 5);
-                if (data[0] != '@') {
-                    return LoadError.@"invalid_fsd_expected_@_at_start";
-                }
-
-                const def: [4]u8 = .{ 'd', 'e', 'f', ' ' };
-
-                if (@as(u32, @bitCast(data[1..5].*)) != @as(u32, @bitCast(def))) {
-                    return LoadError.invalid_fsd_missing_def;
-                }
-                data = data[5..];
-                column_number = 5;
-
-                // Expect the string to be the type of the structure
-                search: while (read_head < data.len) : (read_head += 1) {
-                    if (data[read_head] == ' ') {
-                        break :search;
+            }
+            parser_stack.appendAssumeCapacity(.read_data);
+            continue :loop .read_data;
+        },
+        .assert_equal => {
+            assert(read_head == 1);
+            if (data[0] != '=') {
+                break :loop LoadError.@"invalid_fsd_missing_=";
+            }
+            data = data[2..];
+            _ = parser_stack.pop();
+            continue :loop .read_next_token;
+        },
+        .read_field => {
+            assert(read_head >= 2);
+            if (!std.mem.eql(u8, out_fields[field_current].name, data[0 .. read_head - 1])) {
+                break :loop LoadError.invalid_fsd_invalid_field_name;
+            }
+            if (data[read_head - 1] != ':') {
+                break :loop LoadError.@"invalid_fsd_missing_:";
+            }
+            data = data[read_head + 1 ..];
+            column_number += @truncate(read_head + 1);
+            read_head = 0;
+            _ = parser_stack.pop();
+            continue :loop .read_next_token;
+        },
+        .read_type => {
+            assert(read_head >= 2);
+            switch (out_fields[field_current].dtype) {
+                .base => |b| {
+                    if (!std.mem.eql(u8, @tagName(b), data[0..read_head])) {
+                        break :loop LoadError.invalid_fsd_incompatable_type;
                     }
-                } else {
-                    column_number += read_head;
-                    return LoadError.invalid_fsd_incomplete;
-                }
+                },
+                .array => |*arr_info| {
+                    if (data[0] == '[') {
+                        var pos: usize = 1;
+                        column_number += 1;
 
-                if (!std.mem.eql(u8, data[0..read_head], struct_name)) {
-                    return LoadError.invalid_fsd_invalid_file_type;
-                }
-                data = data[read_head + 1 ..];
-                column_number += @truncate(read_head + 1);
-                read_head = 0;
+                        while (pos < read_head and data[pos] != ']') : (pos += 1) {}
 
-                // Read the version
-                search: while (read_head < data.len) : (read_head += 1) {
-                    if (data[read_head] == '\n') {
-                        break :search;
-                    }
-                } else {
-                    column_number += read_head;
-                    return LoadError.invalid_fsd_incomplete;
-                }
+                        if (pos == 1) {
+                            break :loop LoadError.invalid_fsd_array_must_contain_length;
+                        }
 
-                var i: u32 = 0;
+                        const len = std.fmt.parseUnsigned(u32, data[1..pos], 10) catch {
+                            break :loop LoadError.invalid_fsd_invalid_integer;
+                        };
+                        if (len > arr_info.len) {
+                            break :loop LoadError.invalid_fsd_array_too_long;
+                        }
+                        arr_info.parsed_len = len;
 
-                const version: types.Version = T.version;
-
-                while (i < read_head and data[i] != '.') : (i += 1) {}
-
-                const major = std.fmt.parseInt(u4, data[0..i], 10) catch {
-                    return LoadError.invalid_fsd_version;
-                };
-                if (version.major != major) {
-                    return LoadError.fsd_major_version_mismatch;
-                }
-
-                data = data[i + 1 ..];
-                read_head -= i + 1;
-                column_number += @truncate(i + 1);
-                i = 0;
-
-                while (i < read_head and data[i] != '.') : (i += 1) {}
-
-                const minor = std.fmt.parseInt(u4, data[0..i], 10) catch {
-                    return LoadError.invalid_fsd_version;
-                };
-                if (version.minor != minor) {
-                    return LoadError.fsd_minor_version_mismatch;
-                }
-
-                read_head -= i + 1;
-                data = data[i + 1 ..];
-                column_number += @truncate(i + 1);
-
-                const patch = std.fmt.parseInt(u16, data[0 .. read_head - 1], 10) catch {
-                    return LoadError.invalid_fsd_version;
-                };
-                if (version.patch != patch) {
-                    return LoadError.fsd_patch_version_mismatch;
-                }
-                data = data[read_head + 1 ..];
-                read_head = 0;
-                line_number += 1;
-
-                _ = parser_stack.pop();
-            },
-            .read_statement => {
-                if (data.len == 0) {
-                    parser_stack.appendAssumeCapacity(.read_data);
-                    continue :iter_loop;
-                }
-                if (data[0] != '@') {
-                    return LoadError.@"invalid_fsd_expected_@_at_start";
-                }
-                data = data[1..];
-                column_number += 1;
-                _ = parser_stack.pop();
-                parser_stack.appendAssumeCapacity(.end_statement);
-                parser_stack.appendAssumeCapacity(.read_till_next_line);
-                parser_stack.appendAssumeCapacity(.read_value);
-                parser_stack.appendAssumeCapacity(.read_next_token);
-                parser_stack.appendAssumeCapacity(.assert_equal);
-                parser_stack.appendAssumeCapacity(.read_next_token);
-                parser_stack.appendAssumeCapacity(.read_type);
-                parser_stack.appendAssumeCapacity(.read_next_token);
-                parser_stack.appendAssumeCapacity(.read_field);
-                parser_stack.appendAssumeCapacity(.read_next_token);
-            },
-            .read_next_token => {
-                search: while (read_head < data.len) : (read_head += 1) {
-                    if (data[read_head] != ' ' and data[read_head] != '\n' and data[read_head] != '\t') {
-                        continue :search;
+                        column_number += @truncate(pos - 1);
+                        const type_name: []const u8 = @tagName(arr_info.base);
+                        if (!std.mem.eql(u8, type_name, data[pos + 1 .. read_head])) {
+                            break :loop LoadError.invalid_fsd_array_child_type_mismatch;
+                        }
+                        column_number += @truncate(type_name.len);
                     } else {
-                        _ = parser_stack.pop();
-                        continue :iter_loop;
+                        break :loop LoadError.invalid_fsd_incompatable_type;
                     }
-                }
-                parser_stack.appendAssumeCapacity(.read_data);
-            },
-            .read_till_next_line => {
-                while (read_head < data.len) : (read_head += 1) {
-                    if (data[read_head] == '\n') {
-                        _ = parser_stack.pop();
-                        line_number += 1;
-                        continue :iter_loop;
-                    }
-                }
-                parser_stack.appendAssumeCapacity(.read_data);
-            },
-            .assert_equal => {
-                assert(read_head == 1);
-                if (data[0] != '=') {
-                    return LoadError.@"invalid_fsd_missing_=";
-                }
-                data = data[2..];
-                _ = parser_stack.pop();
-            },
-            .read_field => {
-                assert(read_head >= 2);
-                if (!std.mem.eql(u8, out_fields[field_current].name, data[0 .. read_head - 1])) {
-                    return LoadError.invalid_fsd_invalid_field_name;
-                }
-                if (data[read_head - 1] != ':') {
-                    return LoadError.@"invalid_fsd_missing_:";
-                }
-                data = data[read_head + 1 ..];
-                column_number += @truncate(read_head + 1);
-                read_head = 0;
-                _ = parser_stack.pop();
-            },
-            .read_type => {
-                assert(read_head >= 2);
-                switch (out_fields[field_current].dtype) {
-                    .base => |b| {
-                        if (!std.mem.eql(u8, @tagName(b), data[0..read_head])) {
-                            return LoadError.invalid_fsd_incompatable_type;
-                        }
-                    },
-                    .array => |*arr_info| {
-                        if (data[0] == '[') {
-                            var pos: usize = 1;
-                            column_number += 1;
+                },
+                .@"struct" => std.debug.panic("NOT IMPLEMENTED", .{}),
+                .texture => std.debug.panic("NOT IMPLEMENTED", .{}),
+                .@"enum" => std.debug.panic("NOT IMPLEMENTED", .{}),
+            }
+            data = data[read_head + 1 ..];
+            column_number += @truncate(read_head + 1);
+            read_head = 0;
+            _ = parser_stack.pop();
+            continue :loop .read_next_token;
+        },
+        .read_value => {
+            // TODO: allow _ in numbers
+            switch (out_fields[field_current].dtype) {
+                .base => |b| try parse_base_types(b, data[0 .. read_head - 1], out_fields[field_current].data.?),
+                else => {},
+            }
+            _ = parser_stack.pop();
+            continue :loop .read_till_next_line;
+        },
+        .end_statement => {
+            field_current += 1;
+            _ = parser_stack.pop();
+            if (parser_stack.getLast() == .read_statement) {
+                continue :loop .read_statement;
+            } else {
+                continue :loop .end_parsing;
+            }
+        },
+        .end_parsing => break :loop null,
+    };
 
-                            while (pos < read_head and data[pos] != ']') : (pos += 1) {}
-
-                            if (pos == 1) {
-                                return LoadError.invalid_fsd_array_must_contain_length;
-                            }
-
-                            const len = std.fmt.parseUnsigned(u32, data[1..pos], 10) catch {
-                                return LoadError.invalid_fsd_invalid_integer;
-                            };
-                            if (len > arr_info.len) {
-                                return LoadError.invalid_fsd_array_too_long;
-                            }
-                            arr_info.parsed_len = len;
-
-                            column_number += @truncate(pos - 1);
-                            const type_name: []const u8 = @tagName(arr_info.base);
-                            if (!std.mem.eql(u8, type_name, data[pos + 1 .. read_head])) {
-                                return LoadError.invalid_fsd_array_child_type_mismatch;
-                            }
-                            column_number += @truncate(type_name.len);
-                        } else {
-                            return LoadError.invalid_fsd_incompatable_type;
-                        }
-                    },
-                    .@"struct" => std.debug.panic("NOT IMPLEMENTED", .{}),
-                    .texture => std.debug.panic("NOT IMPLEMENTED", .{}),
-                    .@"enum" => std.debug.panic("NOT IMPLEMENTED", .{}),
-                }
-                data = data[read_head + 1 ..];
-                column_number += @truncate(read_head + 1);
-                read_head = 0;
-                _ = parser_stack.pop();
-            },
-            .read_value => {
-                // TODO: allow _ in numbers
-                switch (out_fields[field_current].dtype) {
-                    .base => |b| try parse_base_types(b, data[0 .. read_head - 1], out_fields[field_current].data.?),
-                    else => {},
-                }
-                _ = parser_stack.pop();
-                break :iter_loop;
-            },
-            .end_statement => {
-                field_current += 1;
-            },
-            .end_parsing => break,
-        }
-    } else {
-        return LoadError.fsd_too_many_iterations;
+    if (result) |err| {
+        std.debug.print("Error: {s}\n", .{@errorName(err)});
     }
+
+    // TODO(adi): write binary format to disc here
 }
 
 fn parse_base_types(base_type: BaseType, payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
@@ -452,7 +461,7 @@ fn get_recursive_field_len(T: type) usize {
             ptr -= 1;
 
             for (fields) |field| {
-                assert(field.default_value != null);
+                assert(field.defaultValue() != null);
                 const field_info = @typeInfo(field.type);
                 switch (field_info) {
                     .@"struct" => |info| {
@@ -719,9 +728,18 @@ test Parser {
 
     var material: types.MaterialConfig = undefined;
     var start = std.time.Timer.start() catch unreachable;
-    const iterations = 1000;
+    const iterations = 100000;
+    // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // const allocator = arena.allocator();
+    // defer arena.deinit();
     for (0..iterations) |_| {
         try load(.material, "test.fsd", &material);
+        // const file = try std.fs.cwd().openFile("test.zon", .{});
+        // defer file.close();
+        // const source = try file.readToEndAllocOptions(allocator, 10240, null, 1, 0);
+        // // const source = try file.readToEndAlloc(allocator, 1024);
+        // material = try std.zon.parse.fromSlice(types.MaterialConfig, allocator, source, null, .{ .free_on_error = false });
+        // _ = arena.reset(.retain_capacity);
     }
     const end = start.read() / iterations;
     std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});
