@@ -67,6 +67,7 @@ pub const LoadError = error{
     invalid_fsd_invalid_float,
     invalid_fsd_invalid_integer,
     invalid_fsd_array_too_long,
+    invalid_fsd_missing_array_start,
 } || std.fs.File.OpenError || std.fs.File.ReadError;
 
 pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data: *s_type.get_type()) LoadError!void {
@@ -232,8 +233,8 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
             _ = parser_stack.pop();
             parser_stack.appendAssumeCapacity(.end_statement);
             parser_stack.appendAssumeCapacity(.read_till_next_line);
+            parser_stack.appendAssumeCapacity(.parse_value);
             parser_stack.appendAssumeCapacity(.read_value);
-            parser_stack.appendAssumeCapacity(.read_next_token);
             parser_stack.appendAssumeCapacity(.assert_equal);
             parser_stack.appendAssumeCapacity(.read_next_token);
             parser_stack.appendAssumeCapacity(.read_type);
@@ -243,22 +244,41 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
             continue :loop .read_next_token;
         },
         .read_next_token => {
+            // NOTE: Before reading next token remove all white space
+            if (data[read_head] == ' ' or data[read_head] == '\t') {
+                consuming: while (read_head < data.len) : (read_head += 1) {
+                    if (data[read_head] == ' ' or data[read_head] == '\t') {
+                        continue :consuming;
+                    } else {
+                        data = data[read_head..];
+                        read_head = 0;
+                        break :consuming;
+                    }
+                } else {
+                    parser_stack.appendAssumeCapacity(.read_data);
+                    continue :loop .read_data;
+                }
+            } else {}
+
             search: while (read_head < data.len) : (read_head += 1) {
-                if (data[read_head] != ' ' and data[read_head] != '\n' and data[read_head] != '\t') {
+                if (data[read_head] != ' ' and data[read_head] != '\n' and data[read_head] != '\t' and data[read_head] != '\r') {
                     continue :search;
                 } else {
                     _ = parser_stack.pop();
                     continue :loop parser_stack.getLast();
                 }
+            } else {
+                parser_stack.appendAssumeCapacity(.read_data);
+                continue :loop .read_data;
             }
-            parser_stack.appendAssumeCapacity(.read_data);
-            continue :loop .read_data;
         },
         .read_till_next_line => {
             while (read_head < data.len) : (read_head += 1) {
                 if (data[read_head] == '\n') {
                     _ = parser_stack.pop();
+                    data = data[read_head + 1 ..];
                     line_number += 1;
+                    column_number = 0;
                     continue :loop .end_statement;
                 }
             }
@@ -271,6 +291,7 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
                 break :loop LoadError.@"invalid_fsd_missing_=";
             }
             data = data[2..];
+            read_head = 0;
             _ = parser_stack.pop();
             continue :loop .read_next_token;
         },
@@ -338,9 +359,55 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
         .read_value => {
             // TODO: allow _ in numbers
             switch (out_fields[field_current].dtype) {
-                .base => |b| try parse_base_types(b, data[0 .. read_head - 1], out_fields[field_current].data.?),
+                .base => {
+                    _ = parser_stack.pop();
+                    parser_stack.appendAssumeCapacity(.read_next_token);
+                    continue :loop .read_next_token;
+                },
+                .array => {
+                    search: while (read_head < data.len) : (read_head += 1) {
+                        // NOTE: consume all the spaces before array start. Array must start on teh same line
+                        if (data[read_head] != ' ' and data[read_head] != '\t') {
+                            continue :search;
+                        } else if (data[read_head] == '[') {
+                            // NOTE: Only if you have a character after the [ character can you slice and continue
+                            // else go read some more data. This is to handle if [ is the last character in the buffer
+                            _ = parser_stack.pop();
+                            if (read_head < data.len - 1) {
+                                data = data[read_head + 1 ..];
+                                read_head = 0;
+                                break :search;
+                            } else {
+                                data.len = 0;
+                                parser_stack.appendAssumeCapacity(.read_data);
+                                continue :loop .read_data;
+                            }
+                        } else {
+                            break :loop LoadError.invalid_fsd_missing_array_start;
+                        }
+                    } else {
+                        parser_stack.appendAssumeCapacity(.read_data);
+                        continue :loop .read_data;
+                    }
+                },
+                else => @panic("NOT IMPLEMENTED"),
+            }
+            unreachable;
+        },
+        .parse_value => {
+            switch (out_fields[field_current].dtype) {
+                .base => |b| try parse_base_types(b, data[0..read_head], out_fields[field_current].data.?),
+                .array => |*array_info| {
+                    // LEFTOFF: Need to read the next token here? Or always read next token and assume there must be a space
+                    // after a ',' ? That would certainly be easier but it would be less intuitive when there is an error
+                    // in the file
+                    try parser_array(array_info, data[0..read_head], out_fields[field_current].data.?);
+                },
                 else => {},
             }
+            data = data[read_head..];
+            column_number += @truncate(read_head + 1);
+            read_head = 0;
             _ = parser_stack.pop();
             continue :loop .read_till_next_line;
         },
@@ -357,10 +424,20 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
     };
 
     if (result) |err| {
-        std.debug.print("Error: {s}\n", .{@errorName(err)});
+        std.debug.print(
+            "Error: {s} at field: {d}, line: {d}, column: {d}\n",
+            .{ @errorName(err), field_current, line_number, column_number },
+        );
+        std.debug.print("Data: {s}", .{data});
     }
 
     // TODO(adi): write binary format to disc here
+}
+
+fn parser_array(array_data: *DType.ArrayInfo, data: []const u8, noalias out_data: *anyopaque) LoadError!void {
+    _ = data;
+    _ = out_data;
+    _ = array_data;
 }
 
 fn parse_base_types(base_type: BaseType, payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
@@ -441,6 +518,7 @@ const ParserState = enum(u8) {
     read_type,
     read_field,
     read_value,
+    parse_value,
     assert_equal,
     end_statement,
     end_parsing,
@@ -678,7 +756,7 @@ const DType = union(enum(u8)) {
     @"struct": StructInfo,
 
     const StructInfo = struct { fields_start: u32, fields_end: u32 };
-    const ArrayInfo = struct { base: BaseType, len: u32, parsed_len: u32 };
+    const ArrayInfo = struct { base: BaseType, len: u32, parsed_len: u32, current_len: u32 };
 };
 
 const BaseType = enum(u8) {
@@ -728,7 +806,7 @@ test Parser {
 
     var material: types.MaterialConfig = undefined;
     var start = std.time.Timer.start() catch unreachable;
-    const iterations = 100000;
+    const iterations = 1;
     // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     // const allocator = arena.allocator();
     // defer arena.deinit();

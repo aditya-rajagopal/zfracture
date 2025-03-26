@@ -101,6 +101,6 @@ handling than strings
 
 * Integers: 123151, -1123124123, 100_000.
 * Floating: 1.11231245.
-* arrays: {}
-* structs: .{}
+* arrays: []
+* structs: {}
 * enum literal: .<identifier>

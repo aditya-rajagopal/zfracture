@@ -14,7 +14,7 @@ pub const Version = packed struct(u32) {
 
 pub const MaterialConfig = struct {
     data: u8 = 0,
-    // data2: i8 = 0,
+    data2: i8 = 0,
     // data3: f32 = 0,
     // data4: [3]f32 = [_]f32{ 0.0, 0.0, 0.0 },
     // data5: [4]f32 = [_]f32{ 0.0, 0.0, 0.0, 0.0 },
