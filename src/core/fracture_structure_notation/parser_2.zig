@@ -70,7 +70,44 @@ pub const LoadError = error{
     invalid_fsd_missing_array_start,
 } || std.fs.File.OpenError || std.fs.File.ReadError;
 
-pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data: *s_type.get_type()) LoadError!void {
+// NOTE: If the fsd file is larger than 16 pages use the alloc version of load
+const MAX_BUFFER_PAGES = 16;
+const MAX_BYTES = 4096 * MAX_BUFFER_PAGES;
+
+threadlocal var buffer: [MAX_BYTES]u8 = undefined;
+
+const Token = struct {
+    tag: Tag,
+    start: u16,
+    end: u16,
+
+    pub const Tag = enum(u8) {
+        IDENTIFIER,
+        INTEGER,
+        FLOAT,
+        @"\"",
+        @".",
+        @":",
+        @"@",
+        @"=",
+        @"[",
+        @"]",
+        @"{",
+        @"}",
+    };
+};
+
+// std.zig.Tokenizer
+const Tokenizer = struct {
+    source: []const u8,
+    ptr: usize,
+
+    const State = enum(u8) {
+        start,
+    };
+};
+
+pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias out_data: *s_type.get_type()) LoadError!void {
     const T = s_type.get_type();
 
     // TODO: Figure out a way to capture enum fields as strings
@@ -94,7 +131,9 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
 
     const file = try std.fs.cwd().openFile(file_path, .{});
     const reader = file.reader();
+    const length_file = try reader.read(&buffer);
     defer file.close();
+    assert(length_file < MAX_BYTES);
 
     var parser_stack_buffer: [1024]ParserState = undefined;
     var parser_stack = std.ArrayListUnmanaged(ParserState).initBuffer(&parser_stack_buffer);
@@ -102,11 +141,8 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
     parser_stack.appendAssumeCapacity(.end_parsing);
     parser_stack.appendNTimesAssumeCapacity(.read_statement, out_fields.len - 1);
     parser_stack.appendAssumeCapacity(.read_header);
-    parser_stack.appendAssumeCapacity(.read_data);
 
-    var buffer: [4096]u8 = undefined;
-    var data: []const u8 = undefined;
-    data.len = 0;
+    var data: []const u8 = buffer[0..length_file];
 
     var column_number: u32 = 0;
     var line_number: u32 = 0;
@@ -117,24 +153,12 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
     // TODO: Make this return a result object instead of an error along with info about the error
     // TODO: Allow arrays of arrays
     // TODO: Allow comments
+    // TODO: Should there be a token buffer that we fill up and then parse that way? That might not work with buffered
+    // input. Should we just load the entire file into memeory? I dont like that because i dont want there to be allocations here
+    // But maybe that is fine in debug builds? If I were to do it i would do it in read_data. Just fill in a buffer of
+    // 1024 tokens. Usually that should cover most files.
 
     const result: ?LoadError = loop: switch (parser_stack.getLast()) {
-        .read_data => {
-            var len: usize = 0;
-            if (data.len == 0) {
-                len = try reader.read(&buffer);
-            } else {
-                std.mem.copyForwards(u8, &buffer, data);
-                len = try reader.read(buffer[data.len..]);
-            }
-            if (len == 0) {
-                break :loop LoadError.invalid_fsd_incomplete;
-            }
-            len += data.len;
-            data = buffer[0..len];
-            _ = parser_stack.pop();
-            continue :loop parser_stack.getLast();
-        },
         .read_header => {
             assert(data.len >= 5);
             if (data[0] != '@') {
@@ -221,10 +245,7 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
             continue :loop .read_statement;
         },
         .read_statement => {
-            if (data.len == 0) {
-                parser_stack.appendAssumeCapacity(.read_data);
-                continue :loop .read_data;
-            }
+            assert(data.len > 2);
             if (data[0] != '@') {
                 break :loop LoadError.@"invalid_fsd_expected_@_at_start";
             }
@@ -255,8 +276,7 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
                         break :consuming;
                     }
                 } else {
-                    parser_stack.appendAssumeCapacity(.read_data);
-                    continue :loop .read_data;
+                    break :loop LoadError.invalid_fsd_incomplete;
                 }
             } else {}
 
@@ -268,8 +288,7 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
                     continue :loop parser_stack.getLast();
                 }
             } else {
-                parser_stack.appendAssumeCapacity(.read_data);
-                continue :loop .read_data;
+                break :loop LoadError.invalid_fsd_incomplete;
             }
         },
         .read_till_next_line => {
@@ -282,8 +301,8 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
                     continue :loop .end_statement;
                 }
             }
-            parser_stack.appendAssumeCapacity(.read_data);
-            continue :loop .read_data;
+
+            break :loop LoadError.invalid_fsd_incomplete;
         },
         .assert_equal => {
             assert(read_head == 1);
@@ -376,18 +395,16 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
                             if (read_head < data.len - 1) {
                                 data = data[read_head + 1 ..];
                                 read_head = 0;
-                                break :search;
+                                parser_stack.appendAssumeCapacity(.parse_array);
+                                continue :loop .parse_array;
                             } else {
-                                data.len = 0;
-                                parser_stack.appendAssumeCapacity(.read_data);
-                                continue :loop .read_data;
+                                break :loop LoadError.invalid_fsd_incomplete;
                             }
                         } else {
                             break :loop LoadError.invalid_fsd_missing_array_start;
                         }
                     } else {
-                        parser_stack.appendAssumeCapacity(.read_data);
-                        continue :loop .read_data;
+                        break :loop LoadError.invalid_fsd_incomplete;
                     }
                 },
                 else => @panic("NOT IMPLEMENTED"),
@@ -397,17 +414,46 @@ pub fn load(comptime s_type: Definition, file_path: []const u8, noalias out_data
         .parse_value => {
             switch (out_fields[field_current].dtype) {
                 .base => |b| try parse_base_types(b, data[0..read_head], out_fields[field_current].data.?),
-                .array => |*array_info| {
-                    // LEFTOFF: Need to read the next token here? Or always read next token and assume there must be a space
-                    // after a ',' ? That would certainly be easier but it would be less intuitive when there is an error
-                    // in the file
-                    try parser_array(array_info, data[0..read_head], out_fields[field_current].data.?);
-                },
+                .array => unreachable,
                 else => {},
             }
             data = data[read_head..];
             column_number += @truncate(read_head + 1);
             read_head = 0;
+            _ = parser_stack.pop();
+            continue :loop .read_till_next_line;
+        },
+        .read_array_element => {
+            // NOTE: Eat the white spaces
+            if (data[read_head] == ' ' or data[read_head] == '\t' or data[read_head] == '\r' or data[read_head] == '\n') {
+                consuming: while (read_head < data.len) : (read_head += 1) {
+                    if (data[read_head] == ' ' or data[read_head] == '\t') {
+                        continue :consuming;
+                    } else {
+                        data = data[read_head..];
+                        read_head = 0;
+                        break :consuming;
+                    }
+                } else {
+                    break :loop LoadError.invalid_fsd_incomplete;
+                }
+            } else {}
+
+            search: while (read_head < data.len) : (read_head += 1) {
+                if (data[read_head] != ' ' and data[read_head] != ']') {
+                    continue :search;
+                } else {
+                    _ = parser_stack.pop();
+                    continue :loop parser_stack.getLast();
+                }
+            } else {
+                break :loop LoadError.invalid_fsd_incomplete;
+            }
+        },
+        .parse_array => {
+            const array_info = &out_fields[field_current].dtype.array;
+            assert(array_info.len > 0);
+
             _ = parser_stack.pop();
             continue :loop .read_till_next_line;
         },
@@ -440,7 +486,7 @@ fn parser_array(array_data: *DType.ArrayInfo, data: []const u8, noalias out_data
     _ = array_data;
 }
 
-fn parse_base_types(base_type: BaseType, payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
+fn parse_base_types(base_type: BaseType, noalias payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
     switch (base_type) {
         .u8 => {
             const ptr: *u8 = @ptrCast(@alignCast(out_data));
@@ -510,7 +556,6 @@ fn parse_base_types(base_type: BaseType, payload: []const u8, noalias out_data: 
 }
 
 const ParserState = enum(u8) {
-    read_data,
     read_statement,
     read_header,
     read_till_next_line,
@@ -518,7 +563,9 @@ const ParserState = enum(u8) {
     read_type,
     read_field,
     read_value,
+    read_array_element,
     parse_value,
+    parse_array,
     assert_equal,
     end_statement,
     end_parsing,
@@ -575,8 +622,8 @@ fn get_fields(T: type) [get_recursive_field_len(T) + 1]Field {
             info: std.builtin.Type.Struct,
             field_pos: usize,
         };
-        var buffer: [1024]internal_data = undefined;
-        var structs = std.ArrayListUnmanaged(internal_data).initBuffer(&buffer);
+        var internal_buffer: [1024]internal_data = undefined;
+        var structs = std.ArrayListUnmanaged(internal_data).initBuffer(&internal_buffer);
 
         fields[0] = Field{
             .name = "root",
@@ -655,8 +702,8 @@ fn fill_pointers(
         prev_index: u16,
         index_end: u16,
     };
-    comptime var buffer: [32]tracking_t = undefined;
-    comptime var struct_stack = std.ArrayListUnmanaged(tracking_t).initBuffer(&buffer);
+    comptime var internal_buffer: [32]tracking_t = undefined;
+    comptime var struct_stack = std.ArrayListUnmanaged(tracking_t).initBuffer(&internal_buffer);
     comptime var index: usize = 1;
 
     var out_fields: [count + 1]Field = undefined;
@@ -806,7 +853,7 @@ test Parser {
 
     var material: types.MaterialConfig = undefined;
     var start = std.time.Timer.start() catch unreachable;
-    const iterations = 1;
+    const iterations = 100000;
     // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     // const allocator = arena.allocator();
     // defer arena.deinit();
