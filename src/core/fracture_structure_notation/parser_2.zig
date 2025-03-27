@@ -58,6 +58,7 @@ pub const LoadError = error{
     fsd_major_version_mismatch,
     fsd_minor_version_mismatch,
     fsd_patch_version_mismatch,
+    @"invalid_version_missing.",
     @"invalid_fsd_missing_=",
     invalid_fsd_invalid_field_name,
     @"invalid_fsd_missing_:",
@@ -81,12 +82,58 @@ const Token = struct {
     start: u16,
     end: u16,
 
+    const keywords = std.StaticStringMap(Tag).initComptime(.{
+        .{ "u8", .u8 },
+        .{ "u16", .u16 },
+        .{ "u32", .u32 },
+        .{ "u64", .u64 },
+        .{ "u128", .u128 },
+        .{ "i8", .i8 },
+        .{ "i16", .i16 },
+        .{ "i32", .i32 },
+        .{ "i64", .i64 },
+        .{ "i128", .i128 },
+        .{ "f16", .f16 },
+        .{ "f32", .f32 },
+        .{ "f64", .f64 },
+        .{ "f80", .f80 },
+        .{ "f128", .f128 },
+        .{ "bool", .bool },
+        .{ "vec2s", .vec2s },
+        .{ "vec3s", .vec3s },
+        .{ "vec4s", .vec4s },
+        .{ "Texture", .texture },
+        .{ "def", .def },
+        .{ "true", .true },
+        .{ "false", .false },
+    });
+
     pub const Tag = enum(u8) {
-        IDENTIFIER,
-        INTEGER,
-        FLOAT,
+        u8 = 0,
+        u16 = 1,
+        u32 = 2,
+        u64 = 3,
+        u128 = 4,
+        i8 = 5,
+        i16 = 6,
+        i32 = 7,
+        i64 = 8,
+        i128 = 9,
+        f16 = 10,
+        f32 = 11,
+        f64 = 12,
+        f80 = 13,
+        f128 = 14,
+        bool = 15,
+        vec2s = 16,
+        vec3s = 17,
+        vec4s = 19,
+        indentifier,
+        number_literal,
+        string_literal,
         @"\"",
         @".",
+        @",",
         @":",
         @"@",
         @"=",
@@ -94,17 +141,200 @@ const Token = struct {
         @"]",
         @"{",
         @"}",
+        texture,
+        def,
+        invalid,
+        eof,
+        true,
+        false,
     };
+
+    pub fn base_type(self: Token) ?BaseType {
+        const int: u8 = @intFromEnum(self.tag);
+        if (int <= 19) {
+            return @enumFromInt(int);
+        } else {
+            return null;
+        }
+    }
+
+    pub fn getKeyword(bytes: []const u8) ?Tag {
+        return keywords.get(bytes);
+    }
 };
 
 // std.zig.Tokenizer
 const Tokenizer = struct {
-    source: []const u8,
-    ptr: usize,
+    source: [:0]const u8,
+    ptr: u16,
 
     const State = enum(u8) {
         start,
+        integer_literal,
+        float_literal,
+        identifier_literal,
+        string_literal,
+        string_literal_backslash,
+        invalid,
+        comment,
     };
+
+    pub fn init(data: [:0]const u8) Tokenizer {
+        return .{
+            .source = data,
+            .ptr = 0,
+        };
+    }
+
+    pub fn next(self: *Tokenizer) Token {
+        var result = Token{
+            .tag = .invalid,
+            .start = self.ptr,
+            .end = undefined,
+        };
+
+        state_machine: switch (State.start) {
+            .start => {
+                switch (self.source[self.ptr]) {
+                    0 => {
+                        if (self.ptr == self.source.len) {
+                            return .{
+                                .tag = .eof,
+                                .start = self.ptr,
+                                .end = self.ptr,
+                            };
+                        } else {
+                            continue :state_machine .invalid;
+                        }
+                    },
+                    '0'...'9', '-' => {
+                        self.ptr += 1;
+                        result.tag = .number_literal;
+                        continue :state_machine .integer_literal;
+                    },
+                    ' ', '\n', '\t', '\r' => {
+                        self.ptr += 1;
+                        result.start = self.ptr;
+                        continue :state_machine .start;
+                    },
+                    'a'...'z', 'A'...'Z', '_' => {
+                        result.tag = .indentifier;
+                        continue :state_machine .identifier_literal;
+                    },
+                    '"' => {
+                        result.tag = .string_literal;
+                        continue :state_machine .string_literal;
+                    },
+                    '@' => {
+                        self.ptr += 1;
+                        result.tag = .@"@";
+                    },
+                    '=' => {
+                        self.ptr += 1;
+                        result.tag = .@"=";
+                    },
+                    '[' => {
+                        self.ptr += 1;
+                        result.tag = .@"[";
+                    },
+                    ']' => {
+                        self.ptr += 1;
+                        result.tag = .@"]";
+                    },
+                    '{' => {
+                        self.ptr += 1;
+                        result.tag = .@"{";
+                    },
+                    '}' => {
+                        self.ptr += 1;
+                        result.tag = .@"}";
+                    },
+                    '.' => {
+                        self.ptr += 1;
+                        result.tag = .@".";
+                    },
+                    ',' => {
+                        self.ptr += 1;
+                        result.tag = .@",";
+                    },
+                    ':' => {
+                        self.ptr += 1;
+                        result.tag = .@":";
+                    },
+                    '/' => continue :state_machine .comment,
+                    else => continue :state_machine .invalid,
+                }
+            },
+            .identifier_literal => {
+                self.ptr += 1;
+                switch (self.source[self.ptr]) {
+                    'a'...'z', 'A'...'Z', '_', '0'...'9' => continue :state_machine .identifier_literal,
+                    else => {
+                        const ident = self.source[result.start..self.ptr];
+                        if (Token.getKeyword(ident)) |tag| {
+                            result.tag = tag;
+                        }
+                    },
+                }
+            },
+            .integer_literal => {
+                switch (self.source[self.ptr]) {
+                    '.' => {
+                        self.ptr += 1;
+                        continue :state_machine .float_literal;
+                    },
+                    // TODO(adi): Get binary and hex numbers to work
+                    '_', '0'...'9' => {
+                        self.ptr += 1;
+                        continue :state_machine .integer_literal;
+                    },
+                    else => {},
+                }
+            },
+            .float_literal => {
+                switch (self.source[self.ptr]) {
+                    '_', '0'...'9' => {
+                        self.ptr += 1;
+                        continue :state_machine .float_literal;
+                    },
+                    else => {},
+                }
+            },
+            .string_literal => {
+                self.ptr += 1;
+                switch (self.source[self.ptr]) {
+                    0 => {
+                        if (self.ptr != self.source.len) {
+                            continue :state_machine .invalid;
+                        } else {
+                            result.tag = .invalid;
+                        }
+                    },
+                    '\n' => result.tag = .invalid,
+                    '"' => self.ptr += 1,
+                    '\\' => continue :state_machine .string_literal_backslash,
+                    0x01...0x09, 0x0b...0x1f, 0x7f => {
+                        continue :state_machine .invalid;
+                    },
+                    else => continue :state_machine .string_literal,
+                }
+            },
+            .string_literal_backslash => {
+                self.ptr += 1;
+                switch (self.source[self.ptr]) {
+                    0, '\n' => result.tag = .invalid,
+                    else => continue :state_machine .string_literal,
+                }
+            },
+            .comment => {},
+            .invalid => {
+                std.debug.print("INVALID: position: {d}[{d}], data: {d}\n", .{ self.ptr, self.source.len, self.source[self.ptr..] });
+            },
+        }
+
+        result.end = self.ptr;
+        return result;
+    }
 };
 
 pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias out_data: *s_type.get_type()) LoadError!void {
@@ -134,20 +364,10 @@ pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias 
     const length_file = try reader.read(&buffer);
     defer file.close();
     assert(length_file < MAX_BYTES);
+    buffer[length_file] = 0;
 
-    var parser_stack_buffer: [1024]ParserState = undefined;
-    var parser_stack = std.ArrayListUnmanaged(ParserState).initBuffer(&parser_stack_buffer);
+    const data: [:0]const u8 = buffer[0..length_file :0];
 
-    parser_stack.appendAssumeCapacity(.end_parsing);
-    parser_stack.appendNTimesAssumeCapacity(.read_statement, out_fields.len - 1);
-    parser_stack.appendAssumeCapacity(.read_header);
-
-    var data: []const u8 = buffer[0..length_file];
-
-    var column_number: u32 = 0;
-    var line_number: u32 = 0;
-
-    var read_head: u32 = 0;
     var field_current: u32 = 1;
 
     // TODO: Make this return a result object instead of an error along with info about the error
@@ -157,336 +377,176 @@ pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias 
     // input. Should we just load the entire file into memeory? I dont like that because i dont want there to be allocations here
     // But maybe that is fine in debug builds? If I were to do it i would do it in read_data. Just fill in a buffer of
     // 1024 tokens. Usually that should cover most files.
+    //
+    var tokenizer: Tokenizer = .init(data);
 
-    const result: ?LoadError = loop: switch (parser_stack.getLast()) {
-        .read_header => {
-            assert(data.len >= 5);
-            if (data[0] != '@') {
-                break :loop LoadError.@"invalid_fsd_expected_@_at_start";
+    var next_token: Token = undefined;
+
+    // next_token = tokenizer.next();
+    // var i: u32 = 0;
+    // std.debug.print("TOKENS: {s}\n", .{file_path});
+    // while (next_token.tag != .invalid and next_token.tag != .eof) {
+    //     std.debug.print("\t{d}. {s}: {s}\n", .{ i, @tagName(next_token.tag), data[next_token.start..next_token.end] });
+    //     next_token = tokenizer.next();
+    //     i += 1;
+    // }
+    // tokenizer.ptr = 0;
+
+    const result: ?LoadError = blk: {
+        { // NOTE: Parse header
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@"@");
+
+            next_token = tokenizer.next();
+            assert(next_token.tag == .def);
+
+            next_token = tokenizer.next();
+            if (next_token.tag != .indentifier and !std.mem.eql(u8, data[next_token.start..next_token.end], struct_name)) {
+                break :blk LoadError.invalid_fsd_invalid_file_type;
             }
 
-            const def: [4]u8 = .{ 'd', 'e', 'f', ' ' };
-
-            if (@as(u32, @bitCast(data[1..5].*)) != @as(u32, @bitCast(def))) {
-                return LoadError.invalid_fsd_missing_def;
-            }
-            data = data[5..];
-            column_number = 5;
-
-            // Expect the string to be the type of the structure
-            search: while (read_head < data.len) : (read_head += 1) {
-                if (data[read_head] == ' ') {
-                    break :search;
-                }
-            } else {
-                column_number += read_head;
-                break :loop LoadError.invalid_fsd_incomplete;
+            next_token = tokenizer.next();
+            if (next_token.tag != .number_literal and
+                std.fmt.parseInt(u4, data[next_token.start..next_token.end], 10) catch {
+                    break :blk LoadError.invalid_fsd_version;
+                } != T.version.major)
+            {
+                break :blk LoadError.fsd_major_version_mismatch;
             }
 
-            if (!std.mem.eql(u8, data[0..read_head], struct_name)) {
-                break :loop LoadError.invalid_fsd_invalid_file_type;
-            }
-            data = data[read_head + 1 ..];
-            column_number += @truncate(read_head + 1);
-            read_head = 0;
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@":");
 
-            // Read the version
-            search: while (read_head < data.len) : (read_head += 1) {
-                if (data[read_head] == '\n') {
-                    break :search;
-                }
-            } else {
-                column_number += read_head;
-                break :loop LoadError.invalid_fsd_incomplete;
+            next_token = tokenizer.next();
+            if (next_token.tag != .number_literal and
+                std.fmt.parseInt(u12, data[next_token.start..next_token.end], 10) catch {
+                    break :blk LoadError.invalid_fsd_version;
+                } != T.version.minor)
+            {
+                break :blk LoadError.fsd_minor_version_mismatch;
             }
 
-            var i: u32 = 0;
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@":");
 
-            const version: types.Version = T.version;
+            next_token = tokenizer.next();
+            if (next_token.tag != .number_literal and
+                std.fmt.parseInt(u16, data[next_token.start..next_token.end], 10) catch {
+                    break :blk LoadError.invalid_fsd_version;
+                } != T.version.minor)
+            {
+                break :blk LoadError.fsd_patch_version_mismatch;
+            }
+        }
 
-            while (i < read_head and data[i] != '.') : (i += 1) {}
+        // NOTE: Parse statements
+        inline for (0..out_fields.len - 1) |_| {
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@"@");
 
-            const major = std.fmt.parseInt(u4, data[0..i], 10) catch {
-                break :loop LoadError.invalid_fsd_version;
-            };
-            if (version.major != major) {
-                break :loop LoadError.fsd_major_version_mismatch;
+            next_token = tokenizer.next();
+            if (!std.mem.eql(u8, out_fields[field_current].name, data[next_token.start..next_token.end])) {
+                break :blk LoadError.invalid_fsd_invalid_field_name;
             }
 
-            data = data[i + 1 ..];
-            read_head -= i + 1;
-            column_number += @truncate(i + 1);
-            i = 0;
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@":");
 
-            while (i < read_head and data[i] != '.') : (i += 1) {}
-
-            const minor = std.fmt.parseInt(u4, data[0..i], 10) catch {
-                return LoadError.invalid_fsd_version;
-            };
-            if (version.minor != minor) {
-                return LoadError.fsd_minor_version_mismatch;
-            }
-
-            read_head -= i + 1;
-            data = data[i + 1 ..];
-            column_number += @truncate(i + 1);
-
-            const patch = std.fmt.parseInt(u16, data[0 .. read_head - 1], 10) catch {
-                return LoadError.invalid_fsd_version;
-            };
-            if (version.patch != patch) {
-                return LoadError.fsd_patch_version_mismatch;
-            }
-            data = data[read_head + 1 ..];
-            read_head = 0;
-            line_number += 1;
-
-            _ = parser_stack.pop();
-            continue :loop .read_statement;
-        },
-        .read_statement => {
-            assert(data.len > 2);
-            if (data[0] != '@') {
-                break :loop LoadError.@"invalid_fsd_expected_@_at_start";
-            }
-            data = data[1..];
-            column_number += 1;
-            _ = parser_stack.pop();
-            parser_stack.appendAssumeCapacity(.end_statement);
-            parser_stack.appendAssumeCapacity(.read_till_next_line);
-            parser_stack.appendAssumeCapacity(.parse_value);
-            parser_stack.appendAssumeCapacity(.read_value);
-            parser_stack.appendAssumeCapacity(.assert_equal);
-            parser_stack.appendAssumeCapacity(.read_next_token);
-            parser_stack.appendAssumeCapacity(.read_type);
-            parser_stack.appendAssumeCapacity(.read_next_token);
-            parser_stack.appendAssumeCapacity(.read_field);
-            parser_stack.appendAssumeCapacity(.read_next_token);
-            continue :loop .read_next_token;
-        },
-        .read_next_token => {
-            // NOTE: Before reading next token remove all white space
-            if (data[read_head] == ' ' or data[read_head] == '\t') {
-                consuming: while (read_head < data.len) : (read_head += 1) {
-                    if (data[read_head] == ' ' or data[read_head] == '\t') {
-                        continue :consuming;
-                    } else {
-                        data = data[read_head..];
-                        read_head = 0;
-                        break :consuming;
-                    }
-                } else {
-                    break :loop LoadError.invalid_fsd_incomplete;
-                }
-            } else {}
-
-            search: while (read_head < data.len) : (read_head += 1) {
-                if (data[read_head] != ' ' and data[read_head] != '\n' and data[read_head] != '\t' and data[read_head] != '\r') {
-                    continue :search;
-                } else {
-                    _ = parser_stack.pop();
-                    continue :loop parser_stack.getLast();
-                }
-            } else {
-                break :loop LoadError.invalid_fsd_incomplete;
-            }
-        },
-        .read_till_next_line => {
-            while (read_head < data.len) : (read_head += 1) {
-                if (data[read_head] == '\n') {
-                    _ = parser_stack.pop();
-                    data = data[read_head + 1 ..];
-                    line_number += 1;
-                    column_number = 0;
-                    continue :loop .end_statement;
-                }
-            }
-
-            break :loop LoadError.invalid_fsd_incomplete;
-        },
-        .assert_equal => {
-            assert(read_head == 1);
-            if (data[0] != '=') {
-                break :loop LoadError.@"invalid_fsd_missing_=";
-            }
-            data = data[2..];
-            read_head = 0;
-            _ = parser_stack.pop();
-            continue :loop .read_next_token;
-        },
-        .read_field => {
-            assert(read_head >= 2);
-            if (!std.mem.eql(u8, out_fields[field_current].name, data[0 .. read_head - 1])) {
-                break :loop LoadError.invalid_fsd_invalid_field_name;
-            }
-            if (data[read_head - 1] != ':') {
-                break :loop LoadError.@"invalid_fsd_missing_:";
-            }
-            data = data[read_head + 1 ..];
-            column_number += @truncate(read_head + 1);
-            read_head = 0;
-            _ = parser_stack.pop();
-            continue :loop .read_next_token;
-        },
-        .read_type => {
-            assert(read_head >= 2);
+            next_token = tokenizer.next();
             switch (out_fields[field_current].dtype) {
                 .base => |b| {
-                    if (!std.mem.eql(u8, @tagName(b), data[0..read_head])) {
-                        break :loop LoadError.invalid_fsd_incompatable_type;
+                    if (b != next_token.base_type()) {
+                        break :blk LoadError.invalid_fsd_incompatable_type;
                     }
                 },
                 .array => |*arr_info| {
-                    if (data[0] == '[') {
-                        var pos: usize = 1;
-                        column_number += 1;
+                    next_token = tokenizer.next();
+                    assert(next_token.tag == .@"[");
 
-                        while (pos < read_head and data[pos] != ']') : (pos += 1) {}
+                    next_token = tokenizer.next();
+                    if (next_token.tag != .number_literal) {
+                        break :blk LoadError.invalid_fsd_array_must_contain_length;
+                    }
 
-                        if (pos == 1) {
-                            break :loop LoadError.invalid_fsd_array_must_contain_length;
-                        }
+                    const len = std.fmt.parseUnsigned(u32, data[next_token.start..next_token.end], 10) catch {
+                        break :blk LoadError.invalid_fsd_invalid_integer;
+                    };
 
-                        const len = std.fmt.parseUnsigned(u32, data[1..pos], 10) catch {
-                            break :loop LoadError.invalid_fsd_invalid_integer;
-                        };
-                        if (len > arr_info.len) {
-                            break :loop LoadError.invalid_fsd_array_too_long;
-                        }
-                        arr_info.parsed_len = len;
+                    if (len > arr_info.len) {
+                        break :blk LoadError.invalid_fsd_array_too_long;
+                    }
+                    arr_info.parsed_len = len;
 
-                        column_number += @truncate(pos - 1);
-                        const type_name: []const u8 = @tagName(arr_info.base);
-                        if (!std.mem.eql(u8, type_name, data[pos + 1 .. read_head])) {
-                            break :loop LoadError.invalid_fsd_array_child_type_mismatch;
-                        }
-                        column_number += @truncate(type_name.len);
-                    } else {
-                        break :loop LoadError.invalid_fsd_incompatable_type;
+                    next_token = tokenizer.next();
+                    assert(next_token.tag == .@"]");
+
+                    next_token = tokenizer.next();
+                    if (arr_info.base != next_token.base_type()) {
+                        break :blk LoadError.invalid_fsd_array_child_type_mismatch;
                     }
                 },
                 .@"struct" => std.debug.panic("NOT IMPLEMENTED", .{}),
                 .texture => std.debug.panic("NOT IMPLEMENTED", .{}),
                 .@"enum" => std.debug.panic("NOT IMPLEMENTED", .{}),
             }
-            data = data[read_head + 1 ..];
-            column_number += @truncate(read_head + 1);
-            read_head = 0;
-            _ = parser_stack.pop();
-            continue :loop .read_next_token;
-        },
-        .read_value => {
-            // TODO: allow _ in numbers
+
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@"=");
+
+            next_token = tokenizer.next();
             switch (out_fields[field_current].dtype) {
-                .base => {
-                    _ = parser_stack.pop();
-                    parser_stack.appendAssumeCapacity(.read_next_token);
-                    continue :loop .read_next_token;
-                },
-                .array => {
-                    search: while (read_head < data.len) : (read_head += 1) {
-                        // NOTE: consume all the spaces before array start. Array must start on teh same line
-                        if (data[read_head] != ' ' and data[read_head] != '\t') {
-                            continue :search;
-                        } else if (data[read_head] == '[') {
-                            // NOTE: Only if you have a character after the [ character can you slice and continue
-                            // else go read some more data. This is to handle if [ is the last character in the buffer
-                            _ = parser_stack.pop();
-                            if (read_head < data.len - 1) {
-                                data = data[read_head + 1 ..];
-                                read_head = 0;
-                                parser_stack.appendAssumeCapacity(.parse_array);
-                                continue :loop .parse_array;
-                            } else {
-                                break :loop LoadError.invalid_fsd_incomplete;
+                .base => |b| {
+                    switch (b) {
+                        .vec2s, .vec3s, .vec4s => {
+                            assert(next_token.tag == .@"[");
+                            const vector: [*]f32 = @ptrCast(@alignCast(out_fields[field_current].data.?));
+                            var pos: usize = 0;
+                            for (0..4) |_| {
+                                next_token = tokenizer.next();
+                                assert(next_token.tag == .number_literal);
+                                vector[pos] = std.fmt.parseFloat(f32, data[next_token.start..next_token.end]) catch {
+                                    return LoadError.invalid_fsd_invalid_float;
+                                };
+                                next_token = tokenizer.next();
+                                if (next_token.tag == .@"]") {
+                                    break;
+                                }
+                                assert(next_token.tag == .@",");
+                                pos += 1;
                             }
-                        } else {
-                            break :loop LoadError.invalid_fsd_missing_array_start;
-                        }
-                    } else {
-                        break :loop LoadError.invalid_fsd_incomplete;
+                            // NOTE: If you provide more numbers than 4 this assert will get triggered
+                            assert(next_token.tag == .@"]");
+                        },
+                        else => {
+                            assert(next_token.tag == .number_literal);
+                            try parse_number_literal(b, data[next_token.start..next_token.end], out_fields[field_current].data.?);
+                        },
                     }
                 },
-                else => @panic("NOT IMPLEMENTED"),
-            }
-            unreachable;
-        },
-        .parse_value => {
-            switch (out_fields[field_current].dtype) {
-                .base => |b| try parse_base_types(b, data[0..read_head], out_fields[field_current].data.?),
                 .array => unreachable,
                 else => {},
             }
-            data = data[read_head..];
-            column_number += @truncate(read_head + 1);
-            read_head = 0;
-            _ = parser_stack.pop();
-            continue :loop .read_till_next_line;
-        },
-        .read_array_element => {
-            // NOTE: Eat the white spaces
-            if (data[read_head] == ' ' or data[read_head] == '\t' or data[read_head] == '\r' or data[read_head] == '\n') {
-                consuming: while (read_head < data.len) : (read_head += 1) {
-                    if (data[read_head] == ' ' or data[read_head] == '\t') {
-                        continue :consuming;
-                    } else {
-                        data = data[read_head..];
-                        read_head = 0;
-                        break :consuming;
-                    }
-                } else {
-                    break :loop LoadError.invalid_fsd_incomplete;
-                }
-            } else {}
 
-            search: while (read_head < data.len) : (read_head += 1) {
-                if (data[read_head] != ' ' and data[read_head] != ']') {
-                    continue :search;
-                } else {
-                    _ = parser_stack.pop();
-                    continue :loop parser_stack.getLast();
-                }
-            } else {
-                break :loop LoadError.invalid_fsd_incomplete;
-            }
-        },
-        .parse_array => {
-            const array_info = &out_fields[field_current].dtype.array;
-            assert(array_info.len > 0);
-
-            _ = parser_stack.pop();
-            continue :loop .read_till_next_line;
-        },
-        .end_statement => {
             field_current += 1;
-            _ = parser_stack.pop();
-            if (parser_stack.getLast() == .read_statement) {
-                continue :loop .read_statement;
-            } else {
-                continue :loop .end_parsing;
-            }
-        },
-        .end_parsing => break :loop null,
+        }
+
+        break :blk null;
     };
+
+    next_token = tokenizer.next();
+    assert(next_token.tag == .eof);
 
     if (result) |err| {
         std.debug.print(
-            "Error: {s} at field: {d}, line: {d}, column: {d}\n",
-            .{ @errorName(err), field_current, line_number, column_number },
+            "Error: {s} at field: {d}\n",
+            .{ @errorName(err), field_current },
         );
-        std.debug.print("Data: {s}", .{data});
     }
 
     // TODO(adi): write binary format to disc here
 }
 
-fn parser_array(array_data: *DType.ArrayInfo, data: []const u8, noalias out_data: *anyopaque) LoadError!void {
-    _ = data;
-    _ = out_data;
-    _ = array_data;
-}
-
-fn parse_base_types(base_type: BaseType, noalias payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
+fn parse_number_literal(base_type: BaseType, noalias payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
     switch (base_type) {
         .u8 => {
             const ptr: *u8 = @ptrCast(@alignCast(out_data));
@@ -549,7 +609,7 @@ fn parse_base_types(base_type: BaseType, noalias payload: []const u8, noalias ou
             };
         },
         .vec2s, .vec3s, .vec4s => {
-            // TODO: Call array parsing
+            unreachable;
         },
         else => unreachable,
     }
@@ -807,25 +867,25 @@ const DType = union(enum(u8)) {
 };
 
 const BaseType = enum(u8) {
-    u8,
-    u16,
-    u32,
-    u64,
-    u128,
-    i8,
-    i16,
-    i32,
-    i64,
-    i128,
-    f16,
-    f32,
-    f64,
-    f80,
-    f128,
-    bool,
-    vec2s,
-    vec3s,
-    vec4s,
+    u8 = 0,
+    u16 = 1,
+    u32 = 2,
+    u64 = 3,
+    u128 = 4,
+    i8 = 5,
+    i16 = 6,
+    i32 = 7,
+    i64 = 8,
+    i128 = 9,
+    f16 = 10,
+    f32 = 11,
+    f64 = 12,
+    f80 = 13,
+    f128 = 14,
+    bool = 15,
+    vec2s = 16,
+    vec3s = 17,
+    vec4s = 19,
 };
 
 const std = @import("std");
@@ -854,17 +914,8 @@ test Parser {
     var material: types.MaterialConfig = undefined;
     var start = std.time.Timer.start() catch unreachable;
     const iterations = 100000;
-    // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // const allocator = arena.allocator();
-    // defer arena.deinit();
     for (0..iterations) |_| {
         try load(.material, "test.fsd", &material);
-        // const file = try std.fs.cwd().openFile("test.zon", .{});
-        // defer file.close();
-        // const source = try file.readToEndAllocOptions(allocator, 10240, null, 1, 0);
-        // // const source = try file.readToEndAlloc(allocator, 1024);
-        // material = try std.zon.parse.fromSlice(types.MaterialConfig, allocator, source, null, .{ .free_on_error = false });
-        // _ = arena.reset(.retain_capacity);
     }
     const end = start.read() / iterations;
     std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});

@@ -1,6 +1,6 @@
 # Example 
 ```
-@def material 0.0.1
+@def material 0:0:1
 @name: [16]u8 = "test_material"
 @diffuse_colour: vec4s = [ 1.0, 1.0, 1.0, 1.0 ]
 @diffuse_map: Texture = "cobblestone1"
@@ -10,7 +10,7 @@
 TODO: Add specification to be able to reference other files to load into structures
 
 ```
-@def <definition_type> <major: u4>.<minor: u12>.<patch: u16>
+@def <definition_type> <major: u4>:<minor: u12>:<patch: u16>
 @<field>: <type> = <data>
 ```
 ...
@@ -30,7 +30,7 @@ This is the type of structure defined in the file
 Options:
  * material
 
-### <major: u4>.<minor: u12>.<patch: u16>
+### <major: u4>:<minor: u12>:<patch: u16>
 A period seperated version for the definition
 
 ## Fields
