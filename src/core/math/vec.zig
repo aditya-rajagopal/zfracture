@@ -4,7 +4,12 @@
 //      - [ ] Benchmark
 //      - [ ] Docstrings
 //      - [ ] Write tests
-pub const Component = enum { x, y, z, w };
+pub const Component = enum(u2) {
+    x = 0,
+    y = 1,
+    z = 2,
+    w = 3,
+};
 
 pub fn Vec2(comptime backing_type: type) type {
     return extern struct {

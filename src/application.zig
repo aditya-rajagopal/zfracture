@@ -6,13 +6,13 @@
 //            how much memory it needs at startup and give it that much memory to work with forever. Instead of an arena
 const core = @import("fr_core");
 const platform = @import("platform/platform.zig");
-const Frontend = @import("renderer/frontend.zig");
 
 const config = @import("config.zig");
-const application_config = config.app_config;
+const app_config = config.app_config;
 const DLL = switch (builtin.mode) {
     .Debug => struct {
-        instance: platform.LibraryHandle,
+        // instance: platform.LibraryHandle,
+        instance: std.DynLib,
         time_stamp: i128 align(8),
     },
     else => void,
@@ -25,7 +25,7 @@ engine: core.Fracture = undefined,
 log: EngineLog,
 platform_state: platform.PlatformState = undefined,
 
-frontend: Frontend = undefined,
+// frontend: Frontend = undefined,
 game_state: *anyopaque,
 api: core.API,
 dll: DLL,
@@ -39,7 +39,7 @@ const ApplicationError =
     core.log.LoggerError ||
     std.fs.File.OpenError ||
     std.fs.File.StatError ||
-    Frontend.FrontendError;
+    core.Renderer.Error;
 
 pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     var start = std.time.Timer.start() catch unreachable;
@@ -50,7 +50,6 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     app.engine.is_running = false;
     app.engine.is_suspended = false;
-    const app_config = application_config;
     switch (builtin.mode) {
         .Debug => {
             const file: std.fs.File = try std.fs.cwd().openFile(config.dll_name, .{});
@@ -125,20 +124,28 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Renderer
     const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
-    try app.frontend.init(
+    // try app.frontend.init(
+    //     renderer_allocator,
+    //     app_config.application_name,
+    //     &app.platform_state,
+    //     &app.engine.log_config,
+    //     &app.engine.extent,
+    //     &app.engine.event,
+    // );
+    try app.engine.renderer.init(
         renderer_allocator,
         app_config.application_name,
         &app.platform_state,
         &app.engine.log_config,
         &app.engine.extent,
-        &app.engine.event,
     );
-    errdefer app.frontend.deinit();
+    // errdefer app.frontend.deinit();
+    errdefer app.engine.renderer.deinit();
     app.log.info("Renderer initialized", .{});
 
-    app.engine.view = app.frontend.view;
-
     // Application
+    app.log.info("Engine memory: {any}\n", .{app.engine.memory.gpa});
+    app.log.debug("Engine address: {*}\n", .{&app.engine});
     app.game_state = app.api.init(&app.engine) orelse {
         @branchHint(.cold);
         app.log.fatal("Client application failed to initialize", .{});
@@ -162,7 +169,7 @@ pub fn deinit(self: *Application) void {
     self.log.info("Client application has been shutdown", .{});
 
     // Renderer shutdown
-    self.frontend.deinit();
+    self.engine.renderer.deinit();
     self.log.info("Renderer has been shutdown", .{});
 
     // Platform shutdown
@@ -221,41 +228,29 @@ pub fn run(self: *Application) ApplicationError!void {
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
-            if (!self.api.update(&self.engine, self.game_state)) {
-                @branchHint(.cold);
-                core_log.fatal("Client app update failed, shutting down", .{});
-                err = ApplicationError.FailedUpdate;
-                break;
-            }
+            if (self.engine.renderer.begin_frame(self.engine.delta_time)) {
+                if (!self.api.update_and_render(&self.engine, self.game_state)) {
+                    @branchHint(.cold);
+                    core_log.fatal("Client app update failed, shutting down", .{});
+                    err = ApplicationError.FailedUpdate;
+                    break;
+                }
 
-            if (self.engine.camera_dirty) {
-                self.frontend.set_object_view(&self.engine.view);
-                self.engine.camera_dirty = false;
-            }
+                if (!self.engine.renderer.end_frame(self.engine.delta_time)) {
+                    self.engine.is_running = false;
+                    continue;
+                }
 
-            if (!self.api.render(&self.engine, self.game_state)) {
-                @branchHint(.cold);
-                core_log.fatal("Client app render failed, shutting down", .{});
-                err = ApplicationError.FailedRender;
-                break;
-            }
+                delta_time += end;
+                frame_time += end;
+                frame_count += 1;
 
-            // HACK: Temporary packet passing
-            self.frontend.draw_frame(.{ .delta_time = self.engine.delta_time }) catch |e| {
-                err = e;
-                self.engine.is_running = false;
-                continue;
-            };
-
-            delta_time += end;
-            frame_time += end;
-            frame_count += 1;
-
-            if (frame_time > frame_rate_interval) {
-                current_frame_rate = @as(f32, @floatFromInt(frame_count - last_frame_count)) / @as(f32, @floatFromInt(frame_time));
-                current_frame_rate *= @as(f32, @floatFromInt(std.time.ns_per_s));
-                frame_time = 0;
-                last_frame_count = frame_count;
+                if (frame_time > frame_rate_interval) {
+                    current_frame_rate = @as(f32, @floatFromInt(frame_count - last_frame_count)) / @as(f32, @floatFromInt(frame_time));
+                    current_frame_rate *= @as(f32, @floatFromInt(std.time.ns_per_s));
+                    frame_time = 0;
+                    last_frame_count = frame_count;
+                }
             }
         }
 
@@ -269,7 +264,8 @@ pub fn run(self: *Application) ApplicationError!void {
                 if (self.dll.time_stamp != stats.mtime) {
                     self.log.debug("New DLL detected", .{});
                     self.dll.time_stamp = stats.mtime;
-                    _ = platform.free_library(self.dll.instance);
+                    // _ = platform.free_library(self.dll.instance);
+                    self.dll.instance.close();
                     _ = self.reload_library();
                 }
             },
@@ -325,7 +321,8 @@ pub fn on_event(self: *Application, comptime event_code: core.Event.EventCode, e
 
                     if (self.engine.is_running) {
                         _ = self.engine.event.fire(.WINDOW_RESIZE, &self.engine, event_data);
-                        self.frontend.on_resize(self.engine.extent);
+                        self.engine.renderer.on_resize(self.engine.extent);
+                        self.api.on_resize(&self.engine, self.game_state, self.engine.extent.width, self.engine.extent.height);
                     }
                 }
             }
@@ -340,16 +337,15 @@ fn reload_library(self: *Application) bool {
         return false;
     }
 
-    self.dll.instance = platform.load_library(new_name) orelse return false;
-    const init_fn = platform.library_lookup(self.dll.instance, "init", core.InitFn) orelse return false;
-    const deinit_fn = platform.library_lookup(self.dll.instance, "deinit", core.DeinitFn) orelse return false;
-    const update = platform.library_lookup(self.dll.instance, "update", core.UpdateFn) orelse return false;
-    const render = platform.library_lookup(self.dll.instance, "render", core.RenderFn) orelse return false;
-    const on_resize = platform.library_lookup(self.dll.instance, "on_resize", core.OnResizeFn) orelse return false;
+    self.dll.instance = std.DynLib.open(new_name) catch return false;
+    const init_fn = self.dll.instance.lookup(core.InitFn, "init") orelse return false;
+    const deinit_fn = self.dll.instance.lookup(core.DeinitFn, "deinit") orelse return false;
+    const update_and_render = self.dll.instance.lookup(core.UpdateAndRenderFn, "update_and_render") orelse return false;
+    const on_resize = self.dll.instance.lookup(core.OnResizeFn, "on_resize") orelse return false;
+
     self.api.init = init_fn;
     self.api.deinit = deinit_fn;
-    self.api.update = update;
-    self.api.render = render;
+    self.api.update_and_render = update_and_render;
     self.api.on_resize = on_resize;
     return true;
 }

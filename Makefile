@@ -2,7 +2,7 @@ debug: game
 	zig build -freference-trace && .\zig-out\bin\game.exe
 
 game:
-	zig build game -freference-trace  --summary all
+	zig build game -freference-trace
 
 check:
 	zig build check

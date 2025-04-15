@@ -693,6 +693,7 @@ pub fn read(file: std.fs.File, allocator: Allocator, comptime config: ImageLoadC
         .data = out_data,
         .height = ctx.info.height,
         .width = ctx.info.width,
+        .channels = num_channles,
     };
 }
 

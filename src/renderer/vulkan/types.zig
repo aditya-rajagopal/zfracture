@@ -2,15 +2,16 @@ const vk = @import("vulkan");
 const core = @import("fr_core");
 const Image = @import("image.zig");
 
-const T = @import("../types.zig");
+const T = core.renderer;
 pub const RendererLog = T.RendererLog;
 pub const MaterialInstanceID = T.MaterialInstanceID;
 pub const Vertex3D = T.Vertex3D;
 pub const GlobalUO = T.GlobalUO;
-pub const ObjectUO = T.ObjectUO;
+pub const MaterialUO = T.MaterialUO;
 pub const RenderData = T.RenderData;
 
 pub const Generation = core.resource.Generation;
+pub const ResourceHandle = core.resource.ResourceHandle;
 
 pub const MAX_MATERIAL_INSTANCES = T.MAX_MATERIAL_INSTANCES;
 
@@ -77,26 +78,28 @@ pub const CommandBufferState = enum(u8) {
 };
 
 // TODO: Seperate file?
-pub const TextureData = struct {
+pub const vkTextureData = struct {
     image: Image,
     sampler: vk.Sampler,
 };
 
 // TODO: Should this be somehting universal?
 
-pub const OBJECT_SHADER_DESCRIPTOR_COUNT = 2;
+pub const MATERIAL_SHADER_DESCRIPTOR_COUNT = 2;
 
 pub const DescriptorState = extern struct {
     // One per frame
     generations: [MAX_DESCRIPTOR_SETS]Generation,
+    ids: [MAX_DESCRIPTOR_SETS]ResourceHandle,
+    external_handles: [MAX_DESCRIPTOR_SETS]u64,
 };
 
-pub const ObjectShaderObjectState = extern struct {
+pub const MaterialShaderInstanceState = extern struct {
     descriptor_sets: [MAX_DESCRIPTOR_SETS]vk.DescriptorSet,
-    descriptor_states: [OBJECT_SHADER_DESCRIPTOR_COUNT]DescriptorState,
+    descriptor_states: [MATERIAL_SHADER_DESCRIPTOR_COUNT]DescriptorState,
 };
 
-const MAX_DESCRIPTOR_SETS = @import("object_shader.zig").MAX_DESCRIPTOR_SETS;
+const MAX_DESCRIPTOR_SETS = @import("material_shader.zig").MAX_DESCRIPTOR_SETS;
 const std = @import("std");
 const builtin = @import("builtin");
 const windows = @import("std").os.windows;

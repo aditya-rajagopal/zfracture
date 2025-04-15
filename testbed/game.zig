@@ -7,15 +7,25 @@ const GameLog = core.log.ScopedLogger(core.log.default_log, .GAME, core.log.defa
 pub const GameState = struct {
     delta_time: f64,
     log: GameLog,
+    // HACK: temp
+    generation: u32,
+    // HACK: Camera needed here
+    near_clip: f32,
+    far_clip: f32,
+    projection: m.Mat4,
     camera_pos: m.Vec3,
     camera_euler: m.Vec3,
     camera_dirty: bool,
+    view: m.Mat4,
     move_speed: f32,
-    // HACK: temp
-    generation: u32,
+    // HACK: For now this lives here
+    render_data: core.renderer.RenderData,
+    // HACK: Load random textures
+    textures: [3]core.renderer.texture_system.TextureHandle,
 };
 
 pub fn init(engine: *core.Fracture) ?*anyopaque {
+    std.debug.print("In the second call: {*}\n", .{engine});
     const foo_allocator: std.mem.Allocator = engine.memory.gpa.get_type_allocator(.game);
     const state = foo_allocator.create(GameState) catch return null;
     state.delta_time = 1.0;
@@ -25,12 +35,20 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     state.camera_dirty = true;
     state.move_speed = 5.0;
     state.generation = 0;
-    engine.camera_dirty = true;
-    // _ = engine.event.register(.KEY_PRESS, state, random_event);
-    // _ = engine.event.register(.KEY_RELEASE, state, random_event);
-    // _ = engine.event.register(.KEY_ESCAPE, state, random_event);
-    // _ = engine.event.register(.MOUSE_BUTTON_PRESS, state, random_event);
-    // _ = engine.event.register(.MOUSE_BUTTON_RELEASE, state, random_event);
+    state.near_clip = 0.1;
+    state.near_clip = 0.1;
+    state.far_clip = 1000.0;
+    state.projection = m.Mat4.perspective(m.deg_to_rad(45.0), 1920.0 / 1080.0, state.near_clip, state.far_clip);
+    state.view = m.Transform.init_trans(&m.Vec3.init(0.0, 0.0, -2.0)).to_mat();
+    state.render_data.material_id = engine.renderer.shader_acquire_resource();
+    state.render_data.model = m.Transform.identity;
+    state.render_data.textures[0] = .missing_texture;
+    state.textures = [_]core.renderer.texture_system.TextureHandle{.null_handle} ** 3;
+    const names = [_][]const u8{ "paving", "cobblestone", "paving2" };
+    for (names, 0..) |name, i| {
+        state.textures[i] = engine.renderer.textures.create(name, false);
+    }
+    state.log.debug("Textures: {any}\n", .{state.textures});
     return state;
 }
 
@@ -38,14 +56,9 @@ pub fn deinit(engine: *core.Fracture, game_state: *anyopaque) void {
     const state: *GameState = @ptrCast(@alignCast(game_state));
     const foo_allocator = engine.memory.gpa.get_type_allocator(.game);
     foo_allocator.destroy(state);
-    // _ = engine.event.deregister(.KEY_PRESS, game_state, random_event);
-    // _ = engine.event.deregister(.KEY_RELEASE, game_state, random_event);
-    // _ = engine.event.deregister(.KEY_ESCAPE, game_state, random_event);
-    // _ = engine.event.deregister(.MOUSE_BUTTON_PRESS, game_state, random_event);
-    // _ = engine.event.deregister(.MOUSE_BUTTON_RELEASE, game_state, random_event);
 }
 
-pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
+pub fn update_and_render(engine: *core.Fracture, game_state: *anyopaque) bool {
     const state: *GameState = @ptrCast(@alignCast(game_state));
     const frame_alloc = engine.memory.frame_allocator.get_type_allocator(.untagged);
     const temp_data = frame_alloc.alloc(f32, 16) catch return false;
@@ -55,13 +68,13 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         engine.memory.gpa.print_memory_stats();
         engine.memory.frame_allocator.print_memory_stats();
     }
+
     { // HACK: Flipping through textures
         if (engine.input.key_pressed_this_frame(.T)) {
             state.log.debug("Changing Texture", .{});
-            var data: core.Event.EventData = undefined;
-            data[0..4].* = @bitCast(state.generation);
-            _ = engine.event.fire_static(.DEBUG0, null, data);
+            const index = state.generation % 3;
             state.generation += 1;
+            state.render_data.textures[0] = state.textures[index];
         }
     }
 
@@ -87,32 +100,32 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         var velocity = m.Vec3.zeros;
 
         if (engine.input.is_key_down(.W)) {
-            const forward = engine.view.to_affine().get_forward();
+            const forward = state.view.to_affine().get_forward();
             velocity = velocity.add(&forward);
         }
 
         if (engine.input.is_key_down(.S)) {
-            const backward = engine.view.to_affine().get_backward();
+            const backward = state.view.to_affine().get_backward();
             velocity = velocity.add(&backward);
         }
 
         if (engine.input.is_key_down(.A)) {
-            const left = engine.view.to_affine().get_left();
+            const left = state.view.to_affine().get_left();
             velocity = velocity.add(&left);
         }
 
         if (engine.input.is_key_down(.D)) {
-            const right = engine.view.to_affine().get_right();
+            const right = state.view.to_affine().get_right();
             velocity = velocity.add(&right);
         }
 
         if (engine.input.is_key_down(.RSHIFT)) {
-            const up = engine.view.to_affine().get_up();
+            const up = state.view.to_affine().get_up();
             velocity = velocity.add(&up);
         }
 
         if (engine.input.is_key_down(.LCONTROL)) {
-            const down = engine.view.to_affine().get_down();
+            const down = state.view.to_affine().get_down();
             velocity = velocity.add(&down);
         }
 
@@ -132,11 +145,14 @@ pub fn update(engine: *core.Fracture, game_state: *anyopaque) bool {
         if (state.camera_dirty) {
             const rot = m.Transform.init_rot_xyz(state.camera_euler.x(), state.camera_euler.y(), state.camera_euler.z());
             const trans = m.Transform.init_trans(&state.camera_pos);
-            engine.view = trans.mul(&rot).inv_tr().to_mat();
-            // engine.view = rot.mul(&trans).inv_tr().to_mat();
-            engine.camera_dirty = true;
+            state.view = trans.mul(&rot).inv_tr().to_mat();
             state.camera_dirty = false;
         }
+    }
+
+    { // HACK: Rendering
+        engine.renderer.update_global_state(state.projection, state.view, m.Vec3.zeros, m.Vec4.ones, 0);
+        engine.renderer.draw_temp_object(state.render_data);
     }
 
     return true;
@@ -159,32 +175,11 @@ inline fn camera_roll(state: *GameState, amount: f32) void {
     state.camera_dirty = true;
 }
 
-pub fn render(engine: *core.Fracture, game_state: *anyopaque) bool {
-    _ = engine;
-    _ = game_state;
-    return true;
-}
-
-pub fn random_event(
-    event_code: core.Event.EventCode,
-    event_data: core.Event.EventData,
-    listener: ?*anyopaque,
-    sender: ?*anyopaque,
-) bool {
-    _ = sender;
-    if (listener) |l| {
-        const game_state: *GameState = @ptrCast(@alignCast(l));
-        game_state.log.err("FROM GAME: {s}", .{@tagName(event_code)});
-        game_state.log.err("FROM GAME: {any}", .{event_data});
-    }
-    return true;
-}
-
 pub fn on_resize(engine: *core.Fracture, game_state: *anyopaque, width: u32, height: u32) void {
-    _ = engine; // autofix
-    _ = game_state;
-    _ = width;
-    _ = height;
+    _ = engine;
+    const state: *GameState = @ptrCast(@alignCast(game_state));
+    const aspect_ratio = @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
+    state.projection = m.Mat4.perspective(m.deg_to_rad(45.0), aspect_ratio, state.near_clip, state.far_clip);
 }
 
 const std = @import("std");

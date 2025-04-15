@@ -104,5 +104,70 @@ test MergeEnums {
     try testing.expect(enum_info.@"enum".fields.len == 6);
 }
 
+pub fn get_access_type(dtype: type, comptime field_stack: []const []const u8) type {
+    comptime assert(field_stack.len > 0);
+    var current_type = dtype;
+    var info = @typeInfo(current_type);
+    switch (info) {
+        .pointer => {
+            current_type = info.pointer.child;
+            info = @typeInfo(current_type);
+        },
+        .@"struct" => {},
+        else => @compileError("Unsupported type"),
+    }
+    comptime assert(info == .@"struct");
+    comptime assert(@hasField(current_type, field_stack[0]));
+    const name = field_stack[0];
+    for (info.@"struct".fields) |field| {
+        if (comptime std.mem.eql(u8, field.name, name)) {
+            if (field_stack.len > 1) {
+                return get_access_type(field.type, field_stack[1..]);
+            } else {
+                return field.type;
+            }
+        }
+    }
+}
+
+pub fn get_nested(
+    final_type: type,
+    data_ptr: anytype,
+    comptime field_stack: []const []const u8,
+) *final_type {
+    if (comptime field_stack.len > 1) {
+        return get_nested(final_type, &@field(data_ptr, field_stack[0]), field_stack[1..]);
+    } else {
+        return &@field(data_ptr, field_stack[0]);
+    }
+}
+
+test get_nested {
+    const InternalStruct = struct { _x0: u16 = 69, _x2: u32 = 420 };
+    const CustomStructure = struct {
+        data: u16 = 666,
+        data_2: InternalStruct = .{},
+    };
+    var a = CustomStructure{};
+
+    const access = &[_][]const u8{ "data_2", "_x0" };
+    const access_type = get_access_type(@TypeOf(&a), access);
+    try testing.expectEqual(access_type, u16);
+    const value_ptr = get_nested(access_type, &a, access);
+    try testing.expectEqual(value_ptr.*, 69);
+    a.data_2._x0 = 420;
+    try testing.expectEqual(value_ptr.*, 420);
+
+    const access_2 = &[_][]const u8{"data_2"};
+    const access_type_2 = get_access_type(@TypeOf(&a), access_2);
+    try testing.expectEqual(access_type_2, InternalStruct);
+    const value_ptr_2 = get_nested(access_type_2, &a, access_2);
+    try testing.expectEqual(value_ptr_2.*, InternalStruct{ ._x0 = 420, ._x2 = 420 });
+    value_ptr_2._x0 = 69;
+    try testing.expectEqual(value_ptr_2.*, InternalStruct{ ._x0 = 69, ._x2 = 420 });
+    try testing.expectEqual(value_ptr.*, 69);
+}
+
 const std = @import("std");
+const assert = std.debug.assert;
 const testing = std.testing;

@@ -1,6 +1,7 @@
 // TODO: Maybe just use stb_image in a tool that processes the image into a fracture format and read that here.
 const png = @import("image/png.zig");
 pub const ImageFileType = T.ImageFileType;
+pub const Image = T.Image;
 
 pub const LoadImageError = Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError;
 

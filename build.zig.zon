@@ -1,5 +1,6 @@
 .{
-    .name = "fracture",
+    .fingerprint = 0x83dd75e65d5ab678,
+    .name = .fracture,
     // This is a [Semantic Version](https://semver.org/).
     // In a future version of Zig it will be used for package deduplication.
     .version = "0.0.1",
@@ -7,7 +8,7 @@
     // This field is optional.
     // This is currently advisory only; Zig does not yet do anything
     // with this value.
-    .minimum_zig_version = "0.14.0-dev.1913+7b8fc18c6",
+    .minimum_zig_version = "0.14.0",
 
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
@@ -16,16 +17,16 @@
     // internet connectivity.
     .dependencies = .{
         .vulkan = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/06dae6c.tar.gz",
-            .hash = "1220edeb3fc7dfc40e6fde705a108edce0a3cc76d165a7c9919d1fb037eccec43372",
+            .url = "https://github.com/Snektron/vulkan-zig/archive/dcd5388.tar.gz",
+            .hash = "vulkan-0.0.0-r7Ytxy5bAwASnqFlLMD4V42z3LolS8n7xv3RlbXhAhv0",
         },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
             .hash = "1220a7e73d72a0d56bc2a65f9d8999a7c019e42260a0744c408d1cded111bc205e10",
         },
         .shader_compiler = .{
-            .url = "https://github.com/Games-by-Mason/shader_compiler/archive/4624dc3.tar.gz",
-            .hash = "12205f1329f05c61439890cf84ed36984d4e2932e6eb026da9e418c29032d49a6c79",
+            .url = "https://github.com/Games-by-Mason/shader_compiler/archive/7f0c4c4.tar.gz",
+            .hash = "shader_compiler-0.0.0-bOVsalpvAAATNIRMouquuDpg55A8Sqhg22EnX9kQ6Cl7",
         },
     },
     .paths = .{

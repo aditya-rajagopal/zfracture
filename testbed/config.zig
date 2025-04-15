@@ -4,8 +4,7 @@ const game = @import("game.zig");
 pub const app_api: core.API = .{
     .init = game.init,
     .deinit = game.deinit,
-    .update = game.update,
-    .render = game.render,
+    .update_and_render = game.update_and_render,
     .on_resize = game.on_resize,
 };
 
@@ -14,3 +13,5 @@ pub const app_config: core.AppConfig = .{
     .window_pos = .{ .x = 0, .y = 0, .width = 1920, .height = 1080 },
     .frame_arena_preheat_size = .{ .MB = 512 },
 };
+
+pub const renderer_backend = @import("vulkan_backend");

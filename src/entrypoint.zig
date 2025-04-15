@@ -10,7 +10,12 @@ const core = @import("fr_core");
 pub fn main() !void {
     // Allocator init
     // TODO: Get the allocator from somewhere else. Platform?
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
+    // const allocator = std.mem.Allocator{
+    //     .ptr = undefined,
+    //     .vtable = &std.heap.SmpAllocator.vtable,
+    // };
+    var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
     defer {
         const check = gpa.deinit();

@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) !void {
     // ====================================== Shader Compile =======================/
 
     const shader_compiler = b.dependency("shader_compiler", .{
-        .target = b.host,
+        .target = b.graph.host,
         .optimize = .ReleaseFast,
     }).artifact("shader_compiler");
 
@@ -40,33 +40,46 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+
     shaders.addAnonymousImport(
-        "builtin.ObjectShader.vert",
+        "builtin.MaterialShader.vert",
         .{ .root_source_file = compile_shader(
             b,
             optimize,
             shader_compiler,
-            b.path("assets/shaders/builtin.ObjectShader.vert"),
-            "assets/shaders/builtin.ObjectShader.vert.spv",
+            b.path("assets/shaders/builtin.MaterialShader.vert"),
+            "assets/shaders/builtin.MaterialShader.vert.spv",
         ) },
     );
     shaders.addAnonymousImport(
-        "builtin.ObjectShader.frag",
+        "builtin.MaterialShader.frag",
         .{ .root_source_file = compile_shader(
             b,
             optimize,
             shader_compiler,
-            b.path("assets/shaders/builtin.ObjectShader.frag"),
-            "assets/shaders/builtin.ObjectShader.frag.spv",
+            b.path("assets/shaders/builtin.MaterialShader.frag"),
+            "assets/shaders/builtin.MaterialShader.frag.spv",
         ) },
+    );
+    const vulkan_backend = b.addModule(
+        "vulkan_backend",
+        .{
+            .root_source_file = b.path("src/renderer/vulkan/context.zig"),
+            .imports = &.{
+                .{ .name = "fr_core", .module = core_lib },
+                .{ .name = "vulkan", .module = vulkan },
+                .{ .name = "shaders", .module = shaders },
+            },
+            .target = target,
+            .optimize = optimize,
+        },
     );
 
     const entrypoint = b.addModule("entrypoint", .{
         .root_source_file = b.path("src/entrypoint.zig"),
         .imports = &.{
             .{ .name = "fr_core", .module = core_lib },
-            .{ .name = "vulkan", .module = vulkan },
-            .{ .name = "shaders", .module = shaders },
+            .{ .name = "vulkan_backend", .module = vulkan_backend },
         },
         .target = target,
         .optimize = optimize,
@@ -81,6 +94,7 @@ pub fn build(b: *std.Build) !void {
     });
     exe.root_module.addImport("entrypoint", entrypoint);
     exe.root_module.addImport("fr_core", core_lib);
+    exe.root_module.addImport("vulkan_backend", vulkan_backend);
 
     b.installArtifact(exe);
 
@@ -105,13 +119,18 @@ pub fn build(b: *std.Build) !void {
     docs_step.dependOn(&install_docs.step);
 
     // ==================================== GAME DLL ==================================/
-    const game_dll = b.addSharedLibrary(.{
-        .name = "dynamic_game",
+    const dll_module = b.addModule("dynamic_game", .{
         .root_source_file = b.path("testbed/app.zig"),
         .target = target,
         .optimize = optimize,
     });
+    const game_dll = b.addLibrary(.{
+        .name = "dynamic_game",
+        .linkage = .dynamic,
+        .root_module = dll_module,
+    });
     game_dll.root_module.addImport("fr_core", core_lib);
+    game_dll.root_module.addImport("vulkan_backend", vulkan_backend);
 
     const dll_step = b.addInstallArtifact(game_dll, .{});
 
@@ -127,6 +146,7 @@ pub fn build(b: *std.Build) !void {
     });
     exe_check.root_module.addImport("entrypoint", entrypoint);
     exe_check.root_module.addImport("fr_core", core_lib);
+    exe_check.root_module.addImport("vulkan_backend", vulkan_backend);
 
     const check_step = b.step("check", "Check if the app compiles");
     check_step.dependOn(&exe_check.step);
