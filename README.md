@@ -1,5 +1,5 @@
 # zfracture
-Game engine in Zig for learning and also for making my own game.
+A 3D Game engine in Zig for learning and also for making my own game.
 
 <img src="https://github.com/aditya-rajagopal/zfracture/blob/master/fracture_logo/fracture_logo_small.png" alt="Fracture Engine" width="256" height="256"/>
 
@@ -10,6 +10,10 @@ This language is built in [zig](https://ziglang.org/download) and it needs to be
 ```
 make debug
 ```
+
+You can then use wasd to move around in the world and view the texture from different angles.
+
+<img src="https://github.com/aditya-rajagopal/zfracture/blob/master/fracture_logo/screenshot.png" alt="Fracture Engine" width="480" height="270"/>
 
 ## Architecture
 
