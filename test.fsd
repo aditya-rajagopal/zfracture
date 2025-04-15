@@ -1,5 +1,6 @@
 @def MaterialConfig 0:0:1
-@data:  u8 = 5
+@data:  u8 = 5 //Comment should be ignored
 @data2: i8 =  -5
 @data3: f32 = 2.25
-@data4: vec3s = [ 1.0, 2.0, 3.0 ]
+@data4: vec3s =  [1.0, 2.0, 3.0 ]
+@data5: [6]f32 =  [1.0, 2.0, 3.0, 4.0, 5.0, 6.0 ]

@@ -69,6 +69,7 @@ pub const LoadError = error{
     invalid_fsd_invalid_integer,
     invalid_fsd_array_too_long,
     invalid_fsd_missing_array_start,
+    string_too_long,
 } || std.fs.File.OpenError || std.fs.File.ReadError;
 
 // NOTE: If the fsd file is larger than 16 pages use the alloc version of load
@@ -102,6 +103,7 @@ const Token = struct {
         .{ "vec2s", .vec2s },
         .{ "vec3s", .vec3s },
         .{ "vec4s", .vec4s },
+        .{ "string", .string },
         .{ "Texture", .texture },
         .{ "def", .def },
         .{ "true", .true },
@@ -128,6 +130,7 @@ const Token = struct {
         vec2s = 16,
         vec3s = 17,
         vec4s = 19,
+        string = 20,
         indentifier,
         number_literal,
         string_literal,
@@ -261,7 +264,13 @@ const Tokenizer = struct {
                         self.ptr += 1;
                         result.tag = .@":";
                     },
-                    '/' => continue :state_machine .comment,
+                    '/' => {
+                        self.ptr += 1;
+                        if (self.source[self.ptr] != '/') {
+                            continue :state_machine .invalid;
+                        }
+                        continue :state_machine .comment;
+                    },
                     else => continue :state_machine .invalid,
                 }
             },
@@ -326,7 +335,20 @@ const Tokenizer = struct {
                     else => continue :state_machine .string_literal,
                 }
             },
-            .comment => {},
+            .comment => {
+                self.ptr += 1;
+                switch (self.source[self.ptr]) {
+                    '\n' => {
+                        self.ptr += 1;
+                        result.start = self.ptr;
+                        continue :state_machine .start;
+                    },
+                    0 => {
+                        continue :state_machine .start;
+                    },
+                    else => continue :state_machine .comment,
+                }
+            },
             .invalid => {
                 std.debug.print("INVALID: position: {d}[{d}], data: {d}\n", .{ self.ptr, self.source.len, self.source[self.ptr..] });
             },
@@ -337,12 +359,16 @@ const Tokenizer = struct {
     }
 };
 
+const DEBUG_TOKENS: bool = false;
+
 pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias out_data: *s_type.get_type()) LoadError!void {
     const T = s_type.get_type();
 
     // TODO: Figure out a way to capture enum fields as strings
 
     out_data.* = .{};
+    // TODO: Maybe have 2 arrays? one for field infos which will be comptime known and the pointers which is computed
+    // at runtime
     const fields = comptime get_fields(T);
     var out_fields = fill_pointers(T, &fields, out_data);
 
@@ -370,27 +396,21 @@ pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias 
 
     var field_current: u32 = 1;
 
-    // TODO: Make this return a result object instead of an error along with info about the error
     // TODO: Allow arrays of arrays
-    // TODO: Allow comments
-    // TODO: Should there be a token buffer that we fill up and then parse that way? That might not work with buffered
-    // input. Should we just load the entire file into memeory? I dont like that because i dont want there to be allocations here
-    // But maybe that is fine in debug builds? If I were to do it i would do it in read_data. Just fill in a buffer of
-    // 1024 tokens. Usually that should cover most files.
-    //
     var tokenizer: Tokenizer = .init(data);
-
     var next_token: Token = undefined;
 
-    // next_token = tokenizer.next();
-    // var i: u32 = 0;
-    // std.debug.print("TOKENS: {s}\n", .{file_path});
-    // while (next_token.tag != .invalid and next_token.tag != .eof) {
-    //     std.debug.print("\t{d}. {s}: {s}\n", .{ i, @tagName(next_token.tag), data[next_token.start..next_token.end] });
-    //     next_token = tokenizer.next();
-    //     i += 1;
-    // }
-    // tokenizer.ptr = 0;
+    if (comptime DEBUG_TOKENS) {
+        next_token = tokenizer.next();
+        var i: u32 = 0;
+        std.debug.print("TOKENS: {s}\n", .{file_path});
+        while (next_token.tag != .invalid and next_token.tag != .eof) {
+            std.debug.print("\t{d}. {s}: {s}\n", .{ i, @tagName(next_token.tag), data[next_token.start..next_token.end] });
+            next_token = tokenizer.next();
+            i += 1;
+        }
+        tokenizer.ptr = 0;
+    }
 
     const result: ?LoadError = blk: {
         { // NOTE: Parse header
@@ -460,29 +480,31 @@ pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias 
                     }
                 },
                 .array => |*arr_info| {
-                    next_token = tokenizer.next();
-                    assert(next_token.tag == .@"[");
+                    if (next_token.tag == .string) {
+                        arr_info.parsed_len = arr_info.len;
+                    } else {
+                        assert(next_token.tag == .@"[");
+                        next_token = tokenizer.next();
+                        assert(next_token.tag == .number_literal);
+                        const len = std.fmt.parseUnsigned(u32, data[next_token.start..next_token.end], 10) catch {
+                            break :blk LoadError.invalid_fsd_invalid_integer;
+                        };
 
-                    next_token = tokenizer.next();
-                    if (next_token.tag != .number_literal) {
-                        break :blk LoadError.invalid_fsd_array_must_contain_length;
-                    }
+                        if (len > arr_info.len) {
+                            break :blk LoadError.invalid_fsd_array_too_long;
+                        }
+                        if (arr_info.base == .u8 and len >= arr_info.len) {
+                            break :blk LoadError.string_too_long;
+                        }
+                        arr_info.parsed_len = len;
 
-                    const len = std.fmt.parseUnsigned(u32, data[next_token.start..next_token.end], 10) catch {
-                        break :blk LoadError.invalid_fsd_invalid_integer;
-                    };
+                        next_token = tokenizer.next();
+                        assert(next_token.tag == .@"]");
 
-                    if (len > arr_info.len) {
-                        break :blk LoadError.invalid_fsd_array_too_long;
-                    }
-                    arr_info.parsed_len = len;
-
-                    next_token = tokenizer.next();
-                    assert(next_token.tag == .@"]");
-
-                    next_token = tokenizer.next();
-                    if (arr_info.base != next_token.base_type()) {
-                        break :blk LoadError.invalid_fsd_array_child_type_mismatch;
+                        next_token = tokenizer.next();
+                        if (arr_info.base != next_token.base_type()) {
+                            break :blk LoadError.invalid_fsd_array_child_type_mismatch;
+                        }
                     }
                 },
                 .@"struct" => std.debug.panic("NOT IMPLEMENTED", .{}),
@@ -517,13 +539,47 @@ pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias 
                             // NOTE: If you provide more numbers than 4 this assert will get triggered
                             assert(next_token.tag == .@"]");
                         },
+                        .bool => {},
                         else => {
                             assert(next_token.tag == .number_literal);
                             try parse_number_literal(b, data[next_token.start..next_token.end], out_fields[field_current].data.?);
                         },
                     }
                 },
-                .array => unreachable,
+                .array => |*array_info| {
+                    base: switch (array_info.base) {
+                        .vec2s, .vec3s, .vec4s => {
+                            // TODO: ?
+                            @panic("NOT IMPLEMENTED");
+                        },
+                        // .texture => continue :base .string,
+                        .string => {
+                            assert(next_token.tag == .string_literal);
+                            next_token = tokenizer.next();
+                        },
+                        inline else => |_type| {
+                            if (comptime _type == .u8) {
+                                if (next_token.tag == .string_literal) {
+                                    continue :base .string;
+                                }
+                            }
+                            assert(next_token.tag == .@"[");
+                            var array: [*]_type.get_type() = @ptrCast(@alignCast(out_fields[field_current].data.?));
+                            for (0..array_info.parsed_len) |pos| {
+                                next_token = tokenizer.next();
+                                assert(next_token.tag == .number_literal);
+                                try parse_number_literal(_type, data[next_token.start..next_token.end], @ptrCast(&array[pos]));
+                                next_token = tokenizer.next();
+                                if (next_token.tag == .@"]") {
+                                    break;
+                                }
+                                assert(next_token.tag == .@",");
+                            }
+                            // NOTE: If you provide more numbers than parsed_len this assert will get triggered
+                            assert(next_token.tag == .@"]");
+                        }
+                    }
+                },
                 else => {},
             }
 
@@ -543,7 +599,8 @@ pub fn load(comptime s_type: Definition, noalias file_path: []const u8, noalias 
         );
     }
 
-    // TODO(adi): write binary format to disc here
+    // TODO(adi): write binary form
+    // at to disc here
 }
 
 fn parse_number_literal(base_type: BaseType, noalias payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
@@ -668,6 +725,7 @@ fn get_recursive_field_len(T: type) usize {
 }
 
 fn get_fields(T: type) [get_recursive_field_len(T) + 1]Field {
+    @setEvalBranchQuota(100000);
     comptime {
         const count = get_recursive_field_len(T);
         const type_info = @typeInfo(T);
@@ -863,7 +921,12 @@ const DType = union(enum(u8)) {
     @"struct": StructInfo,
 
     const StructInfo = struct { fields_start: u32, fields_end: u32 };
-    const ArrayInfo = struct { base: BaseType, len: u32, parsed_len: u32, current_len: u32 };
+    const ArrayInfo = struct {
+        base: BaseType,
+        len: u32,
+        parsed_len: u32 = 0,
+        current_len: u32 = 0,
+    };
 };
 
 const BaseType = enum(u8) {
@@ -886,6 +949,29 @@ const BaseType = enum(u8) {
     vec2s = 16,
     vec3s = 17,
     vec4s = 19,
+    string = 20,
+
+    pub fn get_type(comptime self: BaseType) type {
+        return switch (self) {
+            .u8 => u8,
+            .u16 => u16,
+            .u32 => u32,
+            .u64 => u64,
+            .u128 => u128,
+            .i8 => i8,
+            .i16 => i16,
+            .i32 => i32,
+            .i64 => i64,
+            .i128 => i128,
+            .f16 => f16,
+            .f32 => f32,
+            .f64 => f64,
+            .f80 => f80,
+            .f128 => f128,
+            .bool => bool,
+            else => @compileError("Should not be accessing get_type on this BaseType"),
+        };
+    }
 };
 
 const std = @import("std");

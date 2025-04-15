@@ -97,6 +97,15 @@ Enums are stored as their integer counterparts when in binary.
 * Texture: <string path relative to base_asset_path>. It is just a typedef of []u8. Just better to read. Might have different
 handling than strings
 
+#### Builtins
+Strings and arrays are static arrays with sizes predefined. So to define how many elements we are actually using the two options
+are either enforce that the length in the file must equal the length in the array. But this is not ideal for things like
+strings where you might want to have a name field that has a 512 length buffer but you only use some of it. To combat this
+we can have a few builtins that allow us to put a null termination for strings and for others we can provide a length field.
+
+For now only strings have a null termination added. Other arrays must have the same number of elements. Later on we might
+have a length field.
+
 ## Data
 
 * Integers: 123151, -1123124123, 100_000.
