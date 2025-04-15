@@ -17,6 +17,8 @@ You can then use wasd to move around in the world and view the texture from diff
 
 ## Architecture
 
+The engine is designed with the philosophy of almost 0 dependency. The only dependency currently are the ones absolutely needed viz. vulkan bindings and shader compiler, as these are not something I can implement in any reasonable amount of time.
+
 The game is built as a dll and the engine is the actual runtime. The game is loaded dynamically at runtime allowing the game
 to be modified and recompiled wile running. The engine will watch the game dll and reload it. All memory is owned by the engine and all game state is owned by the engine allowing reloading to be quick. The game must be stateless.
 
