@@ -1,19 +1,33 @@
 # zfracture
-A 3D Game engine in Zig for learning and also for making my own game.
-
 <img src="https://github.com/aditya-rajagopal/zfracture/blob/master/fracture_logo/fracture_logo_small.png" alt="Fracture Engine" width="256" height="256"/>
+
+A 3D Game engine in Zig for learning and also for making my own game. 
+
+Why another game engine? 
+Mostly because it is fun. It's an interesting challenge to design such a complex system from scratch. It also touches so many systems that we take for granted and the puzzle of creating a reasonable API is fun. Also if i ever were to make a game i would much rather use something i have full control over rather than rely on decisions made by someone else on how a game should be made viz. Unity and Unreal Engine. 
 
 Currently only supports windows as a platform. More to be added in the future.
 
 This language is built in [zig](https://ziglang.org/download) and it needs to be downloaded to compile the project.
 
+## Building
+
 ```
 make debug
 ```
+OR 
+```
+make dist
+```
 
 You can then use wasd to move around in the world and view the texture from different angles.
-
 <img src="https://github.com/aditya-rajagopal/zfracture/blob/master/fracture_logo/screenshot.png" alt="Fracture Engine" width="480" height="270"/>
+
+```
+make test
+```
+To run all unit tests
+
 
 ## Architecture
 
@@ -22,11 +36,12 @@ The engine is designed with the philosophy of almost 0 dependency. The only depe
 The game is built as a dll and the engine is the actual runtime. The game is loaded dynamically at runtime allowing the game
 to be modified and recompiled wile running. The engine will watch the game dll and reload it. All memory is owned by the engine and all game state is owned by the engine allowing reloading to be quick. The game must be stateless.
 
-Making using of zig comptime allows many features to be implemented in interesting ways:
+Making use of zig comptime allows many features to be implemented in interesting ways:
 - Scoped logging that allows creating of arbitrary loggers that will write to both files and the terminal using 1 backend.
 - In debug builds all allocations are scoped and tracked by type of allocation but this is stripped in release builds.
 - Allows static dispatch of math functions based on types rather than dynamic dispatches that woudl be common in a class based language
 - A renderer that could be swapped at runtime. Currenlty only vulkan is implemented but OpenGL and DirectX will in the future.
+- Allows some data to be modifiable at runtime by watching files for changes and in release or distribution builds embedding binary data into the exectuable instead for the same data.
 
 ## Interesting things
 
