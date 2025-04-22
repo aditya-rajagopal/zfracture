@@ -4,14 +4,17 @@
 // TODO:
 //      - [ ] Should i replace the frame arena by a fixed buffer allocator that is defined by asking the application
 //            how much memory it needs at startup and give it that much memory to work with forever. Instead of an arena
+const std = @import("std");
+const builtin = @import("builtin");
+
 const core = @import("fr_core");
-const platform = @import("platform/platform.zig");
 
 const config = @import("config.zig");
 const app_config = config.app_config;
+const platform = @import("platform/platform.zig");
+
 const DLL = switch (builtin.mode) {
     .Debug => struct {
-        // instance: platform.LibraryHandle,
         instance: std.DynLib,
         time_stamp: i128 align(8),
     },
@@ -124,14 +127,6 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // Renderer
     const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
-    // try app.frontend.init(
-    //     renderer_allocator,
-    //     app_config.application_name,
-    //     &app.platform_state,
-    //     &app.engine.log_config,
-    //     &app.engine.extent,
-    //     &app.engine.event,
-    // );
     try app.engine.renderer.init(
         renderer_allocator,
         app_config.application_name,
@@ -139,7 +134,6 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
         &app.engine.log_config,
         &app.engine.extent,
     );
-    // errdefer app.frontend.deinit();
     errdefer app.engine.renderer.deinit();
     app.log.info("Renderer initialized", .{});
 
@@ -353,6 +347,3 @@ fn reload_library(self: *Application) bool {
 // test {
 //     std.debug.print("Size of: {d}, {d}\n", .{ @sizeOf(Application), @alignOf(Application) });
 // }
-
-const std = @import("std");
-const builtin = @import("builtin");

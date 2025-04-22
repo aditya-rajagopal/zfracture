@@ -1,620 +1,379 @@
-// TODO: Can this have constants that can be used
-const MAX_STATES = 512;
-pub const FSDParser = @This();
+const std = @import("std");
+const assert = std.debug.assert;
 
-states: [MAX_STATES]States,
-state_ptr: u32,
-initialized: u8,
-line_number: u32,
-column_number: u32,
-allocator: std.mem.Allocator,
+const field = @import("field.zig");
+const token = @import("tokenizer.zig");
+const Tokenizer = token.Tokenizer;
+const Token = token.Token;
+const types = @import("types.zig");
+const Definition = types.Definition;
 
-pub const States = union(enum(u8)) {
-    read_data,
-    read_header,
-    expect_struct_type,
-    expect_version,
-    read_statement,
-    read_field,
-    read_type,
-    assert_equal,
-    read_value,
-    read_till: u8,
-    end_parser,
-};
+const MAX_ITERATIONS = 4096;
 
-pub const Result = enum(u8) {
-    success,
-    out_of_memory,
+pub const LoadError = error{
+    fsd_too_many_iterations,
     invalid_fsd_incomplete,
-    @"invalid_fsd_expected_@_at_start",
     invalid_fsd_missing_def,
-    invalid_fsd_required_header,
+    @"invalid_fsd_expected_@_at_start",
     invalid_fsd_invalid_file_type,
     invalid_fsd_version,
-    invalid_fsd_invalid_field_name,
+    fsd_major_version_mismatch,
+    fsd_minor_version_mismatch,
+    fsd_patch_version_mismatch,
+    @"invalid_version_missing.",
     @"invalid_fsd_missing_=",
+    invalid_fsd_invalid_field_name,
     @"invalid_fsd_missing_:",
     invalid_fsd_incompatable_type,
-    @"invalid_fsd_missing_{",
+    invalid_fsd_array_must_contain_length,
+    invalid_fsd_array_child_type_mismatch,
     invalid_fsd_invalid_float,
     invalid_fsd_invalid_integer,
-    invalid_fsd_insufficient_array_elements,
-    invalid_fsd_string_too_long,
-    @"invalid_fsd_invalid_sting_missing_\"",
-};
+    invalid_fsd_array_too_long,
+    invalid_fsd_missing_array_start,
+    string_too_long,
+} || std.fs.File.OpenError || std.fs.File.ReadError;
 
-pub fn init(self: *FSDParser, allocator: std.mem.Allocator) !void {
-    self.state_ptr = 0;
-    self.initialized = 1;
-    self.line_number = 0;
-    self.column_number = 0;
-    self.allocator = allocator;
-}
+// NOTE: If the fsd file is larger than 16 pages use the alloc version of load
+const MAX_BUFFER_PAGES = 16;
+const MAX_BYTES = 4096 * MAX_BUFFER_PAGES;
 
-pub fn reset(self: *FSDParser) void {
-    self.state_ptr = 0;
-    self.initialized = 1;
-    self.line_number = 0;
-    self.column_number = 0;
-}
+threadlocal var buffer: [MAX_BYTES]u8 = undefined;
 
-const Field = struct {
-    name: []const u8,
-    dtype: DataType,
-    data: *anyopaque,
-    // extra_data: ?*anyopaque = null,
-};
+const DEBUG_TOKENS: bool = false;
 
-pub fn load_fsd(
-    self: *FSDParser,
-    comptime file_type: DefinitionTypes,
-    out_data: *file_type.get_struct(),
-    file_name: []const u8,
-) !Result {
-    assert(self.initialized > 0);
+pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noalias out_data: *s_type.get_type()) LoadError!void {
+    const T: type = s_type.get_type();
 
-    const file = try std.fs.cwd().openFile(file_name, .{});
-    const reader = file.reader();
-    defer file.close();
+    // TODO: Make a binary of the file if it does not exist. If the binary file does exist then make check if
+    // the binary needs to be regenerated. If it does regenerate it, else just read the binary file.
+    // In Release and Dist builds make this only read the bianry file and ignore the rest
 
-    const T = file_type.get_struct();
-    const type_info = @typeInfo(T);
-    comptime assert(type_info == .@"struct");
-    const struct_info = type_info.@"struct";
-    inline for (struct_info.fields) |field| {
-        comptime assert(field.defaultValue() != null);
-    }
-
+    // TODO: Should this be reset alread? what happens in the case of failures
     out_data.* = .{};
+    // TODO: Figure out a way to capture enum fields as strings
+    const fields = comptime field.get_fields(T);
+    var out_fields = field.fill_pointers(T, &fields, out_data);
 
-    self.push(.end_parser);
-
-    var fields: [struct_info.fields.len - 1]Field = undefined;
-    inline for (struct_info.fields[1..], 0..) |field, i| {
-        const field_type = field.type;
-        const field_info = @typeInfo(field_type);
-
-        const dtype: DataType = dtype: switch (field_info) {
-            .bool => .{ .base = .bool },
-            .int, .float => .{ .base = comptime std.meta.stringToEnum(BaseTypes, @typeName(field_type)).? },
-            .array => |array| {
-                if (array.child == u8) {
-                    break :dtype .{ .string = .{ .max_len = array.len, .is_static = true, .is_const = false } };
-                }
-                const child_info = @typeInfo(array.child);
-                switch (child_info) {
-                    .float => {
-                        switch (array.len) {
-                            2 => break :dtype .{ .base = .vec2s },
-                            3 => break :dtype .{ .base = .vec3s },
-                            4 => break :dtype .{ .base = .vec4s },
-                            else => {},
-                        }
-                    },
-                    .int => {},
-                    .bool => {},
-                    else => @compileError("Unsupported array type" ++ @typeName(field_type))
-                }
-
-                break .{ .static_array = .{
-                    .base = comptime std.meta.stringToEnum(BaseTypes, @typeName(array.child)).?,
-                    .num_elements = array.len,
-                } };
-            },
-            .pointer => |pointer| {
-                comptime assert(pointer.size == .Slice);
-                fields[i].name = field.name;
-                fields[i].data = @ptrCast(&@field(out_data, field.name));
-                if (pointer.child == u8) {
-                    fields[i].dtype = .{ .string = .{ .max_len = undefined, .is_static = false, .is_const = pointer.is_const } };
-                } else {
-                    fields[i].dtype = .{ .dynamic_array = comptime std.meta.stringToEnum(BaseTypes, @typeName(pointer.child)).? };
-                }
-                self.push(.read_statement);
-                continue;
-            },
-            inline else => @compileError("Invalid field type for struct.")
-        };
-        fields[i] = Field{ .name = field.name, .dtype = dtype, .data = @ptrCast(&@field(out_data, field.name)) };
-        self.push(.read_statement);
-    }
-
-    self.push(.read_header);
-    self.push(.read_data);
-
-    var buffer: [4096]u8 = undefined;
-    var data: []const u8 = undefined;
-    data.len = 0;
-
-    var index: usize = 0;
-    var field_number: usize = 0;
-
-    // TODO: while loop might be better here but this is cool. See if this needs to be replaced
-    // TODO: Should this be in a seperate function?
-    // TODO: Convert to loop with a max states limit. Prevent infinite loops somehow
-    const result: Result = blk: switch (self.states[self.state_ptr - 1]) {
-        .read_data => {
-            var len: usize = 0;
-            if (data.len == 0) {
-                len = try reader.read(&buffer);
-            } else {
-                std.mem.copyForwards(u8, &buffer, data);
-                len = try reader.read(buffer[data.len..]);
-            }
-            if (len == 0) {
-                break :blk Result.invalid_fsd_incomplete;
-            }
-            len += data.len;
-            data = buffer[0..len];
-            self.pop();
-
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .read_header => {
-            assert(data.len >= 5);
-            if (data[0] != '@') {
-                break :blk Result.@"invalid_fsd_expected_@_at_start";
-            }
-
-            const def: [4]u8 = .{ 'd', 'e', 'f', ' ' };
-
-            if (@as(u32, @bitCast(data[1..5].*)) != @as(u32, @bitCast(def))) {
-                break :blk Result.invalid_fsd_missing_def;
-            }
-            data = data[5..];
-            self.column_number = 4;
-            self.pop();
-            self.push(.expect_version);
-            self.push(.{ .read_till = '\n' });
-            self.push(.expect_struct_type);
-            self.push(.{ .read_till = ' ' });
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .expect_struct_type => {
-            // if (!std.mem.eql(u8, data[0..index], @tagName(file_type))) {
-            //     break :blk Result.invalid_fsd_invalid_file_type;
-            // }
-            data = data[index + 1 ..];
-            self.column_number += @truncate(index + 1);
-            index = 0;
-            self.pop();
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .expect_version => {
-            // TODO: Instead of storing the version in the outdata outdata default should have a version that needs
-            // to match with the version in the file atleast till the minor level.
-            var i: usize = 0;
-            while (i < index) : (i += 1) {
-                if (data[i] == '.') {
-                    out_data.version.major = std.fmt.parseInt(u4, data[0..i], 10) catch {
-                        break :blk Result.invalid_fsd_version;
-                    };
-
-                    break;
-                }
-            } else {
-                break :blk Result.invalid_fsd_version;
-            }
-            data = data[i + 1 ..];
-            index -= i + 1;
-            self.column_number += @truncate(i + 1);
-            i = 0;
-            while (i < index) : (i += 1) {
-                if (data[i] == '.') {
-                    out_data.version.minor = std.fmt.parseInt(u12, data[0..i], 10) catch {
-                        break :blk Result.invalid_fsd_version;
-                    };
-                    break;
-                }
-            } else {
-                break :blk Result.invalid_fsd_version;
-            }
-
-            index -= i + 1;
-            data = data[i + 1 ..];
-            self.column_number += @truncate(i + 1);
-            out_data.version.patch = std.fmt.parseInt(u16, data[0 .. index - 1], 10) catch {
-                break :blk Result.invalid_fsd_version;
-            };
-            data = data[index + 1 ..];
-            index = 0;
-            self.line_number += 1;
-            self.pop();
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .read_till => |delimiter| {
-            while (index < data.len) : (index += 1) {
-                if (data[index] == delimiter) {
-                    self.pop();
-                    continue :blk self.states[self.state_ptr - 1];
-                }
-            }
-            self.push(.read_data);
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .read_statement => {
-            if (data.len == 0) {
-                self.push(.read_data);
-                continue :blk self.states[self.state_ptr - 1];
-            }
-            if (data[0] != '@') {
-                break :blk Result.@"invalid_fsd_expected_@_at_start";
-            }
-            data = data[1..];
-            self.pop();
-            self.push(.read_value);
-            self.push(.{ .read_till = '\n' });
-            self.push(.assert_equal);
-            self.push(.{ .read_till = ' ' });
-            self.push(.read_type);
-            self.push(.{ .read_till = ' ' });
-            self.push(.read_field);
-            self.push(.{ .read_till = ' ' });
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .assert_equal => {
-            assert(index == 1);
-            if (data[0] != '=') {
-                break :blk Result.@"invalid_fsd_missing_=";
-            }
-            data = data[2..];
-            self.pop();
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .read_field => {
-            assert(index > 2);
-            if (!std.mem.eql(u8, fields[field_number].name, data[0 .. index - 1])) {
-                break :blk Result.invalid_fsd_invalid_field_name;
-            }
-
-            if (data[index - 1] != ':') {
-                break :blk Result.@"invalid_fsd_missing_:";
-            }
-            data = data[index + 1 ..];
-            self.column_number += @truncate(index + 1);
-            index = 0;
-            self.pop();
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .read_type => {
-            switch (fields[field_number].dtype) {
-                .base => |b| {
-                    if (!std.mem.eql(u8, @tagName(b), data[0..index])) {
-                        break :blk Result.invalid_fsd_incompatable_type;
-                    }
-                },
-                .string => |*str_info| str_blk: {
-                    if (std.mem.eql(u8, "string", data[0..index])) {
-                        break :str_blk;
-                    }
-                    if (data[0] == '[') {
-                        var pos: usize = 1;
-                        self.column_number += 1;
-                        while (pos < index) : (pos += 1) {
-                            if (data[pos] == ']') {
-                                if (pos == 1) {} else {
-                                    const len = std.fmt.parseUnsigned(usize, data[1..pos], 10) catch {
-                                        break :blk Result.invalid_fsd_invalid_integer;
-                                    };
-                                    if (len > str_info.max_len) {
-                                        break :blk Result.invalid_fsd_string_too_long;
-                                    }
-                                    str_info.max_len = @truncate(len);
-                                }
-                                self.column_number += @truncate(pos - 1);
-                                if (!std.mem.eql(u8, "u8", data[pos + 1 .. index])) {
-                                    break;
-                                }
-                                self.column_number += 2;
-                                break :str_blk;
-                            }
-                        }
-                    }
-                    break :blk Result.invalid_fsd_incompatable_type;
-                },
-                else => unreachable,
-            }
-            data = data[index + 1 ..];
-            self.column_number += @truncate(index + 1);
-            index = 0;
-            self.pop();
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .read_value => {
-            switch (fields[field_number].dtype) {
-                .base => |b| {
-                    switch (b) {
-                        .u8 => {
-                            const ptr: *u8 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseUnsigned(u8, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_invalid_integer;
-                            };
-                        },
-                        .u16 => {
-                            const ptr: *u16 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseUnsigned(u16, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_invalid_integer;
-                            };
-                        },
-                        .u32 => {
-                            const ptr: *u32 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseUnsigned(u32, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_invalid_integer;
-                            };
-                        },
-                        .u64 => {
-                            const ptr: *u64 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseUnsigned(u64, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_invalid_integer;
-                            };
-                        },
-                        .i8 => {
-                            const ptr: *i8 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseInt(i8, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_invalid_integer;
-                            };
-                        },
-                        .i16 => {
-                            const ptr: *i16 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseInt(i16, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_invalid_integer;
-                            };
-                        },
-                        .i32 => {
-                            const ptr: *i32 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseInt(i32, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_invalid_integer;
-                            };
-                        },
-                        .i64 => {
-                            const ptr: *i64 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseInt(i64, data[0 .. index - 1], 10) catch {
-                                break :blk Result.invalid_fsd_invalid_integer;
-                            };
-                        },
-                        .f32 => {
-                            const ptr: *f32 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseFloat(f32, data[0 .. index - 1]) catch {
-                                break :blk Result.invalid_fsd_invalid_float;
-                            };
-                        },
-                        .f64 => {
-                            const ptr: *f64 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.* = std.fmt.parseFloat(f64, data[0 .. index - 1]) catch {
-                                break :blk Result.invalid_fsd_invalid_float;
-                            };
-                        },
-                        .vec2s, .vec3s, .vec4s => |t| {
-                            // TODO: This is not robust. Can make this faster.
-                            if (data[0] != '{') {
-                                break :blk Result.@"invalid_fsd_missing_{";
-                            }
-                            var start: usize = 1;
-                            while (data[start] == ' ') {
-                                start += 1;
-                            }
-
-                            const ptr: [*]f32 = @ptrCast(@alignCast(fields[field_number].data));
-
-                            var pos: usize = start;
-                            var num: usize = 0;
-                            const max_num: usize = switch (t) {
-                                .vec2s => 2,
-                                .vec3s => 3,
-                                .vec4s => 4,
-                                else => unreachable,
-                            };
-
-                            while (num < max_num and pos < index - 1) {
-                                if (data[pos] == ',') {
-                                    ptr[num] = std.fmt.parseFloat(f32, data[start..pos]) catch {
-                                        break :blk Result.invalid_fsd_invalid_float;
-                                    };
-
-                                    pos += 1;
-                                    while (data[pos] == ' ') {
-                                        pos += 1;
-                                    }
-                                    num += 1;
-                                    start = pos;
-                                    continue;
-                                }
-                                if (data[pos] == '}') {
-                                    var local_pos: usize = pos;
-                                    while (data[pos - 1] == ' ') {
-                                        local_pos -= 1;
-                                    }
-                                    ptr[num] = std.fmt.parseFloat(f32, data[start..local_pos]) catch {
-                                        break :blk Result.invalid_fsd_invalid_float;
-                                    };
-                                    num += 1;
-                                    break;
-                                }
-                                pos += 1;
-                            }
-
-                            if (num != max_num) {
-                                break :blk Result.invalid_fsd_insufficient_array_elements;
-                            }
-
-                            if (data[pos] != '}') {
-                                break :blk Result.@"invalid_fsd_missing_{";
-                            }
-                        },
-                        else => unreachable
-                    }
-                },
-                .string => |str_info| {
-                    if (data[0] != '"') {
-                        break :blk Result.@"invalid_fsd_invalid_sting_missing_\"";
-                    }
-                    var pos: usize = 1;
-                    while (pos < index - 2) : (pos += 1) {
-                        if (data[pos] == '"') {
-                            break;
-                        }
-                        // TODO: Deal with " in string
-                        // if (data[pos] == '\\' and pos < index - 3 and data[pos + 1] == '"') {
-                        //     pos += 1;
-                        // }
-                    }
-                    if (data[pos] != '"') {
-                        break :blk Result.@"invalid_fsd_invalid_sting_missing_\"";
-                    }
-                    const string = data[1..pos];
-
-                    if (str_info.is_static) {
-                        if (string.len > str_info.max_len) {
-                            break :blk Result.invalid_fsd_string_too_long;
-                        }
-                        const ptr: [*]u8 = @ptrCast(@alignCast(fields[field_number].data));
-                        @memset(ptr[string.len..str_info.max_len], 0);
-                        @memcpy(ptr[0..string.len], string);
-                    } else {
-                        // TODO: Should this come from a static allocation? Or should there be no dynamic allocations
-                        // at all
-                        const out_string = self.allocator.dupe(u8, string) catch {
-                            break :blk Result.out_of_memory;
-                        };
-                        if (str_info.is_const) {
-                            const ptr: *[]const u8 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.ptr = out_string.ptr;
-                            ptr.len = out_string.len;
-                        } else {
-                            const ptr: *[]u8 = @ptrCast(@alignCast(fields[field_number].data));
-                            ptr.ptr = out_string.ptr;
-                            ptr.len = out_string.len;
-                        }
-                    }
-                },
-                else => unreachable,
-            }
-            data = data[index + 1 ..];
-            self.column_number = 0;
-            self.line_number += 1;
-            index = 0;
-            field_number += 1;
-            self.pop();
-            continue :blk self.states[self.state_ptr - 1];
-        },
-        .end_parser => {
-            break :blk .success;
-        },
+    const struct_name = comptime blk: {
+        const type_name = @typeName(T);
+        var iter = std.mem.splitBackwardsScalar(u8, type_name, '.');
+        break :blk iter.first();
     };
 
-    return result;
-}
+    var field_buffer: [32][]field.Field = undefined;
+    var field_stack = std.ArrayListUnmanaged([]field.Field).initBuffer(&field_buffer);
 
-inline fn push(self: *FSDParser, state: States) void {
-    assert(self.state_ptr < MAX_STATES);
-    self.states[self.state_ptr] = state;
-    self.state_ptr += 1;
-}
+    const root_struct = out_fields[0].dtype.@"struct";
+    const root_fields = out_fields[root_struct.fields_start..root_struct.fields_end];
+    field_stack.appendAssumeCapacity(root_fields);
 
-inline fn pop(self: *FSDParser) void {
-    assert(self.state_ptr > 0);
-    self.state_ptr -= 1;
-}
+    const file = try std.fs.cwd().openFile(file_path, .{});
+    const reader = file.reader();
+    const length_file = try reader.read(&buffer);
+    defer file.close();
 
-pub fn parse_custom(comptime expected_struct_type: type) !expected_struct_type {
-    expected_struct_type{};
-}
+    assert(length_file < MAX_BYTES);
+    buffer[length_file] = 0;
 
-pub const DefinitionTypes = enum(u8) {
-    material,
-    custom,
+    const data: [:0]const u8 = buffer[0..length_file :0];
 
-    pub fn get_struct(comptime self: DefinitionTypes) type {
-        return switch (self) {
-            .material => MaterialConfig,
-            inline else => @compileError("Unsupported type. Use parse_custom"),
-        };
+    // TODO: Allow arrays of arrays
+    var tokenizer: Tokenizer = .init(data);
+    var next_token: Token = undefined;
+
+    if (comptime DEBUG_TOKENS) {
+        next_token = tokenizer.next();
+        var i: u32 = 0;
+        std.debug.print("TOKENS: {s}\n", .{file_path});
+        while (next_token.tag != .invalid and next_token.tag != .eof) {
+            std.debug.print("\t{d}. {s}: {s}\n", .{ i, @tagName(next_token.tag), data[next_token.start..next_token.end] });
+            next_token = tokenizer.next();
+            i += 1;
+        }
+        tokenizer.ptr = 0;
     }
-};
 
-pub const MaterialConfig = struct {
-    version: Version = .{},
-    data: u8 = 0,
-    // data2: i8 = 0,
-    // data3: f32 = 0,
-    // data4: [3]f32 = [_]f32{ 0.0, 0.0, 0.0 },
-    // data5: [4]f32 = [_]f32{ 0.0, 0.0, 0.0, 0.0 },
-    // data6: [2]f32 = [_]f32{ 0.0, 0.0 },
-    // data7: [16]u8 = undefined,
-};
+    // TODO: Tokenize the entire thing first?
+    const result: ?LoadError = blk: {
+        { // NOTE: Parse header
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@"@");
 
-pub const Version = packed struct(u32) {
-    major: u4 = 0,
-    minor: u12 = 0,
-    patch: u16 = 0,
-};
+            next_token = tokenizer.next();
+            assert(next_token.tag == .def);
 
-pub const BaseTypes = enum(u8) {
-    u8,
-    u16,
-    u32,
-    u64,
-    i8,
-    i16,
-    i32,
-    i64,
-    f32,
-    f64,
-    bool,
-    vec2s,
-    vec3s,
-    vec4s,
-};
+            next_token = tokenizer.next();
+            if (next_token.tag != .indentifier and
+                !std.mem.eql(u8, data[next_token.start..next_token.end], struct_name))
+            {
+                break :blk LoadError.invalid_fsd_invalid_file_type;
+            }
 
-pub const DataType = union(enum(u8)) {
-    Texture,
-    base: BaseTypes,
-    static_array: struct { base: BaseTypes, num_elements: u32 },
-    dynamic_array: BaseTypes,
-    string: struct { max_len: u32, is_static: bool, is_const: bool },
-};
+            next_token = tokenizer.next();
+            if (next_token.tag != .number_literal and
+                std.fmt.parseInt(u4, data[next_token.start..next_token.end], 10) catch {
+                    break :blk LoadError.invalid_fsd_version;
+                } != T.version.major)
+            {
+                break :blk LoadError.fsd_major_version_mismatch;
+            }
 
-test FSDParser {
-    var parser: FSDParser = undefined;
-    try parser.init(std.testing.allocator);
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@":");
 
-    var material: MaterialConfig = undefined;
+            next_token = tokenizer.next();
+            if (next_token.tag != .number_literal and
+                std.fmt.parseInt(u12, data[next_token.start..next_token.end], 10) catch {
+                    break :blk LoadError.invalid_fsd_version;
+                } != T.version.minor)
+            {
+                break :blk LoadError.fsd_minor_version_mismatch;
+            }
+
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@":");
+
+            next_token = tokenizer.next();
+            if (next_token.tag != .number_literal and
+                std.fmt.parseInt(u16, data[next_token.start..next_token.end], 10) catch {
+                    break :blk LoadError.invalid_fsd_version;
+                } != T.version.minor)
+            {
+                break :blk LoadError.fsd_patch_version_mismatch;
+            }
+        }
+
+        // NOTE: Parse statements
+        inline for (1..fields.len) |field_current| {
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@"@");
+
+            next_token = tokenizer.next();
+            if (!std.mem.eql(u8, out_fields[field_current].name, data[next_token.start..next_token.end])) {
+                break :blk LoadError.invalid_fsd_invalid_field_name;
+            }
+
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@":");
+
+            next_token = tokenizer.next();
+            switch (comptime fields[field_current].dtype) {
+                .base => |b| {
+                    if (b != next_token.base_type()) {
+                        break :blk LoadError.invalid_fsd_incompatable_type;
+                    }
+                },
+                .array => |arr_info| {
+                    if (next_token.tag == .string) {
+                        // out_fields[field_current].dtype.array.parsed_len = arr_info.len;
+                    } else {
+                        assert(next_token.tag == .@"[");
+                        // NOTE: For now disabling rumbers in the type of arrays. All lengths will be inferred from value
+                        // next_token = tokenizer.next();
+                        // assert(next_token.tag == .number_literal);
+                        // const len = std.fmt.parseUnsigned(u32, data[next_token.start..next_token.end], 10) catch {
+                        //     break :blk LoadError.invalid_fsd_invalid_integer;
+                        // };
+                        //
+                        // if (len > arr_info.len) {
+                        //     break :blk LoadError.invalid_fsd_array_too_long;
+                        // }
+                        // if (arr_info.base == .u8 and len >= arr_info.len) {
+                        //     break :blk LoadError.string_too_long;
+                        // }
+
+                        next_token = tokenizer.next();
+                        assert(next_token.tag == .@"]");
+
+                        // out_fields[field_current].dtype.array.parsed_len = arr_info.len;
+
+                        next_token = tokenizer.next();
+                        if (arr_info.base != next_token.base_type()) {
+                            break :blk LoadError.invalid_fsd_array_child_type_mismatch;
+                        }
+                    }
+                },
+                .@"struct" => std.debug.panic("NOT IMPLEMENTED", .{}),
+                .texture => std.debug.panic("NOT IMPLEMENTED", .{}),
+                .@"enum" => std.debug.panic("NOT IMPLEMENTED", .{}),
+            }
+
+            next_token = tokenizer.next();
+            assert(next_token.tag == .@"=");
+
+            next_token = tokenizer.next();
+            switch (comptime fields[field_current].dtype) {
+                .base => |b| {
+                    switch (comptime b) {
+                        .vec2s, .vec3s, .vec4s => |vec_type| {
+                            assert(next_token.tag == .@"[");
+                            // NOTE: Assuming that in the type vec2s, vec3s, and vec4s are consecutive.
+                            comptime var size: u8 = @intFromEnum(vec_type) + 2;
+                            size -= @intFromEnum(BaseType.vec2s);
+                            const vector: *[size]f32 = @ptrCast(@alignCast(out_fields[field_current].data.?));
+                            for (0..size) |pos| {
+                                if (next_token.tag != .@"]") {
+                                    next_token = tokenizer.next();
+                                    assert(next_token.tag == .number_literal);
+                                    vector[pos] = std.fmt.parseFloat(f32, data[next_token.start..next_token.end]) catch {
+                                        break :blk LoadError.invalid_fsd_invalid_float;
+                                    };
+                                    next_token = tokenizer.next();
+                                    assert(next_token.tag == .@"," or next_token.tag == .@"]");
+                                } else {
+                                    // NOTE: If there are less numbers in the array than the type supports then
+                                    // the remaining values are filled with 0s
+                                    vector[pos] = 0.0;
+                                }
+                            }
+                            // NOTE: If you provide more numbers than Needed
+                            assert(next_token.tag == .@"]");
+                        },
+                        .bool => {},
+                        else => {
+                            assert(next_token.tag == .number_literal);
+                            try parse_number_literal(b, data[next_token.start..next_token.end], out_fields[field_current].data.?);
+                        },
+                    }
+                },
+                .array => |array_info| {
+                    base: switch (comptime array_info.base) {
+                        .vec2s, .vec3s, .vec4s => {
+                            // TODO: ?
+                            @panic("NOT IMPLEMENTED");
+                        },
+                        // .texture => continue :base .string,
+                        .string => {
+                            assert(next_token.tag == .string_literal);
+                            const strlen: usize = fields[field_current].dtype.array.len;
+                            const string_buffer: *[strlen]u8 = @ptrCast(@alignCast(out_fields[field_current].data.?));
+                            // TODO: Deal with \" in strings
+                            const parsed_strlen = next_token.end - next_token.start;
+                            // NOTE: We keep 1 character for null termination
+                            assert(parsed_strlen <= strlen - 1);
+                            @memcpy(string_buffer[0..parsed_strlen], data[next_token.start..next_token.end]);
+                            string_buffer[parsed_strlen] = 0;
+                        },
+                        inline else => |_type| {
+                            if (comptime _type == .u8) {
+                                if (next_token.tag == .string_literal) {
+                                    continue :base .string;
+                                }
+                            }
+                            assert(next_token.tag == .@"[");
+                            var array: [*]_type.get_type() = @ptrCast(@alignCast(out_fields[field_current].data.?));
+                            for (0..fields[field_current].dtype.array.len) |pos| {
+                                next_token = tokenizer.next();
+                                assert(next_token.tag == .number_literal);
+                                try parse_number_literal(_type, data[next_token.start..next_token.end], @ptrCast(&array[pos]));
+                                next_token = tokenizer.next();
+                                if (next_token.tag == .@"]") {
+                                    break;
+                                }
+                                assert(next_token.tag == .@",");
+                            }
+                            // NOTE: If you provide more numbers than parsed_len this assert will get triggered
+                            assert(next_token.tag == .@"]");
+                        }
+                    }
+                },
+                else => @panic("NOT IMPLEMENTED"),
+            }
+        }
+
+        break :blk null;
+    };
+
+    next_token = tokenizer.next();
+    assert(next_token.tag == .eof);
+
+    if (result) |err| {
+        std.debug.print(
+            "Error: {s}",
+            .{@errorName(err)},
+        );
+    }
+}
+
+fn parse_number_literal(base_type: BaseType, noalias payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
+    switch (base_type) {
+        .u8 => {
+            const ptr: *u8 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseUnsigned(u8, payload, 10) catch {
+                return LoadError.invalid_fsd_invalid_integer;
+            };
+        },
+        .u16 => {
+            const ptr: *u16 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseUnsigned(u16, payload, 10) catch {
+                return LoadError.invalid_fsd_invalid_integer;
+            };
+        },
+        .u32 => {
+            const ptr: *u32 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseUnsigned(u32, payload, 10) catch {
+                return LoadError.invalid_fsd_invalid_integer;
+            };
+        },
+        .u64 => {
+            const ptr: *u64 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseUnsigned(u64, payload, 10) catch {
+                return LoadError.invalid_fsd_invalid_integer;
+            };
+        },
+        .i8 => {
+            const ptr: *i8 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseInt(i8, payload, 10) catch {
+                return LoadError.invalid_fsd_invalid_integer;
+            };
+        },
+        .i16 => {
+            const ptr: *i16 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseInt(i16, payload, 10) catch {
+                return LoadError.invalid_fsd_invalid_integer;
+            };
+        },
+        .i32 => {
+            const ptr: *i32 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseInt(i32, payload, 10) catch {
+                return LoadError.invalid_fsd_invalid_integer;
+            };
+        },
+        .i64 => {
+            const ptr: *i64 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseInt(i64, payload, 10) catch {
+                return LoadError.invalid_fsd_invalid_integer;
+            };
+        },
+        .f32 => {
+            const ptr: *f32 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseFloat(f32, payload) catch {
+                return LoadError.invalid_fsd_invalid_float;
+            };
+        },
+        .f64 => {
+            const ptr: *f64 = @ptrCast(@alignCast(out_data));
+            ptr.* = std.fmt.parseFloat(f64, payload) catch {
+                return LoadError.invalid_fsd_invalid_float;
+            };
+        },
+        .vec2s, .vec3s, .vec4s => {
+            unreachable;
+        },
+        else => unreachable,
+    }
+}
+
+test load_fsd {
+    var material: types.MaterialConfig = undefined;
     var start = std.time.Timer.start() catch unreachable;
-    var result: Result = undefined;
-
     const iterations = 100000;
     for (0..iterations) |_| {
-        result = try parser.load_fsd(.material, &material, "test.fsd");
-        parser.reset();
+        try load_fsd(.material, "test.fsd", &material);
     }
     const end = start.read() / iterations;
     std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});
-    std.debug.print("Resul: {s}\n", .{@tagName(result)});
 
     std.debug.print("Material: {any}\n", .{material});
-    // std.testing.allocator.free(material.data7);
 }
-
-const std = @import("std");
-const assert = std.debug.assert;

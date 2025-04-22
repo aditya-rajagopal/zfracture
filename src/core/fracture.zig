@@ -5,8 +5,10 @@ pub const renderer_backend: type = if (@hasDecl(root, "config") and @hasDecl(roo
 else
     @compileError("No renderer backend defined in root.config");
 
+/// The Renderer Type
 pub const Renderer = renderer.Renderer(renderer_backend);
 
+/// The core engine that contains all the state
 pub const Fracture = struct {
     renderer: Renderer,
     memory: Memory,

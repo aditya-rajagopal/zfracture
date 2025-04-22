@@ -1,7 +1,7 @@
 # Example 
 ```
 @def material 0:0:1
-@name: [16]u8 = "test_material"
+@name: []u8 = "test_material"
 @diffuse_colour: vec4s = [ 1.0, 1.0, 1.0, 1.0 ]
 @diffuse_map: Texture = "cobblestone1"
 ```
@@ -49,17 +49,16 @@ A period seperated version for the definition
 * f32, f64
 * bool
 * vec2s, vec3s, vec4s
+* string: This is equivalent to []u8
 
 #### Array Types:
-Array types must have a fixed shape in the destination struct. Dynamic allocation is not allowed. Set reasonable limits
-for the types. This will minimize runtime allocations.
+Array types must have a fixed shape in the destination struct. Dynamic allocation is currently not allowed. 
+Set reasonable limits for the types. This will minimize runtime allocations.
 
 * []<base_type>: Array of base types. The size is inferred from the data and must be less than the expected type from 
 the data.
-* [N]<base_type>: Array of N elements of base_type. If the elements are less than N in the data then it will pad with default
-values. N must be less than expected size in the definition_type.
 
-#### Structure types:
+#### Structure types: WIP/NOT-IMPLEMENTED
 You can have data be a structure. The type will be just called structure.
 @data: Structure = .{...}
 
@@ -82,7 +81,7 @@ So a structure example will be like follows
 }
 ```
 
-#### Enum liternal
+#### Enum liternal: WIP/NOT-IMPLEMENTED
 
 The type of Enum is used for fields that have some Enum type as the base. An enum literal is created . followed by an
 identifier that starts with a alphabet. The names may not be a zig keyword.

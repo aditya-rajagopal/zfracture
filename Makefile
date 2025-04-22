@@ -31,7 +31,7 @@ build_docs:
 	zig build docs
 
 docs:
-	zig build docs && .\zig-out\docs\index.html
+	zig build docs && python -m http.server 8000 -d .\zig-out\docs\
 
 all: test game build_debug build_release build_dist build_docs
 

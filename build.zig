@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) !void {
     }).artifact("shader_compiler");
 
     // ================================== MODULES ==================================/
-    const core_lib = b.addModule("fr_core", .{
+    const core_lib = b.addModule("fracture", .{
         .root_source_file = b.path("src/core/fracture.zig"),
         .target = target,
         .optimize = optimize,

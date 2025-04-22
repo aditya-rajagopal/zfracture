@@ -1,6 +1,10 @@
-const config = @import("config.zig");
+const std = @import("std");
+const builtin = @import("builtin");
+
 const core = @import("fr_core");
 const m = core.math;
+
+const config = @import("config.zig");
 
 const GameLog = core.log.ScopedLogger(core.log.default_log, .GAME, core.log.default_level);
 
@@ -181,6 +185,3 @@ pub fn on_resize(engine: *core.Fracture, game_state: *anyopaque, width: u32, hei
     const aspect_ratio = @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
     state.projection = m.Mat4.perspective(m.deg_to_rad(45.0), aspect_ratio, state.near_clip, state.far_clip);
 }
-
-const std = @import("std");
-const builtin = @import("builtin");
