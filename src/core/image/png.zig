@@ -622,18 +622,18 @@ pub fn read(file: std.fs.File, allocator: Allocator, comptime config: ImageLoadC
                     for (raw_channels..width_bytes) |pixel| {
                         current_buffer[pixel] =
                             @bitCast(
-                            @as(
-                                i8,
-                                @truncate(
-                                    @as(i32, unfiltered[pixel]) +
-                                        stbi__paeth(
-                                        current_buffer[pixel - raw_channels],
-                                        previous_buffer[pixel],
-                                        previous_buffer[pixel - raw_channels],
+                                @as(
+                                    i8,
+                                    @truncate(
+                                        @as(i32, unfiltered[pixel]) +
+                                            stbi__paeth(
+                                                current_buffer[pixel - raw_channels],
+                                                previous_buffer[pixel],
+                                                previous_buffer[pixel - raw_channels],
+                                            ),
                                     ),
                                 ),
-                            ),
-                        );
+                            );
                     }
                 },
                 .average_first => {
@@ -698,6 +698,7 @@ pub fn read(file: std.fs.File, allocator: Allocator, comptime config: ImageLoadC
 }
 
 /// Sraight up ripped from https://github.com/nothings/stb/blob/master/stb_image.h
+/// I would never have been able to come up with this
 fn stbi__paeth(a: i32, b: i32, c: i32) i32 {
     // This formulation looks very different from the reference in the PNG spec, but is
     // actually equivalent and has favorable data dependencies and admits straightforward

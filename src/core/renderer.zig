@@ -148,7 +148,7 @@ pub fn Renderer(renderer_backend: type) type {
     };
 }
 
-const math = @import("math/math.zig");
+const math = @import("fr_math");
 const log = @import("log.zig");
 const Textures = texture_system.Textures;
 const TextureHandle = texture_system.TextureHandle;

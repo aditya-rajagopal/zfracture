@@ -49,6 +49,7 @@ A period seperated version for the definition
 * f32, f64
 * bool
 * vec2s, vec3s, vec4s
+* mat2, mat3, mat4, transform
 * string: This is equivalent to []u8
 
 #### Array Types:

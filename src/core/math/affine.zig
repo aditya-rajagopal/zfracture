@@ -2,12 +2,15 @@
 //      - [ ] Benchmark
 //      - [ ] Docstrings
 //      - [ ] Write tests
+
+pub const Transform = Affine(f32);
+
 pub fn Affine(comptime backing_type: type) type {
     return extern struct {
         c: [shape[1]]ColT,
 
-        const Vec3 = vec.Vec3(E);
-        const Vec4 = vec.Vec4(E);
+        const Vec3 = vec.Vector3(E);
+        const Vec4 = vec.Vector4(E);
 
         pub const Array = [ColT.dim * RowT.dim]E;
         pub const shape: [2]usize = .{ 4, 4 };

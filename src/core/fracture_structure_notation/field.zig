@@ -1,6 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const math = @import("fr_math");
+
 const types = @import("types.zig");
 const DType = types.DType;
 const BaseType = types.BaseType;
@@ -30,6 +32,10 @@ fn get_recursive_field_len(T: type) usize {
                 const field_info = @typeInfo(field.type);
                 switch (field_info) {
                     .@"struct" => |info| {
+                        if (field.type == math.Vec2 or field.type == math.Vec3 or field.type == math.Vec4) {
+                            count += 1;
+                            continue;
+                        }
                         structs[ptr] = info;
                         count += 1;
                         ptr += 1;
@@ -89,6 +95,15 @@ pub fn get_fields(T: type) [get_recursive_field_len(T) + 1]Field {
                     .int, .float => .{ .base = std.meta.stringToEnum(BaseType, @typeName(field.type)).? },
                     .@"enum" => {},
                     .@"struct" => |s| {
+                        if (field.type == math.Vec2) {
+                            break :dtype .{ .base = .vec2s };
+                        }
+                        if (field.type == math.Vec3) {
+                            break :dtype .{ .base = .vec3s };
+                        }
+                        if (field.type == math.Vec4) {
+                            break :dtype .{ .base = .vec4s };
+                        }
                         fields[index] = Field{
                             .name = field.name,
                             .dtype = .{ .@"struct" = .{ .fields_start = 0, .fields_end = 0 } },
@@ -102,12 +117,12 @@ pub fn get_fields(T: type) [get_recursive_field_len(T) + 1]Field {
                         const child_info = @typeInfo(array.child);
                         switch (child_info) {
                             .float => {
-                                switch (array.len) {
-                                    2 => break :dtype .{ .base = .vec2s },
-                                    3 => break :dtype .{ .base = .vec3s },
-                                    4 => break :dtype .{ .base = .vec4s },
-                                    else => {},
-                                }
+                                // switch (array.len) {
+                                //     2 => break :dtype .{ .base = .vec2s },
+                                //     3 => break :dtype .{ .base = .vec3s },
+                                //     4 => break :dtype .{ .base = .vec4s },
+                                //     else => {},
+                                // }
                             },
                             .int => {},
                             .bool => {},

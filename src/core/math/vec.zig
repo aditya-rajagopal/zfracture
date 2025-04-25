@@ -4,6 +4,11 @@
 //      - [ ] Benchmark
 //      - [ ] Docstrings
 //      - [ ] Write tests
+
+pub const Vec2 = Vector2(f32);
+pub const Vec3 = Vector3(f32);
+pub const Vec4 = Vector4(f32);
+
 pub const Component = enum(u2) {
     x = 0,
     y = 1,
@@ -11,7 +16,7 @@ pub const Component = enum(u2) {
     w = 3,
 };
 
-pub fn Vec2(comptime backing_type: type) type {
+pub fn Vector2(comptime backing_type: type) type {
     return extern struct {
         vec: Simd,
 
@@ -133,7 +138,7 @@ pub fn Vec2(comptime backing_type: type) type {
     };
 }
 
-pub fn Vec3(comptime backing_type: type) type {
+pub fn Vector3(comptime backing_type: type) type {
     return extern struct {
         vec: Simd,
 
@@ -322,7 +327,7 @@ pub fn Vec3(comptime backing_type: type) type {
     };
 }
 
-pub fn Vec4(comptime backing_type: type) type {
+pub fn Vector4(comptime backing_type: type) type {
     return extern struct {
         vec: Simd,
 

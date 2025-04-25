@@ -82,9 +82,9 @@ pub fn Textures(renderer_backend: type) type {
         const TextureKey = []const u8;
         const TextureNameMap =
             if (TextureKey == []const u8)
-            std.StringHashMap(TextureReference)
-        else
-            std.AutoHashMap(TextureKey, TextureReference);
+                std.StringHashMap(TextureReference)
+            else
+                std.AutoHashMap(TextureKey, TextureReference);
 
         const StringRef = packed struct(u64) {
             start: u32,
@@ -150,6 +150,7 @@ pub fn Textures(renderer_backend: type) type {
             _ = try self.image_arena.allocator().alloc(u8, MAX_TEXTURE_DIM * MAX_TEXTURE_DIM * 4);
             _ = self.image_arena.reset(.retain_capacity);
 
+            // TODO: THis is dynamic. I dont like
             self.string_cache = try std.ArrayList(u8).initCapacity(allocator, 4096);
             self.string_reference = try std.ArrayList(StringRef).initCapacity(allocator, 4096);
             self.string_reference.appendNTimesAssumeCapacity(.{ .start = 0, .end = 0 }, RESERVED_TEXTUES + 1);
@@ -179,6 +180,7 @@ pub fn Textures(renderer_backend: type) type {
             };
         }
 
+        // TODO(adi): I hate this. Can we not use strings here?
         pub fn create(self: *Self, name: []const u8, auto_release: bool) TextureHandle {
             if (std.mem.eql(u8, name, BaseColourName)) {
                 self.renderer._log.warn(
@@ -451,7 +453,7 @@ pub fn Textures(renderer_backend: type) type {
 const std = @import("std");
 const assert = std.debug.assert;
 const T = @import("types.zig");
-const math = @import("../math/math.zig");
+const math = @import("fr_math");
 const image = @import("../image.zig");
 const Resource = @import("../resource.zig").Resource;
 const Renderer = @import("../renderer.zig").Renderer;

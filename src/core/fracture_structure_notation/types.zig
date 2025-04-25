@@ -12,13 +12,22 @@ pub const Version = packed struct(u32) {
     }
 };
 
+pub const FSDHeader = extern struct {
+    time_stamp: u64,
+    type: u32,
+    version: Version,
+    size: u16,
+};
+
 pub const StructureType = enum(u8) {
-    material,
-    custom,
+    material = 0,
+    custom = 255,
 };
 
 pub const Definition = union(StructureType) {
     material: void,
+    /// This is used for custom structures. Though I expect for now this is rarely to be used. Most artifacts that need
+    /// this file type should mostly be internal structures
     custom: type,
 
     pub fn get_type(comptime self: Definition) type {
@@ -44,7 +53,18 @@ pub const Definition = union(StructureType) {
         return T;
     }
 
-    pub fn get_struct_name(comptime self: StructureType) []const u8 {
+    /// This will compute the u32 unique identifier of the type that will be used in binaries
+    pub fn get_type_id(comptime self: Definition) u32 {
+        switch (self) {
+            .material => return @intFromEnum(StructureType.material),
+            .custom => |t| {
+                const name = @typeName(t);
+                return std.hash.Crc32.hash(name) +| 255;
+            },
+        }
+    }
+
+    pub fn get_struct_name(comptime self: Definition) []const u8 {
         comptime {
             switch (self) {
                 .material => return "material",
@@ -69,8 +89,6 @@ pub const DType = union(enum(u8)) {
     const ArrayInfo = struct {
         base: BaseType,
         len: u32,
-        parsed_len: u32 = 0,
-        current_len: u32 = 0,
     };
 };
 
@@ -93,8 +111,8 @@ pub const BaseType = enum(u8) {
     bool = 15,
     vec2s = 16,
     vec3s = 17,
-    vec4s = 19,
-    string = 20,
+    vec4s = 18,
+    string = 19,
 
     pub fn get_type(comptime self: BaseType) type {
         return switch (self) {
@@ -113,6 +131,9 @@ pub const BaseType = enum(u8) {
             .f64 => f64,
             .f80 => f80,
             .f128 => f128,
+            .vec2s => math.Vec2,
+            .vec3s => math.Vec3,
+            .vec4s => math.Vec4,
             .bool => bool,
             else => @compileError("Should not be accessing get_type on this BaseType"),
         };
@@ -123,7 +144,7 @@ pub const MaterialConfig = struct {
     data: u8 = 0,
     data2: i8 = 0,
     data3: f32 = 0,
-    data4: [3]f32 = [_]f32{ 0.0, 0.0, 0.0 },
+    data4: math.Vec4 = .zeros,
     data5: [6]f32 = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
     data6: [32]u8 = std.mem.zeroes([32]u8),
     // data7: [16]u8 = undefined,
@@ -141,5 +162,6 @@ pub const MaterialConfig = struct {
     pub const version: Version = Version.init(0, 0, 1);
 };
 
+const math = @import("fr_math");
 const std = @import("std");
 const assert = std.debug.assert;

@@ -7,6 +7,7 @@ const Tokenizer = token.Tokenizer;
 const Token = token.Token;
 const types = @import("types.zig");
 const Definition = types.Definition;
+const BaseType = types.BaseType;
 
 const MAX_ITERATIONS = 4096;
 
@@ -42,7 +43,10 @@ threadlocal var buffer: [MAX_BYTES]u8 = undefined;
 
 const DEBUG_TOKENS: bool = false;
 
-pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noalias out_data: *s_type.get_type()) LoadError!void {
+// TODO: Change LoadError to be a union type that has some payload and this function returns a success code
+// TODO: Allow arrays of arrays
+// TODO: This needs a logger
+pub fn parse_fsd(comptime s_type: Definition, noalias file_path: []const u8, noalias out_data: *s_type.get_type()) LoadError!void {
     const T: type = s_type.get_type();
 
     // TODO: Make a binary of the file if it does not exist. If the binary file does exist then make check if
@@ -53,20 +57,15 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
     out_data.* = .{};
     // TODO: Figure out a way to capture enum fields as strings
     const fields = comptime field.get_fields(T);
-    var out_fields = field.fill_pointers(T, &fields, out_data);
+    const out_fields = field.fill_pointers(T, &fields, out_data);
 
-    const struct_name = comptime blk: {
-        const type_name = @typeName(T);
-        var iter = std.mem.splitBackwardsScalar(u8, type_name, '.');
-        break :blk iter.first();
-    };
+    const struct_name = comptime s_type.get_struct_name();
+    // var field_buffer: [32][]field.Field = undefined;
+    // var field_stack = std.ArrayListUnmanaged([]field.Field).initBuffer(&field_buffer);
 
-    var field_buffer: [32][]field.Field = undefined;
-    var field_stack = std.ArrayListUnmanaged([]field.Field).initBuffer(&field_buffer);
-
-    const root_struct = out_fields[0].dtype.@"struct";
-    const root_fields = out_fields[root_struct.fields_start..root_struct.fields_end];
-    field_stack.appendAssumeCapacity(root_fields);
+    // const root_struct = out_fields[0].dtype.@"struct";
+    // const root_fields = out_fields[root_struct.fields_start..root_struct.fields_end];
+    // field_stack.appendAssumeCapacity(root_fields);
 
     const file = try std.fs.cwd().openFile(file_path, .{});
     const reader = file.reader();
@@ -78,7 +77,6 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
 
     const data: [:0]const u8 = buffer[0..length_file :0];
 
-    // TODO: Allow arrays of arrays
     var tokenizer: Tokenizer = .init(data);
     var next_token: Token = undefined;
 
@@ -95,6 +93,7 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
     }
 
     // TODO: Tokenize the entire thing first?
+    // TODO: Convert asserts into errors and skip parsing. Dont crash
     const result: ?LoadError = blk: {
         { // NOTE: Parse header
             next_token = tokenizer.next();
@@ -150,6 +149,7 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
             assert(next_token.tag == .@"@");
 
             next_token = tokenizer.next();
+            // NOTE: check if the names of the fields are the same
             if (!std.mem.eql(u8, out_fields[field_current].name, data[next_token.start..next_token.end])) {
                 break :blk LoadError.invalid_fsd_invalid_field_name;
             }
@@ -158,6 +158,7 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
             assert(next_token.tag == .@":");
 
             next_token = tokenizer.next();
+            // NOTE: Validate type
             switch (comptime fields[field_current].dtype) {
                 .base => |b| {
                     if (b != next_token.base_type()) {
@@ -165,28 +166,12 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
                     }
                 },
                 .array => |arr_info| {
-                    if (next_token.tag == .string) {
-                        // out_fields[field_current].dtype.array.parsed_len = arr_info.len;
-                    } else {
+                    if (next_token.tag != .string) {
                         assert(next_token.tag == .@"[");
-                        // NOTE: For now disabling rumbers in the type of arrays. All lengths will be inferred from value
-                        // next_token = tokenizer.next();
-                        // assert(next_token.tag == .number_literal);
-                        // const len = std.fmt.parseUnsigned(u32, data[next_token.start..next_token.end], 10) catch {
-                        //     break :blk LoadError.invalid_fsd_invalid_integer;
-                        // };
-                        //
-                        // if (len > arr_info.len) {
-                        //     break :blk LoadError.invalid_fsd_array_too_long;
-                        // }
-                        // if (arr_info.base == .u8 and len >= arr_info.len) {
-                        //     break :blk LoadError.string_too_long;
-                        // }
-
+                        // NOTE: For now disabling numbers in the type of arrays.
+                        // All lengths will be inferred from value. The value must fit into the type
                         next_token = tokenizer.next();
                         assert(next_token.tag == .@"]");
-
-                        // out_fields[field_current].dtype.array.parsed_len = arr_info.len;
 
                         next_token = tokenizer.next();
                         if (arr_info.base != next_token.base_type()) {
@@ -207,16 +192,17 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
                 .base => |b| {
                     switch (comptime b) {
                         .vec2s, .vec3s, .vec4s => |vec_type| {
+                            // TODO: Move this into a different function
                             assert(next_token.tag == .@"[");
                             // NOTE: Assuming that in the type vec2s, vec3s, and vec4s are consecutive.
-                            comptime var size: u8 = @intFromEnum(vec_type) + 2;
-                            size -= @intFromEnum(BaseType.vec2s);
-                            const vector: *[size]f32 = @ptrCast(@alignCast(out_fields[field_current].data.?));
+                            const size: u8 = @intFromEnum(vec_type) + 2 - @intFromEnum(BaseType.vec2s);
+                            const vec_t = vec_type.get_type();
+                            const vector: *vec_t = @ptrCast(@alignCast(out_fields[field_current].data.?));
                             for (0..size) |pos| {
                                 if (next_token.tag != .@"]") {
                                     next_token = tokenizer.next();
                                     assert(next_token.tag == .number_literal);
-                                    vector[pos] = std.fmt.parseFloat(f32, data[next_token.start..next_token.end]) catch {
+                                    vector.vec[pos] = std.fmt.parseFloat(f32, data[next_token.start..next_token.end]) catch {
                                         break :blk LoadError.invalid_fsd_invalid_float;
                                     };
                                     next_token = tokenizer.next();
@@ -224,13 +210,23 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
                                 } else {
                                     // NOTE: If there are less numbers in the array than the type supports then
                                     // the remaining values are filled with 0s
-                                    vector[pos] = 0.0;
+                                    vector.vec[pos] = 0.0;
                                 }
                             }
                             // NOTE: If you provide more numbers than Needed
                             assert(next_token.tag == .@"]");
                         },
-                        .bool => {},
+                        .bool => {
+                            const ptr: *bool = @ptrCast(@alignCast(out_fields[field_current].data.?));
+                            switch (next_token.tag) {
+                                .true => ptr.* = true,
+                                .false => ptr.* = false,
+                                else => {
+                                    // TODO: Continue
+                                    break :blk LoadError.invalid_fsd_incompatable_type;
+                                },
+                            }
+                        },
                         else => {
                             assert(next_token.tag == .number_literal);
                             try parse_number_literal(b, data[next_token.start..next_token.end], out_fields[field_current].data.?);
@@ -282,21 +278,21 @@ pub fn load_fsd(comptime s_type: Definition, noalias file_path: []const u8, noal
             }
         }
 
+        next_token = tokenizer.next();
+        assert(next_token.tag == .eof);
+
         break :blk null;
     };
 
-    next_token = tokenizer.next();
-    assert(next_token.tag == .eof);
-
     if (result) |err| {
         std.debug.print(
-            "Error: {s}",
+            "Error: {s}\n",
             .{@errorName(err)},
         );
     }
 }
 
-fn parse_number_literal(base_type: BaseType, noalias payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
+fn parse_number_literal(comptime base_type: BaseType, noalias payload: []const u8, noalias out_data: *anyopaque) LoadError!void {
     switch (base_type) {
         .u8 => {
             const ptr: *u8 = @ptrCast(@alignCast(out_data));
@@ -358,22 +354,29 @@ fn parse_number_literal(base_type: BaseType, noalias payload: []const u8, noalia
                 return LoadError.invalid_fsd_invalid_float;
             };
         },
-        .vec2s, .vec3s, .vec4s => {
-            unreachable;
-        },
         else => unreachable,
     }
 }
 
-test load_fsd {
+test parse_fsd {
     var material: types.MaterialConfig = undefined;
     var start = std.time.Timer.start() catch unreachable;
-    const iterations = 100000;
+    const iterations = 1;
     for (0..iterations) |_| {
-        try load_fsd(.material, "test.fsd", &material);
+        try parse_fsd(.material, "test.fsd", &material);
     }
     const end = start.read() / iterations;
     std.debug.print("Time: {s}\n", .{std.fmt.fmtDuration(end)});
 
     std.debug.print("Material: {any}\n", .{material});
 }
+
+// const math = @import("fr_math");
+
+// test "load binary" {
+//     std.debug.print("type: {s}\n", .{@typeName(math.Vec3)});
+//     const fields = @typeInfo(math.Vec3).@"struct".fields;
+//     inline for (fields) |f| {
+//         std.debug.print("Type field: {s}: {s}\n", .{ f.name, @typeName(f.type) });
+//     }
+// }

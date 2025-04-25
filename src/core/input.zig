@@ -2,6 +2,7 @@
 //      - [ ] Think of using a bit set for the keys instead of an array
 //      - [ ] Are the comptime versions of the functions necessary
 //      - [ ] Remove reference to event system here. The platform/application should handle firing events. Or pass the engine.
+//      - [ ] When the frame rate is not synced with updates to the input system we might have to store more than just current and previous states
 const KeysArray = [std.math.maxInt(u8)]u8;
 const ButtonsArray = [MAX_BUTTONS]u8;
 const MousePosition = struct { x: i16 = 0, y: i16 = 0 };

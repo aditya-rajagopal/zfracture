@@ -23,10 +23,18 @@ pub fn build(b: *std.Build) !void {
     }).artifact("shader_compiler");
 
     // ================================== MODULES ==================================/
+    const math_lib = b.addModule("fr_math", .{
+        .root_source_file = b.path("src/core/math/math.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const core_lib = b.addModule("fracture", .{
         .root_source_file = b.path("src/core/fracture.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "fr_math", .module = math_lib },
+        },
     });
 
     const vulkan = b.addModule("vulkan", .{
@@ -187,6 +195,19 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&run_engine_unit_tests.step);
     test_step.dependOn(&run_game_unit_tests.step);
     test_step.dependOn(&run_core_unit_tests.step);
+
+    const test_temp = b.addTest(.{
+        .root_source_file = b.path("src/core/fracture_structure_notation/parser.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_temp.root_module.addImport("fr_math", math_lib);
+
+    var run_temp_test = b.addRunArtifact(test_temp);
+    run_temp_test.has_side_effects = true;
+
+    const test_temp_step = b.step("test_temp", "Run a temp test with the math module imported");
+    test_temp_step.dependOn(&run_temp_test.step);
 }
 
 fn compile_shader(

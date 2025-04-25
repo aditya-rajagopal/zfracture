@@ -16,7 +16,7 @@ pub const ResourceSystemConfig = struct {
 
 const root = @import("root");
 pub const resource_system_config: ResourceSystemConfig = if (@hasDecl(root, "config") and @hasDecl(root.config, "resource_system_config"))
-    root.config.renderer_backend
+    root.config.resource_system_config
 else
     // TODO: Make path checking better
     ResourceSystemConfig{
@@ -47,7 +47,7 @@ pub const Resource = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !void {
-        var file_buffer: [512]u8 = undefined;
+        var file_buffer: [1024]u8 = undefined;
         switch (config) {
             .image => |img_config| {
                 const base_path = resource_system_config.asset_path ++ resource_system_config.base_paths[@intFromEnum(ResourceTypes.image)];

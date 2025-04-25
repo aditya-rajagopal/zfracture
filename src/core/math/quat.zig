@@ -2,6 +2,9 @@
 //      - [ ] Benchmark
 //      - [ ] Docstrings
 //      - [ ] Write tests
+
+pub const Quat = Quaternion(f32);
+
 pub fn Quaternion(comptime backing_type: type) type {
     comptime assert(backing_type == f16 or backing_type == f32 or backing_type == f64);
     return extern struct {

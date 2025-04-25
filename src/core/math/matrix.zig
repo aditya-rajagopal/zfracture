@@ -2,16 +2,21 @@
 //      - [ ] Benchmark
 //      - [ ] Docstrings
 //      - [ ] Write tests
+
+pub const Mat2 = Mat2x2(f32);
+pub const Mat3 = Mat3x3(f32);
+pub const Mat4 = Mat4x4(f32);
+
 pub fn Mat2x2(comptime backing_type: type) type {
     return extern struct {
         /// the backing data. For 2x2 the backing is stored as a column major Vec4
         c: [shape[1]]ColT,
 
-        pub const Backing = Vec4(backing_type);
+        pub const Backing = Vector4(backing_type);
         pub const shape: [2]usize = .{ 2, 2 };
         pub const E = backing_type;
-        pub const ColT = Vec2(E);
-        pub const RowT = Vec2(E);
+        pub const ColT = Vector2(E);
+        pub const RowT = Vector2(E);
 
         pub const identity = Self.init(&ColT.init(1.0, 0.0), &ColT.init(0.0, 1.0));
         pub const zeros = Self.init(&ColT.init(0.0, 0.0), &ColT.init(0.0, 0.0));
@@ -75,8 +80,8 @@ pub fn Mat3x3(comptime backing_type: type) type {
 
         pub const shape: [2]usize = .{ 3, 3 };
         pub const E = backing_type;
-        pub const ColT = Vec3(E);
-        pub const RowT = Vec3(E);
+        pub const ColT = Vector3(E);
+        pub const RowT = Vector3(E);
 
         const Self = @This();
 
@@ -128,12 +133,12 @@ pub fn Mat3x3(comptime backing_type: type) type {
         }
 
         /// Compute M * v
-        pub inline fn mulv(m: *const Self, vector: *const Vec3(E)) Vec3(E) {
+        pub inline fn mulv(m: *const Self, vector: *const Vector3(E)) Vector3(E) {
             return vector.mat_mul(m);
         }
 
         /// Compute v * M
-        pub inline fn vmul(m: *const Self, vector: *const Vec3(E)) Vec3(E) {
+        pub inline fn vmul(m: *const Self, vector: *const Vector3(E)) Vector3(E) {
             return vector.mat_vmul(m);
         }
 
@@ -151,10 +156,10 @@ pub fn Mat4x4(comptime backing_type: type) type {
 
         pub const shape: [2]usize = .{ 4, 4 };
         pub const E = backing_type;
-        pub const ColT = Vec4(E);
-        pub const RowT = Vec4(E);
+        pub const ColT = Vector4(E);
+        pub const RowT = Vector4(E);
         pub const AffT = Affine(E);
-        const V3 = Vec3(E);
+        const V3 = Vector3(E);
 
         const Self = @This();
 
@@ -200,12 +205,12 @@ pub fn Mat4x4(comptime backing_type: type) type {
         }
 
         /// Compute M * v
-        pub inline fn mulv(m: *const Self, vector: *const Vec4(E)) Vec4(E) {
+        pub inline fn mulv(m: *const Self, vector: *const Vector4(E)) Vector4(E) {
             return vector.mat_mul(m);
         }
 
         /// Compute v * M
-        pub inline fn vmul(m: *const Self, vector: *const Vec4(E)) Vec4(E) {
+        pub inline fn vmul(m: *const Self, vector: *const Vector4(E)) Vector4(E) {
             return vector.mat_vmul(m);
         }
 
@@ -239,7 +244,7 @@ pub fn Mat4x4(comptime backing_type: type) type {
 
         /// Inverse
         pub inline fn inv(m: *const Self) Self {
-            const Ty = Vec4(E).T;
+            const Ty = Vector4(E).T;
             const c0 = m.c[0].vec;
             const c1 = m.c[1].vec;
             const c2 = m.c[2].vec;
@@ -300,10 +305,10 @@ pub fn Mat4x4(comptime backing_type: type) type {
             const mask: Vec4u = [_]u32{ 0.0, @bitCast(@as(u32, 0x80000000)), 0.0, @bitCast(@as(u32, 0x80000000)) };
             const inv_mask: Vec4u = [_]u32{ @bitCast(@as(u32, 0x80000000)), 0.0, @bitCast(@as(u32, 0x80000000)), 0.0 };
 
-            inv0 = @as(Vec4(E).Simd, @bitCast(@as(Vec4u, @bitCast(inv0)) ^ mask));
-            inv1 = @as(Vec4(E).Simd, @bitCast(@as(Vec4u, @bitCast(inv1)) ^ inv_mask));
-            inv2 = @as(Vec4(E).Simd, @bitCast(@as(Vec4u, @bitCast(inv2)) ^ mask));
-            inv3 = @as(Vec4(E).Simd, @bitCast(@as(Vec4u, @bitCast(inv3)) ^ inv_mask));
+            inv0 = @as(Vector4(E).Simd, @bitCast(@as(Vec4u, @bitCast(inv0)) ^ mask));
+            inv1 = @as(Vector4(E).Simd, @bitCast(@as(Vec4u, @bitCast(inv1)) ^ inv_mask));
+            inv2 = @as(Vector4(E).Simd, @bitCast(@as(Vec4u, @bitCast(inv2)) ^ mask));
+            inv3 = @as(Vector4(E).Simd, @bitCast(@as(Vec4u, @bitCast(inv3)) ^ inv_mask));
 
             e0 = @shuffle(Ty, inv0, inv1, [_]i32{ 0, 0, -1, -1 });
             e1 = @shuffle(Ty, inv2, inv3, [_]i32{ 0, 0, -1, -1 });
@@ -377,7 +382,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const vec = @import("vec.zig");
-const Vec2 = vec.Vec2;
-const Vec3 = vec.Vec3;
-const Vec4 = vec.Vec4;
+const Vector2 = vec.Vector2;
+const Vector3 = vec.Vector3;
+const Vector4 = vec.Vector4;
 const Affine = @import("affine.zig").Affine;
