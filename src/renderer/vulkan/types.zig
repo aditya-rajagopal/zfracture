@@ -1,5 +1,7 @@
 const vk = @import("vulkan");
 const core = @import("fr_core");
+const TextureHandle = core.renderer.texture_system.TextureHandle;
+
 const Image = @import("image.zig");
 
 const T = core.renderer;
@@ -91,7 +93,7 @@ pub const DescriptorState = extern struct {
     // One per frame
     generations: [MAX_DESCRIPTOR_SETS]Generation,
     ids: [MAX_DESCRIPTOR_SETS]ResourceHandle,
-    external_handles: [MAX_DESCRIPTOR_SETS]u64,
+    external_handles: [MAX_DESCRIPTOR_SETS]TextureHandle,
 };
 
 pub const MaterialShaderInstanceState = extern struct {

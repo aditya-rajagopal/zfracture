@@ -432,18 +432,15 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
         var handle = self.textures.get_resource(texture);
         if (handle.id == .null_handle or handle.generation == .null_handle) {
             // TODO: Handle other texture maps
+            ctx.log.debug("The texture is set to missing texture", .{});
             texture = .missing_texture;
             handle = self.textures.get_resource(texture);
-            generation.* = handle.generation;
-            id.* = handle.id;
-            external_handle.* = @intFromEnum(texture);
         }
 
         if (texture != .null_handle) {
-            if (id.* != handle.id or generation.* != handle.generation or generation.* == .null_handle or id.* == .null_handle) {
-                // TODO: keep an eye on this. This seems fishy
-                if (id.* != handle.id or generation.* != handle.generation) {
-                    self.textures.release(@enumFromInt(external_handle.*));
+            if (id.* != handle.id or generation.* != handle.generation) {
+                if (external_handle.* != .null_handle) {
+                    self.textures.release(external_handle.*);
                 }
                 const internal_data = self.textures.acquire(texture).as_const(T.vkTextureData);
                 // We expect this to be only used by the shader
@@ -472,10 +469,10 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
                 if (handle.id != .null_handle) {
                     id.* = handle.id;
                 }
-                external_handle.* = @intFromEnum(texture);
-                descriptor_index += 1;
+                external_handle.* = texture;
             }
         }
+        descriptor_index += 1;
     }
 
     if (descriptor_count > 0) {
@@ -501,7 +498,7 @@ pub fn acquire_resources(self: *MaterialShader, ctx: *const Context) T.MaterialI
             resource_id.* = .null_handle;
         }
         for (&state.external_handles) |*handle| {
-            handle.* = std.math.maxInt(u64);
+            handle.* = .null_handle;
         }
     }
 

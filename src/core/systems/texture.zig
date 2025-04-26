@@ -265,6 +265,7 @@ pub fn Textures(renderer_backend: type) type {
 
         pub fn get_resource(self: *const Self, handle: TextureHandle) T.Handle {
             if (handle == .null_handle) {
+                self.renderer._log.warn("Trying to get an invalid texture's resource", .{});
                 return .{};
             }
             const reference: TextureReference = @bitCast(@intFromEnum(handle));
@@ -290,8 +291,11 @@ pub fn Textures(renderer_backend: type) type {
         }
 
         pub fn release(self: *Self, handle: TextureHandle) void {
-            if (handle == .null_handle or handle == .missing_texture or handle == .base_colour) {
-                self.renderer._log.err("Freeing static textures", .{});
+            if (handle == .missing_texture or handle == .base_colour) {
+                return;
+            }
+            if (handle == .null_handle) {
+                self.renderer._log.err("Freeing null texture", .{});
                 return;
             }
             const reference: TextureReference = @bitCast(@intFromEnum(handle));
@@ -389,7 +393,7 @@ pub fn Textures(renderer_backend: type) type {
                 self.renderer._log.debug("Creating missing texture", .{});
 
                 const missing_texture = 0;
-                self.handles[missing_texture].generation = .null_handle;
+                self.handles[missing_texture].generation = @enumFromInt(0);
                 self.handles[missing_texture].id = MissingTexture.id;
                 self.uses[missing_texture] = .diffuse;
 
@@ -418,7 +422,7 @@ pub fn Textures(renderer_backend: type) type {
                 self.renderer._log.debug("Creating base colour", .{});
 
                 const base_colour = 1;
-                self.handles[base_colour].generation = .null_handle;
+                self.handles[base_colour].generation = @enumFromInt(0);
                 self.handles[base_colour].id = MissingTexture.id;
                 self.uses[base_colour] = .diffuse;
 
