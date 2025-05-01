@@ -206,5 +206,3 @@ pub fn copy_from_buffer(
 
     cmd.handle.copyBufferToImage(buffer, self.handle, .transfer_dst_optimal, 1, @ptrCast(&copy));
 }
-
-const std = @import("std");

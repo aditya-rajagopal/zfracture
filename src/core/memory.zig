@@ -133,12 +133,12 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
                     self.log.debug("|\t{s:<16}| {s:^9} | {s:^9}|", .{ "MemoryTag", "Current", "Peak" });
                     self.log.debug("=" ** padding, .{});
                     inline for (@typeInfo(MemoryTag).@"enum".fields) |field| {
-                        const curr_bytes = defines.parse_bytes(self.memory_stats.current_memory[field.value]);
-                        const peak_bytes = defines.parse_bytes(self.memory_stats.peak_memory[field.value]);
+                        const curr_bytes = defines.BytesRepr.from_bytes(self.memory_stats.current_memory[field.value]);
+                        const peak_bytes = defines.BytesRepr.from_bytes(self.memory_stats.peak_memory[field.value]);
                         self.log.debug("|\t{s:<16}| {s} |{s} |", .{ field.name, curr_bytes, peak_bytes });
                     }
-                    const curr_bytes = defines.parse_bytes(self.memory_stats.current_total_memory);
-                    const peak_bytes = defines.parse_bytes(self.memory_stats.peak_total_memory);
+                    const curr_bytes = defines.BytesRepr.from_bytes(self.memory_stats.current_total_memory);
+                    const peak_bytes = defines.BytesRepr.from_bytes(self.memory_stats.peak_total_memory);
                     self.log.debug("=" ** padding, .{});
                     self.log.debug("|\t{s:<16}| {s} |{s} |", .{ "TOTAL", curr_bytes, peak_bytes });
                     self.log.debug("=" ** padding, .{});

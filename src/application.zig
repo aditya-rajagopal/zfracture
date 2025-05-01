@@ -13,6 +13,7 @@ const config = @import("config.zig");
 const app_config = config.app_config;
 const platform = @import("platform/platform.zig");
 
+/// Struct for storing the game DLL instance and last modified timestamp
 const DLL = switch (builtin.mode) {
     .Debug => struct {
         instance: std.DynLib,
@@ -21,19 +22,36 @@ const DLL = switch (builtin.mode) {
     else => void,
 };
 
+/// The type for the logging system used by the engine internal
 const EngineLog = core.log.ScopedLogger(core.log.default_log, .ENGINE, core.log.default_level);
 
 pub const Application = @This();
+/// The engine state that is passed to the game for use in systems. The engine internal owns the state memory
+/// to allow the game to be reloaded. All fracture systems are designed to not have any internal state and accept a pointer
+/// to the data that controls behaviour. These states live in the fracture structure.
+///
+/// see :Fracture
 engine: core.Fracture = undefined,
+/// Private engine log
 log: EngineLog,
+/// The state for the platform layer
 platform_state: platform.PlatformState = undefined,
 
-// frontend: Frontend = undefined,
+/// A pointer to the game state that is defined by and manipulated by the game but owned by the engine. The game
+/// must initialize this state and allocate it based on its requirements using the allocators provided by the engine.
+/// This allows the game to be reloaded without requiring an engine and game restart. To ensure this the game/application should
+/// ensure it does not have any internal state that is not owned by the engine.
 game_state: *anyopaque,
+/// The game api that is required by the engine to run the application
 api: core.API,
+/// In debug mode to reference the DLL
 dll: DLL,
+/// The arnea that is refreshed each frame.
 frame_arena: std.heap.ArenaAllocator = undefined,
+/// engine clock
 timer: std.time.Timer,
+
+var game_api: core.API = undefined;
 
 const ApplicationError =
     error{ ClientAppInit, FailedUpdate, FailedRender, DLLLoadFailed } ||
@@ -47,12 +65,14 @@ const ApplicationError =
 pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     var start = std.time.Timer.start() catch unreachable;
 
-    // Memory
+    // NOTE: Allocate application state
     const app: *Application = try allocator.create(Application);
     errdefer allocator.destroy(app);
 
     app.engine.is_running = false;
     app.engine.is_suspended = false;
+
+    // NOTE: Game API
     switch (builtin.mode) {
         .Debug => {
             const file: std.fs.File = try std.fs.cwd().openFile(config.dll_name, .{});
@@ -64,25 +84,26 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
             }
         },
         else => {
-            app.api = config.app_api;
+            std.debug.print("I am setting the api\n", .{});
+            game_api = config.app_api;
         },
     }
 
-    // Logging
+    // NOTE: Init Logging
     app.engine.log_config.init();
     try app.engine.log_config.stderr_init();
-    try app.engine.log_config.file_init();
+    // try app.engine.log_config.file_init();
     errdefer app.engine.log_config.deinit();
 
     app.log = EngineLog.init(&app.engine.log_config);
 
     app.log.info("Logging system has been initialized", .{});
 
-    // Event
+    // NOTE: Event System
     try app.engine.event.init();
     errdefer app.engine.event.deinit();
 
-    // Platform
+    // NOTE: Init Platform
     try platform.init(
         app,
         &app.platform_state,
@@ -95,7 +116,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     errdefer platform.deinit(&app.platform_state);
     app.log.info("Platform layer has been initialized", .{});
 
-    // Memory
+    // NOTE: Memory
     app.engine.memory.gpa.init(allocator, &app.engine.log_config);
     const arena_allocator = app.engine.memory.gpa.get_type_allocator(.frame_arena);
     if (comptime builtin.mode == .Debug) {
@@ -106,6 +127,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
         app.engine.memory.gpa.memory_stats.peak_memory[@intFromEnum(core.EngineMemoryTag.application)] = @sizeOf(Application);
     }
 
+    // NOTE: Init frame arena
     app.frame_arena = std.heap.ArenaAllocator.init(arena_allocator);
     app.engine.memory.frame_allocator.init(app.frame_arena.allocator(), &app.engine.log_config);
 
@@ -122,10 +144,10 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     app.log.info("Memory has been initialized", .{});
     errdefer app.frame_arena.deinit();
 
-    // Input
+    // NOTE: Input System
     app.engine.input.init();
 
-    // Renderer
+    // NOTE: Renderer
     const renderer_allocator = app.engine.memory.gpa.get_type_allocator(.renderer);
     try app.engine.renderer.init(
         renderer_allocator,
@@ -137,10 +159,9 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     errdefer app.engine.renderer.deinit();
     app.log.info("Renderer initialized", .{});
 
-    // Application
-    app.log.info("Engine memory: {any}\n", .{app.engine.memory.gpa});
+    // NOTE: Client application
     app.log.debug("Engine address: {*}\n", .{&app.engine});
-    app.game_state = app.api.init(&app.engine) orelse {
+    app.game_state = game_api.init(&app.engine) orelse {
         @branchHint(.cold);
         app.log.fatal("Client application failed to initialize", .{});
         return ApplicationError.ClientAppInit;
@@ -148,7 +169,9 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     app.log.info("Client application has been initialized", .{});
 
-    app.api.on_resize(&app.engine, app.game_state, app_config.window_pos.width, app_config.window_pos.height);
+    // NOTE: Call the game's on_resize callback to allow teh game to make resolution related decisions before the
+    // game loop starts
+    game_api.on_resize(&app.engine, app.game_state, app_config.window_pos.width, app_config.window_pos.height);
     const end = start.read();
 
     app.log.info("Engine has been initialized in {s}", .{std.fmt.fmtDuration(end)});
@@ -159,7 +182,7 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 pub fn deinit(self: *Application) void {
 
     // Application shutdown
-    self.api.deinit(&self.engine, self.game_state);
+    game_api.deinit(&self.engine, self.game_state);
     self.log.info("Client application has been shutdown", .{});
 
     // Renderer shutdown
@@ -192,7 +215,6 @@ pub fn deinit(self: *Application) void {
 }
 
 pub fn run(self: *Application) ApplicationError!void {
-    // debug_assert(initialized, @src(), "Trying to run application when none was created.", .{});
     var err: ?ApplicationError = null;
 
     self.engine.memory.gpa.print_memory_stats();
@@ -202,12 +224,14 @@ pub fn run(self: *Application) ApplicationError!void {
     self.timer = std.time.Timer.start() catch unreachable;
     var delta_time: u64 = 0;
     var frame_time: u64 = 0;
+    var dll_time: u64 = 0;
     var frame_count: u64 = 0;
     var last_frame_count: u64 = 0;
 
     var end = self.timer.lap();
 
     const frame_rate_interval = 2 * std.time.ns_per_s;
+    const dll_update_interval = @divFloor(std.time.ns_per_s, 30);
     var current_frame_rate: f32 = 0.0;
 
     while (self.engine.is_running) {
@@ -216,14 +240,16 @@ pub fn run(self: *Application) ApplicationError!void {
         // NOTE: Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
         if (!self.frame_arena.reset(.retain_capacity)) {
-            @branchHint(.unlikely);
+            @branchHint(.cold);
             core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
         }
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
+            @branchHint(.likely);
             if (self.engine.renderer.begin_frame(self.engine.delta_time)) {
-                if (!self.api.update_and_render(&self.engine, self.game_state)) {
+                @branchHint(.likely);
+                if (!game_api.update_and_render(&self.engine, self.game_state)) {
                     @branchHint(.cold);
                     core_log.fatal("Client app update failed, shutting down", .{});
                     err = ApplicationError.FailedUpdate;
@@ -231,58 +257,65 @@ pub fn run(self: *Application) ApplicationError!void {
                 }
 
                 if (!self.engine.renderer.end_frame(self.engine.delta_time)) {
+                    @branchHint(.cold);
                     self.engine.is_running = false;
                     continue;
-                }
-
-                delta_time += end;
-                frame_time += end;
-                frame_count += 1;
-
-                if (frame_time > frame_rate_interval) {
-                    current_frame_rate = @as(f32, @floatFromInt(frame_count - last_frame_count)) / @as(f32, @floatFromInt(frame_time));
-                    current_frame_rate *= @as(f32, @floatFromInt(std.time.ns_per_s));
-                    frame_time = 0;
-                    last_frame_count = frame_count;
                 }
             }
         }
 
-        switch (builtin.mode) {
-            .Debug => {
-                const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
-                    continue;
-                };
-                const stats = try file.stat();
-                file.close();
-                if (self.dll.time_stamp != stats.mtime) {
-                    self.log.debug("New DLL detected", .{});
-                    self.dll.time_stamp = stats.mtime;
-                    // _ = platform.free_library(self.dll.instance);
-                    self.dll.instance.close();
-                    _ = self.reload_library();
-                }
-            },
-            else => {},
-        }
-
         if (self.engine.input.key_pressed_this_frame(.KEY_2)) {
-            self.log.info("Frame rate: {d}\n", .{current_frame_rate});
+            self.log.err("Frame rate: {d}\n", .{current_frame_rate});
         }
+        // NOTE: Update the input states
         self.engine.input.update();
-        end = self.timer.lap();
 
+        if (!self.engine.is_suspended) {
+            @branchHint(.likely);
+            delta_time += end;
+            frame_time += end;
+            dll_time += end;
+            frame_count += 1;
+
+            if (delta_time > dll_update_interval) {
+                switch (builtin.mode) {
+                    .Debug => {
+                        const file: std.fs.File = std.fs.cwd().openFile(config.dll_name, .{}) catch {
+                            continue;
+                        };
+                        const stats = try file.stat();
+                        file.close();
+                        if (self.dll.time_stamp != stats.mtime) {
+                            self.log.debug("new dll detected", .{});
+                            self.dll.time_stamp = stats.mtime;
+                            self.dll.instance.close();
+                            _ = self.reload_library();
+                        }
+                    },
+                    else => {},
+                }
+                dll_time = 0;
+            }
+
+            if (frame_time > frame_rate_interval) {
+                current_frame_rate = @as(f32, @floatFromInt(frame_count - last_frame_count)) / @as(f32, @floatFromInt(frame_time));
+                current_frame_rate *= @as(f32, @floatFromInt(std.time.ns_per_s));
+                frame_time = 0;
+                last_frame_count = frame_count;
+            }
+        }
+
+        end = self.timer.lap();
         const ns_to_s: f32 = 1.0 / @as(f32, @floatFromInt(std.time.ns_per_s));
         self.engine.delta_time = @as(f32, @floatFromInt(end)) * ns_to_s;
-
-        // break;
     }
 
     var dt: f64 = @floatFromInt(delta_time);
     dt /= std.time.ns_per_s;
     const float_count: f64 = @floatFromInt(frame_count);
-    self.log.err("Avg Delta_time: {d}, FPS: {d}f/s", .{ std.fmt.fmtDuration(@divTrunc(delta_time, frame_count)), float_count / dt });
-    // In case the loop exited for some other reason
+    self.log.debug("Avg Delta_time: {d}, FPS: {d}f/s", .{ std.fmt.fmtDuration(@divTrunc(delta_time, frame_count)), float_count / dt });
+
+    // NOTE: In case the loop exited for some other reason
     self.engine.is_running = false;
     if (err) |e| {
         return e;
@@ -316,7 +349,7 @@ pub fn on_event(self: *Application, comptime event_code: core.Event.EventCode, e
                     if (self.engine.is_running) {
                         _ = self.engine.event.fire(.WINDOW_RESIZE, &self.engine, event_data);
                         self.engine.renderer.on_resize(self.engine.extent);
-                        self.api.on_resize(&self.engine, self.game_state, self.engine.extent.width, self.engine.extent.height);
+                        game_api.on_resize(&self.engine, self.game_state, self.engine.extent.width, self.engine.extent.height);
                     }
                 }
             }
@@ -337,13 +370,9 @@ fn reload_library(self: *Application) bool {
     const update_and_render = self.dll.instance.lookup(core.UpdateAndRenderFn, "update_and_render") orelse return false;
     const on_resize = self.dll.instance.lookup(core.OnResizeFn, "on_resize") orelse return false;
 
-    self.api.init = init_fn;
-    self.api.deinit = deinit_fn;
-    self.api.update_and_render = update_and_render;
-    self.api.on_resize = on_resize;
+    game_api.init = init_fn;
+    game_api.deinit = deinit_fn;
+    game_api.update_and_render = update_and_render;
+    game_api.on_resize = on_resize;
     return true;
 }
-
-// test {
-//     std.debug.print("Size of: {d}, {d}\n", .{ @sizeOf(Application), @alignOf(Application) });
-// }

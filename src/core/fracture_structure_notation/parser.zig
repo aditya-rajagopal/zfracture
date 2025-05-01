@@ -361,7 +361,7 @@ fn parse_number_literal(comptime base_type: BaseType, noalias payload: []const u
 test parse_fsd {
     var material: types.MaterialConfig = undefined;
     var start = std.time.Timer.start() catch unreachable;
-    const iterations = 1;
+    const iterations = 100000;
     for (0..iterations) |_| {
         try parse_fsd(.material, "test.fsd", &material);
     }
@@ -370,13 +370,3 @@ test parse_fsd {
 
     std.debug.print("Material: {any}\n", .{material});
 }
-
-// const math = @import("fr_math");
-
-// test "load binary" {
-//     std.debug.print("type: {s}\n", .{@typeName(math.Vec3)});
-//     const fields = @typeInfo(math.Vec3).@"struct".fields;
-//     inline for (fields) |f| {
-//         std.debug.print("Type field: {s}: {s}\n", .{ f.name, @typeName(f.type) });
-//     }
-// }

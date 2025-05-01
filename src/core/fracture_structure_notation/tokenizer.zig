@@ -32,7 +32,7 @@ pub const Token = struct {
         .{ "vec3s", .vec3s },
         .{ "vec4s", .vec4s },
         .{ "string", .string },
-        .{ "Texture", .texture },
+        .{ "texture", .texture },
         .{ "def", .def },
         .{ "true", .true },
         .{ "false", .false },

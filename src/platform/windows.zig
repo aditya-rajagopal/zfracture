@@ -143,7 +143,7 @@ fn win32_process_message(
     msg: u32,
     w_param: windows.WPARAM,
     l_param: windows.LPARAM,
-) callconv(windows.WINAPI) windows.LRESULT {
+) callconv(std.builtin.CallingConvention.winapi) windows.LRESULT {
     switch (msg) {
         // Erasing the backgroudn will be handled by the application. Stops flickering
         win32.WM_ERASEBKGND => return 1,

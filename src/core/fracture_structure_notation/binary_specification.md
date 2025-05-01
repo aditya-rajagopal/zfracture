@@ -25,8 +25,8 @@ NOTE: The timestamp will not be included in final packed data
 
 ```zig
 const FSDHeader = align(1) struct {
-    magic: [4]u8,
     time_stamp: u64,
+    magic: [4]u8,
     type: u32,
 	version: packed struct(u32) {
         major: u4,

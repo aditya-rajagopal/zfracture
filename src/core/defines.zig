@@ -2,6 +2,7 @@ pub const KB: u64 = 1024;
 pub const MB: u64 = 1024 * 1024;
 pub const GB: u64 = 1024 * 1024 * 1024;
 
+/// A convinient way to store memory size information
 pub const BytesRepr = union(enum) {
     B: u64,
     KB: f64,
@@ -17,6 +18,27 @@ pub const BytesRepr = union(enum) {
         };
     }
 
+    pub fn from_bytes(bytes: u64) BytesRepr {
+        switch (bytes) {
+            0...1024 => return .{ .B = bytes },
+            KB + 1...MB => {
+                const as_float: f64 = @floatFromInt(bytes);
+                const value = as_float / @as(f64, @floatFromInt(KB));
+                return .{ .KB = value };
+            },
+            MB + 1...GB => {
+                const as_float: f64 = @floatFromInt(bytes);
+                const value = as_float / @as(f64, @floatFromInt(MB));
+                return .{ .MB = value };
+            },
+            else => {
+                const as_float: f64 = @floatFromInt(bytes);
+                const value = as_float / @as(f64, @floatFromInt(GB));
+                return .{ .GB = value };
+            },
+        }
+    }
+
     pub fn format(self: BytesRepr, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         return switch (self) {
             .B => |b| blk: {
@@ -30,40 +52,19 @@ pub const BytesRepr = union(enum) {
     }
 };
 
-pub fn parse_bytes(bytes: u64) BytesRepr {
-    switch (bytes) {
-        0...1024 => return .{ .B = bytes },
-        KB + 1...MB => {
-            const as_float: f64 = @floatFromInt(bytes);
-            const value = as_float / @as(f64, @floatFromInt(KB));
-            return .{ .KB = value };
-        },
-        MB + 1...GB => {
-            const as_float: f64 = @floatFromInt(bytes);
-            const value = as_float / @as(f64, @floatFromInt(MB));
-            return .{ .MB = value };
-        },
-        else => {
-            const as_float: f64 = @floatFromInt(bytes);
-            const value = as_float / @as(f64, @floatFromInt(GB));
-            return .{ .GB = value };
-        },
-    }
-}
-
-test parse_bytes {
+test BytesRepr {
     const bytes: u64 = 1024;
     const kb: u64 = KB * 2;
     const mb: u64 = 2 * MB;
     const gb: u64 = 2 * GB;
 
-    var out = parse_bytes(bytes);
+    var out = BytesRepr.parse_bytes(bytes);
     try testing.expectEqual(out, BytesRepr{ .B = 1024 });
-    out = parse_bytes(kb);
+    out = BytesRepr.parse_bytes(kb);
     try testing.expectEqual(out, BytesRepr{ .KB = 2 });
-    out = parse_bytes(mb);
+    out = BytesRepr.parse_bytes(mb);
     try testing.expectEqual(out, BytesRepr{ .MB = 2 });
-    out = parse_bytes(gb);
+    out = BytesRepr.parse_bytes(gb);
     try testing.expectEqual(out, BytesRepr{ .GB = 2 });
 }
 

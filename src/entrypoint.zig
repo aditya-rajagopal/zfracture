@@ -7,7 +7,7 @@ const core = @import("fr_core");
 // else
 //     @compileError("app.zig must define a pub fn start(std.mem.Allocator) void {}");
 
-pub fn main() !void {
+pub fn entrypoint() !void {
     // Allocator init
     // TODO: Get the allocator from somewhere else. Platform?
 

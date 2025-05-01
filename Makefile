@@ -13,6 +13,9 @@ test:
 build_debug: game
 	zig build -freference-trace
 
+run: build_debug
+	raddbg --project:.\testbed_.rdbg --auto_run --quit_after_success
+
 # release needs to pass tests first
 build_release: test
 	zig build -Doptimize=ReleaseSafe

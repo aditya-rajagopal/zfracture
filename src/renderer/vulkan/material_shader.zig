@@ -38,6 +38,7 @@ instance_states: [T.MAX_MATERIAL_INSTANCES]T.MaterialShaderInstanceState,
 
 pipeline: Pipeline,
 
+// TODO: Why does this have to live here?
 textures: *Textures,
 
 // HACK: Just to see something
@@ -205,7 +206,7 @@ pub fn create(ctx: *const Context, texture_system: *Textures) Error!MaterialShad
 
     // INFO: Descriptor layouts
 
-    // NOTE: We only have 1 for now
+    // NOTE: We only have 2 for now
     const descriptor_set_layout_count: usize = 2;
     const layouts = [descriptor_set_layout_count]vk.DescriptorSetLayout{
         out_shader.global_descriptor_set_layout,
@@ -377,7 +378,7 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     const instance_state = &self.instance_states[@intFromEnum(geometry.material_id)];
     const descriptor_set = instance_state.descriptor_sets[image_index];
 
-    // We need to check if htis needs to be done
+    // We need to check if this needs to be done
     var descriptor_writes: [T.MATERIAL_SHADER_DESCRIPTOR_COUNT]vk.WriteDescriptorSet = undefined;
     var descriptor_count: u32 = 0;
     var descriptor_index: u32 = 0;
@@ -386,15 +387,18 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     const range: u64 = @sizeOf(T.MaterialUO);
     // We have location in the buffer per descriptor set per material instance
     // So the offset in memory will be id * MAX_SETS + image_index;
-    const offset: u64 = @sizeOf(T.MaterialUO) * (@intFromEnum(geometry.material_id) * MAX_DESCRIPTOR_SETS + image_index);
+    const offset_index: u64 = @intFromEnum(geometry.material_id) * MAX_DESCRIPTOR_SETS + image_index;
+    const offset: u64 = @sizeOf(T.MaterialUO) * offset_index;
 
-    // HACK: JUst to see if the local buffer upload is working
-    var material_uo: T.MaterialUO = undefined;
-    self.accumulator += ctx.frame_delta_time;
-    const s = (@sin(self.accumulator * m.pi) + 1.0) / 2.0;
-    material_uo.diffuse_colour = m.vec4s(s, s, s, 1.0);
+    {
+        // HACK: JUst to see if the local buffer upload is working
+        var material_uo: T.MaterialUO = undefined;
+        self.accumulator += ctx.frame_delta_time;
+        const s = (@sin(self.accumulator * m.pi) + 1.0) / 2.0;
+        material_uo.diffuse_colour = m.vec4s(s, s, s, 1.0);
 
-    self.local_uniform_buffer.load_data(offset, range, .{}, ctx, @ptrCast(&material_uo));
+        self.local_uniform_buffer.load_data(offset, range, .{}, ctx, @ptrCast(&material_uo));
+    }
 
     if (instance_state.descriptor_states[descriptor_index].generations[image_index] == .null_handle) {
         const buffer_info = vk.DescriptorBufferInfo{

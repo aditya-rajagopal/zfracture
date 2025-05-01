@@ -275,9 +275,7 @@ pub fn temp_draw_object(self: *Context, geometry: T.RenderData) void {
     const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
 
     self.material_shader.update_object(self, geometry);
-
     // HACK: Temporary code to get something working
-
     const offsets = [_]vk.DeviceSize{0};
     command_buffer.handle.bindVertexBuffers(0, 1, @ptrCast(&self.object_vertex_buffer.handle), @ptrCast(&offsets));
     command_buffer.handle.bindIndexBuffer(self.object_index_buffer.handle, 0, .uint32);
@@ -299,7 +297,7 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
     }
 
     if (self.framebuffer_size_generation != self.last_framebuffer_generation) {
-        @branchHint(.unlikely);
+        @branchHint(.cold);
         self.device.handle.deviceWaitIdle() catch |err| {
             self.log.err("Vulkan Begin frame waitForIdle failed: {s}", .{@errorName(err)});
             return false;
@@ -329,7 +327,8 @@ pub fn begin_frame(self: *Context, delta_time: f32) bool {
 
     const command_buffer = &self.graphics_command_buffers[self.swapchain.current_image_index];
     command_buffer.reset();
-    command_buffer.begin(false, false, false) catch |err| {
+    // TODO: What should the parameters be here?
+    command_buffer.begin(true, false, false) catch |err| {
         @branchHint(.cold);
         self.log.err("Vulkan Begin frame command buffer failed failed: {s}", .{@errorName(err)});
         return false;

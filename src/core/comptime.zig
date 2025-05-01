@@ -1,4 +1,5 @@
 const field = @import("fracture_structure_notation/field.zig");
+
 pub const get_nested_field_ptr = field.get_nested_field_ptr;
 pub const get_access_type = field.get_access_type;
 

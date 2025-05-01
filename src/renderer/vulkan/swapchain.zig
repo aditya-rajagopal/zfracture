@@ -230,13 +230,17 @@ pub fn present(self: *Swapchain, command_buffer: *CommandBuffer) SwapchainPresen
     };
 
     switch (result) {
-        .success => {},
+        .success => {
+            @branchHint(.likely);
+        },
         .suboptimal_khr => return false,
         else => {
             return error.FailedToPresentSwapchain;
         },
     }
 
+    // TODO: Understand the mechanics of this
+    // LEFTOFF: How does this mechanic work of swapping semephores
     const next_image = self.ctx.device.handle.acquireNextImageKHR(
         self.handle,
         std.math.maxInt(u64),
@@ -377,12 +381,14 @@ fn find_present_mode(ctx: *const Context) !vk.PresentModeKHR {
 
     for (preferred) |mode| {
         if (std.mem.indexOfScalar(vk.PresentModeKHR, present_modes, mode) != null) {
+            ctx.log.info("Found and selected present mode: {s}\n", .{@tagName(mode)});
             return mode;
         }
     }
 
     // NOTE: If we dont find any of our preferred modes we return with fifo which should exist on all cards according
     // to the vulkan spec
+    ctx.log.info("Could not find preferred presentation modes defaulting to fifo", .{});
     return .fifo_khr;
 }
 

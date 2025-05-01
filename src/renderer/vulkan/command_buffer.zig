@@ -80,6 +80,7 @@ pub inline fn update_submitted(self: *CommandBuffer) void {
 
 pub fn reset(self: *CommandBuffer) void {
     //TODO: Check if the command buffere is in a valid state to transition to ready
+    self.handle.resetCommandBuffer(.{}) catch unreachable;
     self.state = .ready;
 }
 
