@@ -43,7 +43,8 @@ test Distinct {
 /// The backing_int_type provided must be an unsigned integer and should be able to accomodate the combined enums.
 pub fn MergeEnums(comptime enums: []const type, comptime backing_int_type: type) type {
     const int_type_info = @typeInfo(backing_int_type);
-    if (int_type_info != .int and int_type_info.Int.signedness != .unsigned) {
+    comptime assert(int_type_info == .int);
+    if (int_type_info.int.signedness != .unsigned) {
         @compileError("Expected an unsigned integer as backing_int_type got " ++ @typeName(backing_int_type));
     }
 
@@ -64,7 +65,7 @@ pub fn MergeEnums(comptime enums: []const type, comptime backing_int_type: type)
         }
     }
 
-    comptime std.debug.assert(total < std.math.maxInt(backing_int_type));
+    comptime assert(total < std.math.maxInt(backing_int_type));
 
     comptime var enum_fields: [total]std.builtin.Type.EnumField = undefined;
 
@@ -77,6 +78,7 @@ pub fn MergeEnums(comptime enums: []const type, comptime backing_int_type: type)
             i += 1;
         }
     }
+
     var enum_type: std.builtin.Type.Enum = undefined;
 
     enum_type.fields = &enum_fields;
