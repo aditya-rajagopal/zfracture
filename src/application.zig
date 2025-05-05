@@ -46,8 +46,10 @@ game_state: *anyopaque,
 api: core.API,
 /// In debug mode to reference the DLL
 dll: DLL,
+/// The frame memory reference
+frame_memory: []u8,
 /// The arnea that is refreshed each frame.
-frame_arena: std.heap.ArenaAllocator = undefined,
+frame_arena: std.heap.FixedBufferAllocator = undefined,
 /// engine clock
 timer: std.time.Timer,
 
@@ -117,7 +119,6 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
 
     // NOTE: Memory
     app.engine.memory.gpa.init(allocator, &app.engine.log_config);
-    const arena_allocator = app.engine.memory.gpa.get_type_allocator(.frame_arena);
     if (comptime builtin.mode == .Debug) {
         // NOTE: Tracking the allocation of the application
         app.engine.memory.gpa.memory_stats.current_memory[@intFromEnum(core.EngineMemoryTag.application)] = @sizeOf(Application);
@@ -127,21 +128,15 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
     }
 
     // NOTE: Init frame arena
-    app.frame_arena = std.heap.ArenaAllocator.init(arena_allocator);
+    const frame_allocator = app.engine.memory.gpa.get_type_allocator(.frame_arena);
+    const preheat_bytes = comptime app_config.frame_arena_preheat_size.as_bytes();
+    app.frame_memory = try frame_allocator.alloc(u8, preheat_bytes);
+
+    app.frame_arena = std.heap.FixedBufferAllocator.init(app.frame_memory);
     app.engine.memory.frame_allocator.init(app.frame_arena.allocator(), &app.engine.log_config);
 
-    const preheat_bytes = comptime app_config.frame_arena_preheat_size.as_bytes();
-    if (comptime preheat_bytes != 0) {
-        const ptr = try app.engine.memory.frame_allocator.backing_allocator.alloc(u8, preheat_bytes);
-        @memset(ptr, 0);
-        if (!app.frame_arena.reset(.retain_capacity)) {
-            @branchHint(.unlikely);
-            app.log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
-        }
-        app.log.info("Frame arena has been preheated with {d} bytes of memory", .{preheat_bytes});
-    }
     app.log.info("Memory has been initialized", .{});
-    errdefer app.frame_arena.deinit();
+    errdefer frame_allocator.free(app.frame_memory);
 
     // NOTE: Input System
     app.engine.input.init();
@@ -194,11 +189,12 @@ pub fn deinit(self: *Application) void {
 
     // Memory Shutdown
     self.engine.memory.frame_allocator.print_memory_stats();
-
-    // self.engine.memory.gpa.deinit();
     self.engine.memory.frame_allocator.deinit();
-    self.frame_arena.deinit();
+    // Free the memory backing for the linear allocator
+    const frame_allocator = self.engine.memory.gpa.get_type_allocator(.frame_arena);
+    frame_allocator.free(self.frame_memory);
     self.engine.memory.gpa.print_memory_stats();
+    self.engine.memory.gpa.deinit();
     self.log.info("Context memory has been shutdown", .{});
 
     // Event shutdown
@@ -238,10 +234,8 @@ pub fn run(self: *Application) ApplicationError!void {
 
         // NOTE: Clear the arena right before the loop stats but after the events are handled else we might be invalidating
         // some pointers.
-        if (!self.frame_arena.reset(.retain_capacity)) {
-            @branchHint(.cold);
-            core_log.warn("Arena allocation failed to reset with retain capacity. It will hard reset", .{});
-        }
+        self.frame_arena.reset();
+
         self.engine.memory.frame_allocator.reset_stats();
 
         if (!self.engine.is_suspended) {
@@ -264,7 +258,7 @@ pub fn run(self: *Application) ApplicationError!void {
         }
 
         if (self.engine.input.key_pressed_this_frame(.KEY_2)) {
-            self.log.err("Frame rate: {d}\n", .{current_frame_rate});
+            self.log.err("Frame rate: {d}", .{current_frame_rate});
         }
         // NOTE: Update the input states
         self.engine.input.update();
@@ -334,7 +328,6 @@ pub fn on_event(self: *Application, comptime event_code: core.Event.EventCode, e
             if (self.engine.extent.width != w or self.engine.extent.height != h) {
                 self.engine.extent.width = w;
                 self.engine.extent.height = h;
-                // self.log.trace("window_resized: w/h: {d}/{d}", .{ self.engine.extent.width, self.engine.extent.height });
                 if (w == 0 or h == 0) {
                     self.log.info("Application has been minimized/suspended\n", .{});
                     self.engine.is_suspended = true;
