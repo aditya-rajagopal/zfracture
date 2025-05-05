@@ -22,7 +22,6 @@ else
     ResourceSystemConfig{
         .asset_path = "./assets/",
         .base_paths = std.enums.directEnumArrayDefault(T.ResourceTypes, []const u8, "", 0, .{
-            .text = "text/",
             .binary = "data/",
             .image = "textures/",
         }),
@@ -34,7 +33,6 @@ pub const Resource = struct {
     data: *anyopaque,
 
     pub const Config = union(T.ResourceTypes) {
-        text: TextConfig,
         binary: BinaryConfig,
         image: ImageConfig,
     };
@@ -94,7 +92,6 @@ pub const Resource = struct {
         };
     };
 
-    pub const TextConfig = void;
     pub const BinaryConfig = void;
 };
 

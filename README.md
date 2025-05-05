@@ -54,6 +54,7 @@ Making use of zig comptime allows many features to be implemented in interesting
 The following is the list of features that the engine has and is planned. More will be added as time goes on.
 
 ## Features TODO:
+- [ ] Create a command buffer like structure that could accept commands to execute over many frames or defer execution to future frames
 - [ ] Fracture Structure Definiton
     - [x] Basic parser
     - [ ] Optimize parser

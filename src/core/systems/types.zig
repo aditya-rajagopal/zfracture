@@ -17,7 +17,6 @@ pub const Handle = extern struct {
 };
 
 pub const ResourceTypes = enum(u4) {
-    text,
     binary,
     image,
     // texture,
