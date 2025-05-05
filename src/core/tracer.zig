@@ -8,12 +8,6 @@ pub const tsc = @import("perf/tsc.zig");
 
 const TracerLog = log.ScopedLogger(log.default_log, .TRACER, log.default_level);
 
-pub const TracerInfo = struct {
-    hit_count: u64 = 0,
-    scope_time_exclusive: u64 = 0,
-    scope_time_inclusive: u64 = 0,
-};
-
 pub fn Tracer(comptime AnchorsEnum: type, comptime time_fn: *const fn () u64, comptime enabled: bool) type {
     const info = @typeInfo(AnchorsEnum);
     comptime assert(info == .@"enum");
@@ -29,11 +23,17 @@ pub fn Tracer(comptime AnchorsEnum: type, comptime time_fn: *const fn () u64, co
 
         const Self = @This();
 
+        pub const TracerInfo = if (enabled) struct {
+            hit_count: u64 = 0,
+            scope_time_exclusive: u64 = 0,
+            scope_time_inclusive: u64 = 0,
+        } else void;
+
+        /// TODO: Does this need to change?
         pub const TraceHandle = if (enabled) struct {
+            parent: u32,
             start_time: u64,
             inlcusive: u64,
-            parent: u32,
-            position: u32,
         } else void;
 
         pub fn init(self: *Self, calibration_time_ms: usize, log_config: *log.LogConfig) void {
@@ -72,15 +72,16 @@ pub fn Tracer(comptime AnchorsEnum: type, comptime time_fn: *const fn () u64, co
             }
         }
 
-        pub fn end(self: *Self, handle: *const TraceHandle) void {
+        pub fn end(self: *Self, comptime tag: AnchorsEnum, handle: *const TraceHandle) void {
             if (comptime enabled) {
+                const position = comptime (@as(u32, @intFromEnum(tag)) + 1);
                 const elapsed_time = time_fn() - handle.start_time;
 
                 self.tracer_anchors[handle.parent].scope_time_exclusive -%= elapsed_time;
 
-                self.tracer_anchors[handle.position].hit_count +%= 1;
-                self.tracer_anchors[handle.position].scope_time_exclusive +%= elapsed_time;
-                self.tracer_anchors[handle.position].scope_time_inclusive = handle.inlcusive +% elapsed_time;
+                self.tracer_anchors[position].hit_count +%= 1;
+                self.tracer_anchors[position].scope_time_exclusive +%= elapsed_time;
+                self.tracer_anchors[position].scope_time_inclusive = handle.inlcusive +% elapsed_time;
 
                 self.current_parent = handle.parent;
             }
@@ -99,7 +100,7 @@ pub fn Tracer(comptime AnchorsEnum: type, comptime time_fn: *const fn () u64, co
             return time_fn();
         }
 
-        pub fn tracer_print_stderr(self: *const Self) void {
+        pub fn tracer_print_stdout(self: *const Self) void {
             const full_time = self.duration_ms(self.tracer_end, self.tracer_start);
             self.log.debug("Total time: {d:.6} (CPU freq {d})", .{ full_time, self.timer_frequency });
             if (comptime enabled) {
@@ -192,4 +193,6 @@ test "Tracer" {
     tracer.finish();
     tracer.tracer_print_stderr();
     std.debug.print("Size of Tracer: {}, {}\n", .{ @sizeOf(T), @alignOf(T) });
+    std.debug.print("Size of TracerHandle: {}, {}\n", .{ @sizeOf(T.TraceHandle), @alignOf(T.TraceHandle) });
+    std.debug.print("Size of TracerInfo: {}, {}\n", .{ @sizeOf(T.TracerInfo), @alignOf(T.TracerInfo) });
 }
