@@ -75,11 +75,11 @@ pub const LogConfig = struct {
     }
 
     /// Initializes the logger to print to stderr
-    pub fn stderr_init(self: *LogConfig) LoggerError!void {
-        const stderr = std.io.getStdErr();
-        self.tty_config = platform.get_tty_config(stderr) catch return LoggerError.TTYConfigFailed;
+    pub fn stdout_init(self: *LogConfig) LoggerError!void {
+        const stdout = std.io.getStdOut();
+        self.tty_config = platform.get_tty_config(stdout) catch return LoggerError.TTYConfigFailed;
 
-        const stdwrite = stderr.writer();
+        const stdwrite = stdout.writer();
         self.buffered_writer = .{ .unbuffered_writer = stdwrite };
     }
 
@@ -324,7 +324,6 @@ pub fn default_log(
     if (logger.log_file) |_| {
         const writer = logger.file_writer.writer();
         writer.print(prefix2 ++ format ++ "\n", args) catch return;
-        // logger.buffered_writer.flush() catch return;
     }
 
     const writer = logger.buffered_writer.writer();

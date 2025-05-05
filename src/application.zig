@@ -84,14 +84,13 @@ pub fn init(allocator: std.mem.Allocator) ApplicationError!*Application {
             }
         },
         else => {
-            std.debug.print("I am setting the api\n", .{});
             game_api = config.app_api;
         },
     }
 
     // NOTE: Init Logging
     app.engine.log_config.init();
-    try app.engine.log_config.stderr_init();
+    try app.engine.log_config.stdout_init();
     // try app.engine.log_config.file_init();
     errdefer app.engine.log_config.deinit();
 
