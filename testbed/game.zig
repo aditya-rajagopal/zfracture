@@ -29,7 +29,6 @@ pub const GameState = struct {
 };
 
 pub fn init(engine: *core.Fracture) ?*anyopaque {
-    std.debug.print("In the second call: {*}\n", .{engine});
     const foo_allocator: std.mem.Allocator = engine.memory.gpa.get_type_allocator(.game);
     const state = foo_allocator.create(GameState) catch return null;
     state.delta_time = 1.0;
@@ -52,7 +51,6 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     for (names, 0..) |name, i| {
         state.textures[i] = engine.renderer.textures.create(name, false);
     }
-    state.log.debug("Textures: {any}\n", .{state.textures});
     return state;
 }
 

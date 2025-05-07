@@ -1,3 +1,18 @@
+///! Quaternion library
+///!
+///! This module provides a type for quaternions. Quaternions are used to represent rotations.
+///! Quaternions are stored in a Vec4 with the w component being the real part and the x, y and z components being the imaginary parts.
+///!
+///! # Examples
+///!
+///! ```
+///! const math = @import("fr_core");
+///! const Quat = math.Quat;
+///! const Vec3 = math.Vec3;
+///! pub fn main() !void {
+///!     const q = Quat.init(1.0, 2.0, 3.0, 4.0);
+///! }
+///! ```
 // TODO:
 //      - [ ] Benchmark
 //      - [ ] Docstrings
@@ -18,69 +33,93 @@ pub fn Quaternion(comptime backing_type: type) type {
 
         const Self = @This();
 
+        /// Identity quaternion
         pub const identity = Self.init(0.0, 0.0, 0.0, 1.0);
 
-        pub fn init(x_: E, y_: E, z_: E, w_: E) Self {
+        /// Initialize a quaternion from 4 scalars.
+        pub inline fn init(x_: E, y_: E, z_: E, w_: E) Self {
             return .{ .q = .{ x_, y_, z_, w_ } };
         }
 
-        pub fn init_from_vec3(v: *const Vec3, w_: E) Self {
+        /// Initialize a quaternion from a vector and a scalar.
+        pub inline fn init_from_vec3(v: *const Vec3, w_: E) Self {
             return .{ .q = .{ v.x(), v.y(), v.z(), w_ } };
         }
 
-        pub fn init_transform(t: *const Transform) Self {
+        /// Initialize a quaternion from a transformation.
+        pub inline fn init_transform(t: *const Transform) Self {
             return t.to_quat();
         }
 
+        /// Get the x component of the quaternion.
         pub inline fn x(self: *const Self) E {
             return self.q[0];
         }
 
+        /// Get the y component of the quaternion.
         pub inline fn y(self: *const Self) E {
             return self.q[1];
         }
 
+        /// Get the z component of the quaternion.
         pub inline fn z(self: *const Self) E {
             return self.q[2];
         }
 
+        /// Get the w component of the quaternion.
         pub inline fn w(self: *const Self) E {
             return self.q[3];
         }
 
-        pub fn to_vec4(q: *const Self) Vec4 {
+        /// Convert the quaternion to a vec4 they have the same layout so this is just a bit cast.
+        pub inline fn to_vec4(q: *const Self) Vec4 {
             return @bitCast(q.*);
         }
 
-        pub fn dot(q0: *const Self, q1: *const Self) E {
+        /// Compute the dot product of two quaternions.
+        pub inline fn dot(q0: *const Self, q1: *const Self) E {
             return @reduce(.Add, q0.q * q1.q);
         }
 
-        pub fn norm2(q: *const Self) E {
+        /// Compute the squared norm of the quaternion.
+        pub inline fn norm2(q: *const Self) E {
             return @reduce(.Add, q.q * q.q);
         }
 
-        pub fn norm(q: *const Self) E {
+        /// Compute the norm of the quaternion.
+        pub inline fn norm(q: *const Self) E {
             return std.math.sqrt(q.norm2());
         }
 
-        pub fn splat(v: E) Self {
+        /// Create a quaternion with all components set to the same value.
+        pub inline fn splat(v: E) Self {
             return .{ .q = @splat(v) };
         }
 
-        pub fn normalize(q: *const Self, delta: E) Self {
+        /// Normalize the quaternion.
+        pub inline fn normalize(q: *const Self, delta: E) Self {
             return .{ .q = q.q * Self.splat(q.norm() + delta).q };
         }
 
-        pub fn conjugate(q: *const Self) Self {
+        /// Compute the conjugate of the quaternion.
+        pub inline fn conjugate(q: *const Self) Self {
             return .{ .q = .{ -q.x(), -q.y(), -q.z(), q.w() } };
         }
 
+        /// Compute the inverse of the quaternion.
         pub fn inverse(q: *const Self) Self {
+            // NOTE(adi): the 0.00000001 is to avoid division by zero
             const n = q.norm() + 0.00000001;
-            return .{ .q = .{ -q.x() / n, -q.y() / n, -q.z() / n, q.w() / n } };
+            const inv_n = 1.0 / n;
+            return .{ .q = .{ -q.x() * inv_n, -q.y() * inv_n, -q.z() * inv_n, q.w() * inv_n } };
         }
 
+        /// Invert quaternion assuming it is already normalized.
+        pub inline fn inverse_normalized(q: *const Self) Self {
+            return q.conjugate();
+        }
+
+        /// Multiply two quaternions together using the Hamilton product.
         pub fn mul(q1: *const Self, q2: *const Self) Self {
             const q1x = q1.x();
             const q1y = q1.y();
@@ -99,6 +138,15 @@ pub fn Quaternion(comptime backing_type: type) type {
             } };
         }
 
+        /// Rotate a 3D vector by the quaternion. Assumes the quaternion is normalized.
+        pub fn rotate_vec3(q: *const Self, v: *const Vec3) Vec3 {
+            const p = v.to_vec4_dir();
+            const q_inv = q.inverse_normalized();
+            const result = q.mul(p).mul(&q_inv);
+            return result.to_vec4().to_vec3();
+        }
+
+        /// Convert the quaternion to an affine transformation.
         pub fn to_affine(q: *const Self) Transform {
             var result = Transform.identity;
             const n = q.normalize(0.0000001);
@@ -118,6 +166,7 @@ pub fn Quaternion(comptime backing_type: type) type {
             return result;
         }
 
+        /// Convert the quaternion to an affine transformation.
         pub fn to_affine_center(q: *const Self, center: *const Vec3) Transform {
             var result: Transform = undefined;
             result.c[0].vec[0] = (q.x() * q.x()) - (q.y() * q.y()) - (q.z() * q.z()) + (q.w() * q.w());
@@ -142,12 +191,16 @@ pub fn Quaternion(comptime backing_type: type) type {
             return result;
         }
 
+        /// Initialize a quaternion from an axis and an angle.
+        /// The quaternion is normalized if post_normalize is true.
         pub fn init_axis_angle(axis: *const Vec3, angle_rad: f32, comptime post_normalize: bool) Self {
             const half_angle: f32 = angle_rad * 0.5;
             const s: f32 = @sin(half_angle);
             const c: f32 = @cos(half_angle);
 
-            const q: Self = .{ .q = .{ axis.x() * s, axis.y() * s, axis.z() * s, c } };
+            const vec_s = Vec3.splat(s);
+
+            const q: Self = .init_from_vec3(vec_s.mul(axis), c);
             if (comptime post_normalize) {
                 return q.normalize(0.00000001);
             } else {
@@ -194,6 +247,7 @@ pub fn Quaternion(comptime backing_type: type) type {
             } };
         }
 
+        /// Linearly interpolate between two quaternions.
         pub inline fn lerp(q0: *const Self, q1: *const Self, t: E) Self {
             const t_v: Simd = @splat(t);
             return .{ .q = q0.q + (q1.q - q0.q) * t_v };
@@ -203,9 +257,6 @@ pub fn Quaternion(comptime backing_type: type) type {
 
 const Affine = @import("affine.zig").Affine;
 const matrix = @import("matrix.zig");
-// const Mat2x2 = matrix.Mat2x2;
-// const Mat3x3 = matrix.Mat3x3;
-// const Mat4x4 = matrix.Mat4x4;
 const vec = @import("vec.zig");
 const std = @import("std");
 const assert = std.debug.assert;

@@ -1,3 +1,53 @@
+///! Affine transformations.
+///!
+///! This module provides a type for affine transformations. Affine transformations are geometric transformations that
+///! preserve lins and parallel lines. They are represented by a 4x4 matrix.
+///!
+///! The matrix is stored in column major order.
+///!
+///! # Math
+///! The matrix is a 4x4 matrix with the following layout:
+///!
+///! ```
+///! | c0 c1 c2 c3 |
+///! | c4 c5 c6 c7 |
+///! | c8 c9 c10 c11 |
+///! | 0  0  0  1  |
+///! ```
+///!
+///! # Examples
+///!
+///! ```
+///! const Transform = Affine(f32);
+///! const s1 = vec.Vec3(f32).init(1.5, 2.2, 1.3);
+///! const s2 = vec.Vec3(f32).init(1.5, 2.2, 1.3);
+///! const t = Transform
+///!     .init_rotation(&vec.Vec3(f32).init(0.678597, 0.28109, 0.678597), 1.49750)
+///!     .mul(&Transform.init_scale(&s1))
+///!     .mul(&Transform.init_trans(&vec.Vec3(f32).init(2.0, 1.0, 3.0)))
+///!     .mul(&Transform.init_scale(&s2));
+///! const s3 = s1.mul(&s2);
+///!
+///! std.debug.print("Rotation: {any}\n\n", .{t});
+///! std.debug.print("Inv: {any}\n\n", .{t.inv_trs(&s3)});
+///! std.debug.print("Float accuracy: {d}\n\n", .{std.math.floatEps(f32)});
+///! std.debug.print("mul: {any}\n\n\n", .{t.mul(&t.inv_trs(&s3))});
+///! std.debug.print("mul: {any}\n\n\n", .{t.mul(&t.inv_trs(&s3)).eql_approx(&Transform.identity, 0.000001)});
+///! const v3 = vec.Vec3(f32).init(1, 2, 3);
+///! const vec4: vec.Vec4(f32) = @bitCast(v3);
+///!
+///! std.debug.print("Forward: {any}, {d}\n", .{ t.get_forward(), t.get_forward().norm() });
+///! std.debug.print("Rotation: {any}\n", .{t.T().mul(&t)});
+///! const t = Transform.init_slice(&.{
+///!     1.0,  2.0,  3.0,  4.0,
+///!     2.0,  6.0,  7.0,  7.0,
+///!     9.0,  10.0, 11.0, 12.0,
+///!     13.0, 14.0, 15.0, 11.0,
+///! });
+///! const t: Transform = .identity;
+///! std.debug.print("t: {any}\n", .{t.inv().mul(&t)});
+///! std.debug.print("t: {any}\n", .{t.inv().mul(&t).eql_approx(&Transform.identity, 1.19e-7)});
+///! ```
 // TODO:
 //      - [ ] Benchmark
 //      - [ ] Docstrings
@@ -24,10 +74,12 @@ pub fn Affine(comptime backing_type: type) type {
 
         pub const identity: Self = @bitCast(MatT.identity);
 
+        /// Initialize a matrix from 4 column vectors.
         pub inline fn init(c1: *const ColT, c2: *const ColT, c3: *const ColT, c4: *const ColT) Self {
             return .{ .c = .{ c1.*, c2.*, c3.*, c4.* } };
         }
 
+        /// Initialize a matrix from a slice of data. The data must be in column major order and must be 16 elements long.
         pub inline fn init_slice(data: []const E) Self {
             assert(data.len >= 16);
             return .{ .c = .{
@@ -38,6 +90,7 @@ pub fn Affine(comptime backing_type: type) type {
             } };
         }
 
+        /// Transpose the matrix.
         pub inline fn T(m: *const Self) Self {
             return .{ .c = .{
                 .{ .vec = .{ m.c[0].vec[0], m.c[1].vec[0], m.c[2].vec[0], m.c[3].vec[0] } },
@@ -47,6 +100,8 @@ pub fn Affine(comptime backing_type: type) type {
             } };
         }
 
+        /// Multiply two Affine matrices.
+        /// usage: const m3 = m1.mul(m2)
         pub inline fn mul(m1: *const Self, m2: *const Self) Self {
             switch (builtin.mode) {
                 .Debug => return m1.mul_debug(m2),
@@ -54,59 +109,69 @@ pub fn Affine(comptime backing_type: type) type {
             }
         }
 
+        /// Transform a vector by the matrix. This is the same as `v.transform(m)`.
         pub inline fn transform(m: *const Self, v: *const Vec4) Vec4 {
             return v.transform(m);
         }
 
+        /// Transform a vector by the matrix. This is the same as `v.transform_dir(m)`.
+        /// The vector is assumed to be a direction vector i.e. the w component is assumed to be 0.
         pub inline fn transform_dir(m: *const Self, v: *const Vec3) Vec3 {
             return v.transform_dir(m);
         }
 
+        /// Transform a vector by the matrix. This is the same as `v.transform_pos(m)`.
+        /// The vector is assumed to be a position vector i.e. the w component is assumed to be 1.
         pub inline fn transform_pos(m: *const Self, v: *const Vec3) Vec3 {
-            return v.transform(m);
+            return v.transform_pos(m);
         }
 
+        /// Convert the affine transformation to a 4x4 matrix. They have the same layout.
         pub inline fn to_mat(t: *const Self) MatT {
             return @bitCast(t.*);
         }
 
+        /// Convert the affine transformation to a quaternion. The quaternion is normalized.
         pub inline fn to_quat(t: *const Self) Quat {
-            var result = Quat.identity;
+            var result: Quat = undefined;
             const trace = t.c[0].vec[0] + t.c[1].vec[1] + t.c[2].vec[2];
 
             if (trace > 0.0) {
                 const root = std.math.sqrt(trace + 1.0);
                 result.q[3] = 0.5 * root;
-                const inv_root = 0.5 / root;
+                const half_inv_root = 0.5 / root;
 
-                result.q[0] = (t.c[1].vec[2] - t.c[2].vec[1]) * inv_root;
-                result.q[1] = (t.c[2].vec[0] - t.c[0].vec[2]) * inv_root;
-                result.q[2] = (t.c[0].vec[1] - t.c[1].vec[0]) * inv_root;
+                result.q[0] = (t.c[1].vec[2] - t.c[2].vec[1]) * half_inv_root;
+                result.q[1] = (t.c[2].vec[0] - t.c[0].vec[2]) * half_inv_root;
+                result.q[2] = (t.c[0].vec[1] - t.c[1].vec[0]) * half_inv_root;
             } else {
                 var i: usize = 0;
+                var j: usize = 1;
+                var k: usize = 2;
+
                 if (t.c[1].vec[1] > t.c[0].vec[0]) {
                     i = 1;
-                }
-
-                if (t.c[2].vec[2] > t.c[i].vec[i]) {
+                    j = 0;
+                    k = 2;
+                } else if (t.c[2].vec[2] > t.c[i].vec[i]) {
                     i = 2;
+                    j = 0;
+                    k = 1;
                 }
-
-                const j = (i + 1) % 3;
-                const k = (i + 2) % 3;
 
                 const root = std.math.sqrt(t.c[i].vec[i] - t.c[j].vec[j] - t.c[k].vec[k] + 1.0);
                 result.q[i] = 0.5 * root;
-                const inv_root = 0.5 / root;
+                const half_inv_root = 0.5 / root;
 
-                result.q[3] = (t.c[j].vec[k] - t.c[k].vec[j]) * inv_root;
-                result.q[j] = (t.c[j].vec[i] - t.c[i].vec[j]) * inv_root;
-                result.q[k] = (t.c[k].vec[i] - t.c[i].vec[k]) * inv_root;
+                result.q[i] = (t.c[j].vec[k] - t.c[k].vec[j]) * half_inv_root;
+                result.q[j] = (t.c[j].vec[i] - t.c[i].vec[j]) * half_inv_root;
+                result.q[k] = (t.c[k].vec[i] - t.c[i].vec[k]) * half_inv_root;
             }
 
             return result;
         }
 
+        /// Initialize a translation matrix given a delta vector.
         pub inline fn init_trans(delta: *const Vec3) Self {
             return .{
                 .c = .{
@@ -118,6 +183,7 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
+        /// Initialize a scale matrix given a scale vector.
         pub inline fn init_scale(scale: *const Vec3) Self {
             return .{
                 .c = .{
@@ -129,6 +195,8 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
+        /// Initialize a scale matrix given a single scale value.
+        /// Equivalent to `init_scale(&Vec3(E).splat(scale))`
         pub inline fn init_scale_s(scale: E) Self {
             return .{
                 .c = .{
@@ -140,9 +208,10 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
-        pub inline fn init_rotation(axis: *const Vec3, angle: E) Self {
-            const c = @cos(angle);
-            const s = @sin(angle);
+        /// Initialize a rotation matrix given an axis and an angle.
+        pub inline fn init_rotation(axis: *const Vec3, angle_rad: E) Self {
+            const c = @cos(angle_rad);
+            const s = @sin(angle_rad);
             const t = 1 - c;
             const axis_n = axis.normalize(0.00000001).to_vec4();
             const tv = axis_n.muls(t);
@@ -172,12 +241,14 @@ pub fn Affine(comptime backing_type: type) type {
             }
         }
 
-        // TODO: This seems to be faster in debug builds for multiplying only rotation matrices
-        // Figure out why this is is slower in release builds
+        /// Multiply two rotation matrices. This will ignore the translation part of the matrices.
         pub inline fn mul_rot(m1: *const Self, m2: *const Self) Self {
+            // TODO: This seems to be faster in debug builds for multiplying only rotation matrices
+            // Figure out why this is is slower in release builds
+
             // switch (builtin.mode) {
             //     .Debug => {
-            var result: Self = Self.identity;
+            var result: Self = .identity;
             inline for (0..shape[0] - 1) |r| {
                 inline for (0..shape[1] - 1) |c| {
                     var sum: E = 0.0;
@@ -194,6 +265,7 @@ pub fn Affine(comptime backing_type: type) type {
             // }
         }
 
+        /// Initialize a rotation matrix given an angle around the x axis. The rotation is counter clockwise.
         pub inline fn init_rot_x(angle_rad: E) Self {
             const c = @cos(angle_rad);
             const s = @sin(angle_rad);
@@ -207,6 +279,7 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
+        /// Initialize a rotation matrix given an angle around the y axis. The rotation is counter clockwise.
         pub inline fn init_rot_y(angle_rad: E) Self {
             const c = @cos(angle_rad);
             const s = @sin(angle_rad);
@@ -220,6 +293,7 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
+        /// Initialize a rotation matrix given an angle around the z axis. The rotation is counter clockwise.
         pub inline fn init_rot_z(angle_rad: E) Self {
             const c = @cos(angle_rad);
             const s = @sin(angle_rad);
@@ -233,47 +307,57 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
+        /// Initialize a rotation matrix given 3 angles around the x, y and z axis. The rotation is counter clockwise.
+        /// The order of the angles is x, y, z but the rotation is applied in the order z, y, x.
         pub inline fn init_rot_xyz(x_rad: E, y_rad: E, z_rad: E) Self {
             return Self.init_rot_x(x_rad).mul(&Self.init_rot_y(y_rad)).mul(&Self.init_rot_z(z_rad));
         }
 
+        /// Initialize a rotation matrix given a pivot point, an axis and an angle.
         pub inline fn init_pivot_rotation(pivot: *const Vec3, axis: *const Vec3, angle: E) Self {
             return Self.init_trans(pivot)
                 .mul(&Self.init_rotation(axis, angle))
                 .mul(Self.init_trans(&pivot.negate()));
         }
 
+        /// Get the forward vector of the matrix. The forward vector is the negative z axis.
         pub inline fn get_forward(m: *const Self) Vec3 {
             const forward: Vec3 = .{ .vec = .{ -m.c[0].vec[2], -m.c[1].vec[2], -m.c[2].vec[2] } };
             return forward.normalize(0.00000001);
         }
 
+        /// Get the backward vector of the matrix. The backward vector is the z axis.
         pub inline fn get_backward(m: *const Self) Vec3 {
             const backward: Vec3 = .{ .vec = .{ m.c[0].vec[2], m.c[1].vec[2], m.c[2].vec[2] } };
             return backward.normalize(0.00000001);
         }
 
+        /// Get the up vector of the matrix. The up vector is the y axis.
         pub inline fn get_up(m: *const Self) Vec3 {
             const up: Vec3 = .{ .vec = .{ m.c[0].vec[1], m.c[1].vec[1], m.c[2].vec[1] } };
             return up.normalize(0.00000001);
         }
 
+        /// Get the down vector of the matrix. The down vector is the negative y axis.
         pub inline fn get_down(m: *const Self) Vec3 {
             const down: Vec3 = .{ .vec = .{ -m.c[0].vec[1], -m.c[1].vec[1], -m.c[2].vec[1] } };
             return down.normalize(0.00000001);
         }
 
+        /// Get the left vector of the matrix. The left vector is the negative x axis.
         pub inline fn get_left(m: *const Self) Vec3 {
             const left: Vec3 = .{ .vec = .{ -m.c[0].vec[0], -m.c[1].vec[0], -m.c[2].vec[0] } };
             return left.normalize(0.00000001);
         }
 
+        /// Get the right vector of the matrix. The right vector is the x axis.
         pub inline fn get_right(m: *const Self) Vec3 {
             const right: Vec3 = .{ .vec = .{ m.c[0].vec[0], m.c[1].vec[0], m.c[2].vec[0] } };
             return right.normalize(0.00000001);
         }
 
         /// Calculate the look at matrix in the right handed co-ordinate system
+        /// The look at matrix will rotate the camera so that the forward vector is looking at the target.
         pub inline fn look_at(pos: *const Vec3, target: *const Vec3, up: *const Vec3) Self {
             const z_axis = target.sub(pos).normalize(0.00000001);
             const x_axis = z_axis.cross(up).normalize(0.00000001);
@@ -289,6 +373,9 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
+        /// Invert a matrix assuming there is only a translation and rotation.
+        /// This is generally faster than inverting a full affine matrix inversion or general matrix inversion.
+        /// The matrix is assumed to be in the right handed coordinate system.
         pub inline fn inv_tr(m: *const Self) Self {
             var rot_mat = m.*;
             rot_mat.c[3].vec = Vec4.w_basis.vec;
@@ -302,20 +389,10 @@ pub fn Affine(comptime backing_type: type) type {
             y = rot_mat.c[1].mul(&y);
             z = rot_mat.c[2].mul(&z);
             rot_mat.c[3].vec -= (x.vec + y.vec + z.vec);
-            // const x = m.c[3].splat_x();
-            // const y = m.c[3].splat_y();
-            // const z = m.c[3].splat_z();
-            // var trans = rot_mat.c[0].mul(&x);
-            // trans = rot_mat.c[1].fmadd(&y, &trans);
-            // trans = rot_mat.c[2].fmadd(&z, &trans);
-            // trans = trans.negate();
-            // trans = trans.add(&rot_mat.c[3]);
-            //
-            // rot_mat.c[3] = trans;
-
             return rot_mat;
         }
 
+        /// Invert an affine matrix that is a TRS transformation but the scale is provided as a vector.
         pub inline fn inv_trs(m: *const Self, scale: *const Vec3) Self {
             var rot_mat = m.*;
             const inv_scale = Vec3.ones.div(&scale.mul(scale));
@@ -367,6 +444,7 @@ pub fn Affine(comptime backing_type: type) type {
         //     // }
         // }
 
+        /// Multiply two matrices using optimized floating point math.
         inline fn mul_fast(m1: *const Self, m2: *const Self) Self {
             @setFloatMode(.optimized);
             var result: Self = undefined;
@@ -382,6 +460,7 @@ pub fn Affine(comptime backing_type: type) type {
             return result;
         }
 
+        /// General matrix inversion. This is slower than inverting a TRS matrix.
         pub inline fn inv(m: *const Self) Self {
             const Ty = Vec4.T;
             const c0 = m.c[0].vec;
@@ -465,6 +544,8 @@ pub fn Affine(comptime backing_type: type) type {
             };
         }
 
+        /// Multiply two affine matrices and ignoring the last row of the first matrix.
+        /// Directly set the last row of output to be [0, 0, 0, 1].
         inline fn mul_debug(m1: *const Self, m2: *const Self) Self {
             // @setFloatMode(.optimized);
             var result: Self = undefined;
@@ -484,6 +565,7 @@ pub fn Affine(comptime backing_type: type) type {
             return result;
         }
 
+        /// Check if two affine matrices are equal. For floats this function is only accurate for small float values in the matrix.
         pub inline fn eql(m1: *const Self, m2: *const Self) bool {
             inline for (0..Self.shape[1]) |col| {
                 if (!m1.c[col].eql(&m2.c[col])) {
@@ -493,6 +575,8 @@ pub fn Affine(comptime backing_type: type) type {
             return true;
         }
 
+        /// Check if two affine matrices are approximately equal.
+        /// TODO: Use std.math.approxEqAbs or std.math.approxEqRel instead
         pub inline fn eql_approx(m1: *const Self, m2: *const Self, tolerance: f32) bool {
             inline for (0..Self.shape[1]) |col| {
                 if (!m1.c[col].eql_approx(&m2.c[col], tolerance)) {

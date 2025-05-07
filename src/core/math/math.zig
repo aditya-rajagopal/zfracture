@@ -1,15 +1,53 @@
+///! Math library
+///!
+///! This module provides a set of math functions and types.
+///!
+///! # Math
+///! The math library provides a set of math functions and types.
+///!
+///! # Examples
+///!
+///! ``` build.zig
+///! const math_lib = b.addModule("fr_math", .{
+///!     .root_source_file = b.path("src/core/math/math.zig"),
+///!     .target = target,
+///!     .optimize = optimize,
+///! });
+///!  ...
+///! exe.root_module.addImport("fr_math", math_lib);
+///! ```
+///!
+///! ```
+///! const math = @import("fr_core");
+///! const Vec3 = math.Vec3;
+///! pub fn main() !void {
+///!     const v = Vec3.init(1.0, 2.0, 3.0);
+///!     const v2 = v.muls(2.0);
+///!     std.debug.print("v: {any}\n", .{v});
+///!     std.debug.print("v2: {any}\n", .{v2});
+///! }
+///! ```
+const builtin = @import("builtin");
+const assert = std.debug.assert;
+
 pub const pi = std.math.pi;
 pub const e = std.math.e;
 
+/// 2D extent
 pub const Extent2D = extern struct {
+    /// width of the extent
     width: u32,
+    /// height of the extent
     height: u32,
 
     pub const default = Extent2D{ .width = 1, .height = 1 };
 };
 
+/// 2D rectangle defined by a position and an extent
 pub const Rect2D = extern struct {
+    /// position in the 2D space of the left-top corner
     position: extern struct { x: u32, y: u32 },
+    /// extent of the rectangle
     extent: Extent2D,
 
     pub const default = Rect2D{
@@ -38,27 +76,6 @@ pub const Mat4 = mat.Mat4;
 pub const mat2x2 = Mat2.init;
 pub const mat3x3 = Mat3.init;
 pub const mat4x4 = Mat4.init;
-
-// pub const Vec2i = vec.Vec2(i32);
-// pub const Vec3i = vec.Vec3(i32);
-// pub const Vec4i = vec.Vec4(i32);
-// pub const vec2i = Vec2i.init;
-// pub const vec3i = Vec3i.init;
-// pub const vec4i = Vec4i.init;
-//
-// pub const Vec2u = vec.Vec2(u32);
-// pub const Vec3u = vec.Vec3(u32);
-// pub const Vec4u = vec.Vec4(u32);
-// pub const vec2u = Vec2u.init;
-// pub const vec3u = Vec3u.init;
-// pub const vec4u = Vec4u.init;
-//
-// pub const Vec2d = vec.Vec2(f64);
-// pub const Vec3d = vec.Vec3(f64);
-// pub const Vec4d = vec.Vec4(f64);
-// pub const vec2d = Vec2d.init;
-// pub const vec3d = Vec3d.init;
-// pub const vec4d = Vec4d.init;
 
 pub const deg_to_rad = std.math.degreesToRadians;
 pub const clamp = std.math.clamp;
