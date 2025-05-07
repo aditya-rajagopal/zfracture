@@ -1,32 +1,33 @@
-///! Math library
-///!
-///! This module provides a set of math functions and types.
-///!
-///! # Math
-///! The math library provides a set of math functions and types.
-///!
-///! # Examples
-///!
-///! ``` build.zig
-///! const math_lib = b.addModule("fr_math", .{
-///!     .root_source_file = b.path("src/core/math/math.zig"),
-///!     .target = target,
-///!     .optimize = optimize,
-///! });
-///!  ...
-///! exe.root_module.addImport("fr_math", math_lib);
-///! ```
-///!
-///! ```
-///! const math = @import("fr_core");
-///! const Vec3 = math.Vec3;
-///! pub fn main() !void {
-///!     const v = Vec3.init(1.0, 2.0, 3.0);
-///!     const v2 = v.muls(2.0);
-///!     std.debug.print("v: {any}\n", .{v});
-///!     std.debug.print("v2: {any}\n", .{v2});
-///! }
-///! ```
+//! Math library
+//!
+//! This module provides a set of math functions and types.
+//!
+//! # Math
+//! The math library provides a set of math functions and types.
+//!
+//! # Examples
+//!
+//! build.zig
+//! ```zig
+//! const math_lib = b.addModule("fr_math", .{
+//!     .root_source_file = b.path("src/core/math/math.zig"),
+//!     .target = target,
+//!     .optimize = optimize,
+//! });
+//!  ...
+//! exe.root_module.addImport("fr_math", math_lib);
+//! ```
+//!
+//! ```zig
+//! const math = @import("fr_core");
+//! const Vec3 = math.Vec3;
+//! pub fn main() !void {
+//!     const v = Vec3.init(1.0, 2.0, 3.0);
+//!     const v2 = v.muls(2.0);
+//!     std.debug.print("v: {any}\n", .{v});
+//!     std.debug.print("v2: {any}\n", .{v2});
+//! }
+//! ```
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 

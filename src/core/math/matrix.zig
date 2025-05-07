@@ -1,23 +1,23 @@
-///! Matrix library
-///!
-///! This module provides a set of matrix types and functions. The matrices are stored in column major order.
-///!
-///! # Examples
-///!
-///! ```
-///! const math = @import("fr_core");
-///! const Mat4 = math.Mat4;
-///! pub fn main() !void {
-///!     const m = Mat4.init(
-///!         vec.Vec4.init(1.0, 2.0, 3.0, 4.0),
-///!         vec.Vec4.init(5.0, 6.0, 7.0, 8.0),
-///!         vec.Vec4.init(9.0, 10.0, 11.0, 12.0),
-///!         vec.Vec4.init(13.0, 14.0, 15.0, 16.0),
-///!     );
-///!     const m2 = m.mul(&m);
-///!     std.debug.print("m2: {any}\n", .{m2});
-///! }
-///! ```
+//! Matrix library
+//!
+//! This module provides a set of matrix types and functions. The matrices are stored in column major order.
+//!
+//! # Examples
+//!
+//! ```
+//! const math = @import("fr_core");
+//! const Mat4 = math.Mat4;
+//! pub fn main() !void {
+//!     const m = Mat4.init(
+//!         vec.Vec4.init(1.0, 2.0, 3.0, 4.0),
+//!         vec.Vec4.init(5.0, 6.0, 7.0, 8.0),
+//!         vec.Vec4.init(9.0, 10.0, 11.0, 12.0),
+//!         vec.Vec4.init(13.0, 14.0, 15.0, 16.0),
+//!     );
+//!     const m2 = m.mul(&m);
+//!     std.debug.print("m2: {any}\n", .{m2});
+//! }
+//! ```
 // TODO:
 //      - [ ] Benchmark
 //      - [ ] Docstrings

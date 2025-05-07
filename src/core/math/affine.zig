@@ -1,53 +1,52 @@
-///! Affine transformations.
-///!
-///! This module provides a type for affine transformations. Affine transformations are geometric transformations that
-///! preserve lins and parallel lines. They are represented by a 4x4 matrix.
-///!
-///! The matrix is stored in column major order.
-///!
-///! # Math
-///! The matrix is a 4x4 matrix with the following layout:
-///!
-///! ```
-///! | c0 c1 c2 c3 |
-///! | c4 c5 c6 c7 |
-///! | c8 c9 c10 c11 |
-///! | 0  0  0  1  |
-///! ```
-///!
-///! # Examples
-///!
-///! ```
-///! const Transform = Affine(f32);
-///! const s1 = vec.Vec3(f32).init(1.5, 2.2, 1.3);
-///! const s2 = vec.Vec3(f32).init(1.5, 2.2, 1.3);
-///! const t = Transform
-///!     .init_rotation(&vec.Vec3(f32).init(0.678597, 0.28109, 0.678597), 1.49750)
-///!     .mul(&Transform.init_scale(&s1))
-///!     .mul(&Transform.init_trans(&vec.Vec3(f32).init(2.0, 1.0, 3.0)))
-///!     .mul(&Transform.init_scale(&s2));
-///! const s3 = s1.mul(&s2);
-///!
-///! std.debug.print("Rotation: {any}\n\n", .{t});
-///! std.debug.print("Inv: {any}\n\n", .{t.inv_trs(&s3)});
-///! std.debug.print("Float accuracy: {d}\n\n", .{std.math.floatEps(f32)});
-///! std.debug.print("mul: {any}\n\n\n", .{t.mul(&t.inv_trs(&s3))});
-///! std.debug.print("mul: {any}\n\n\n", .{t.mul(&t.inv_trs(&s3)).eql_approx(&Transform.identity, 0.000001)});
-///! const v3 = vec.Vec3(f32).init(1, 2, 3);
-///! const vec4: vec.Vec4(f32) = @bitCast(v3);
-///!
-///! std.debug.print("Forward: {any}, {d}\n", .{ t.get_forward(), t.get_forward().norm() });
-///! std.debug.print("Rotation: {any}\n", .{t.T().mul(&t)});
-///! const t = Transform.init_slice(&.{
-///!     1.0,  2.0,  3.0,  4.0,
-///!     2.0,  6.0,  7.0,  7.0,
-///!     9.0,  10.0, 11.0, 12.0,
-///!     13.0, 14.0, 15.0, 11.0,
-///! });
-///! const t: Transform = .identity;
-///! std.debug.print("t: {any}\n", .{t.inv().mul(&t)});
-///! std.debug.print("t: {any}\n", .{t.inv().mul(&t).eql_approx(&Transform.identity, 1.19e-7)});
-///! ```
+//! Affine transformations.
+//!
+//! This module provides a type for affine transformations. Affine transformations are geometric transformations that
+//! preserve lins and parallel lines. They are represented by a 4x4 matrix.
+//!
+//! The matrix is stored in column major order.
+//!
+//! # Math
+//! The matrix is a 4x4 matrix with the following layout:
+//!
+//! ```
+//! | c0 c1 c2 c3 |
+//! | c4 c5 c6 c7 |
+//! | c8 c9 c10 c11 |
+//! | 0  0  0  1  |
+//! ```
+//!
+//! # Examples
+//!
+//! ```
+//! const Transform = Affine(f32);
+//! const s2 = vec.Vec3(f32).init(1.5, 2.2, 1.3);
+//! const t = Transform
+//!     .init_rotation(&vec.Vec3(f32).init(0.678597, 0.28109, 0.678597), 1.49750)
+//!     .mul(&Transform.init_scale(&s1))
+//!     .mul(&Transform.init_trans(&vec.Vec3(f32).init(2.0, 1.0, 3.0)))
+//!     .mul(&Transform.init_scale(&s2));
+//! const s3 = s1.mul(&s2);
+//!
+//! std.debug.print("Rotation: {any}\n\n", .{t});
+//! std.debug.print("Inv: {any}\n\n", .{t.inv_trs(&s3)});
+//! std.debug.print("Float accuracy: {d}\n\n", .{std.math.floatEps(f32)});
+//! std.debug.print("mul: {any}\n\n\n", .{t.mul(&t.inv_trs(&s3))});
+//! std.debug.print("mul: {any}\n\n\n", .{t.mul(&t.inv_trs(&s3)).eql_approx(&Transform.identity, 0.000001)});
+//! const v3 = vec.Vec3(f32).init(1, 2, 3);
+//! const vec4: vec.Vec4(f32) = @bitCast(v3);
+//!
+//! std.debug.print("Forward: {any}, {d}\n", .{ t.get_forward(), t.get_forward().norm() });
+//! std.debug.print("Rotation: {any}\n", .{t.T().mul(&t)});
+//! const t = Transform.init_slice(&.{
+//!     1.0,  2.0,  3.0,  4.0,
+//!     2.0,  6.0,  7.0,  7.0,
+//!     9.0,  10.0, 11.0, 12.0,
+//!     13.0, 14.0, 15.0, 11.0,
+//! });
+//! const t: Transform = .identity;
+//! std.debug.print("t: {any}\n", .{t.inv().mul(&t)});
+//! std.debug.print("t: {any}\n", .{t.inv().mul(&t).eql_approx(&Transform.identity, 1.19e-7)});
+//! ```
 // TODO:
 //      - [ ] Benchmark
 //      - [ ] Docstrings

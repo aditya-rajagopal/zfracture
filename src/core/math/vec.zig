@@ -1,18 +1,18 @@
-///! Vector library
-///!
-///! This module provides a set of vector types and functions.
-///!
-///! # Examples
-///!
-///! ```
-///! const math = @import("fr_core");
-///! const Vec2 = math.Vec2;
-///! pub fn main() !void {
-///!     const v = Vec2.init(1.0, 2.0);
-///!     const v2 = v.muls(2.0);
-///!     std.debug.assert(v2.eql(&Vec2.init(2.0, 4.0)));
-///! }
-///! ```
+//! Vector library
+//!
+//! This module provides a set of vector types and functions.
+//!
+//! # Examples
+//!
+//! ```
+//! const math = @import("fr_core");
+//! const Vec2 = math.Vec2;
+//! pub fn main() !void {
+//!     const v = Vec2.init(1.0, 2.0);
+//!     const v2 = v.muls(2.0);
+//!     std.debug.assert(v2.eql(&Vec2.init(2.0, 4.0)));
+//! }
+//! ```
 // TODO:
 //      - [ ] Step function
 //      - [ ] Smooth step and interpolation

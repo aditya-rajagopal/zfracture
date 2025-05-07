@@ -1,18 +1,18 @@
-///! Quaternion library
-///!
-///! This module provides a type for quaternions. Quaternions are used to represent rotations.
-///! Quaternions are stored in a Vec4 with the w component being the real part and the x, y and z components being the imaginary parts.
-///!
-///! # Examples
-///!
-///! ```
-///! const math = @import("fr_core");
-///! const Quat = math.Quat;
-///! const Vec3 = math.Vec3;
-///! pub fn main() !void {
-///!     const q = Quat.init(1.0, 2.0, 3.0, 4.0);
-///! }
-///! ```
+//! Quaternion library
+//!
+//! This module provides a type for quaternions. Quaternions are used to represent rotations.
+//! Quaternions are stored in a Vec4 with the w component being the real part and the x, y and z components being the imaginary parts.
+//!
+//! # Examples
+//!
+//! ```
+//! const math = @import("fr_core");
+//! const Quat = math.Quat;
+//! const Vec3 = math.Vec3;
+//! pub fn main() !void {
+//!     const q = Quat.init(1.0, 2.0, 3.0, 4.0);
+//! }
+//! ```
 // TODO:
 //      - [ ] Benchmark
 //      - [ ] Docstrings

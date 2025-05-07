@@ -1,17 +1,17 @@
-///! Shapes library
-///!
-///! This module provides a set of shapes types and functions.
-///! The shapes are used to represent geometric primitives.
-///!
-///! # Examples
-///!
-///! ```
-///! const math = @import("fr_core");
-///! const Shapes = math.Shapes;
-///! pub fn main() !void {
-///!     const q = Shapes.Quad.default;
-///! }
-///! ```
+//! Shapes library
+//!
+//! This module provides a set of shapes types and functions.
+//! The shapes are used to represent geometric primitives.
+//!
+//! # Examples
+//!
+//! ```
+//! const math = @import("fr_core");
+//! const Shapes = math.Shapes;
+//! pub fn main() !void {
+//!     const q = Shapes.Quad.default;
+//! }
+//! ```
 const m = @import("vec.zig");
 
 /// A quad is a rectangle with a bottom left and top right corner points specified in 2D space.
