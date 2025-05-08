@@ -1,10 +1,46 @@
+//! Logging module
+//!
+//! This module provides a simple logging interface that can be used to log
+//! messages to the console and/or to a file.
+//!
+//!There are two main exports from this module:
+//!
+//! 1. LogConfig: This is a configuration struct that can be used to initialize the logging system.
+//! 2. ScopedLogger: This is a scoped logger that can be used to log messages at specific scopes.
+//!
+//! The ScopedLogger is a wrapper around the LogFn function type. It provides a simple way to log
+//! messages at specific scopes. The ScopedLogger can be used to log messages at different scopes
+//! without having to pass the LogConfig struct around.
+//!
+//! The LogConfig struct is used to initialize the logging system. It provides a way to configure
+//! the logging system for the terminal and/or file.
+//!
+//! # Examples
+//!
+//! ```zig
+//! const std = @import("std");
+//! const log = @import("fr_core").log;
+//!
+//! const Logger = log.ScopedLogger(log.default_log, .LOG_SCOPE, .warn);
+//!
+//! pub fn main() !void {
+//!     var config: log.LogConfig = undefined;
+//!     // Initialize the logger to print to stdout
+//!     try config.stdout_init();
+//!     defer config.deinit();
+//!
+//!     var logger = Logger.init(&config);
+//!
+//!     // Log messages at the .debug scope is ignored since the logger is configured to only log at .warn and above
+//!     logger.debug("This is a debug message that will not be logged", .{});
+//!     logger.info("This is an info message that will be logged", .{});
+//!     logger.warn("This is a warning message", .{});
+//!     logger.err("This is an error message", .{});
+//!     logger.fatal("This is a fatal message", .{});
+//! }
+//! ```
+//!
 const platform = @import("core_platform.zig");
-
-/// Struct to define log levels of custom scopes defined in the app
-// pub const ScopeLevel = struct {
-//     scope: @Type(.enum_literal),
-//     level: Level,
-// };
 
 /// The levels of logging that are avilable within the engine
 pub const Level = enum {
@@ -61,8 +97,7 @@ pub const LogFn = *const fn (*LogConfig, comptime Level, comptime @Type(.enum_li
 
 /// The configuration of a logger that is passed to log functions
 pub const LogConfig = struct {
-    /// UNUSED RIGHT NOW
-    // log_file: ?[]const u8 = null,
+    // TODO: Make this more efficient. Dont need to have a file writer if we are not logging to a file
     log_file: ?std.fs.File = null,
     file_writer: std.io.BufferedWriter(4096, std.fs.File.Writer) = undefined,
     /// Terminal configuration for colouring
@@ -109,9 +144,12 @@ pub const LogConfig = struct {
 
 pub const LoggerError = error{TTYConfigFailed} || std.fs.File.OpenError || std.fs.Dir.MakeError || std.fs.Dir.StatFileError;
 
+/// Creates a logger that has a scope that will be provided to the log function.
+/// The type created by this function will accept a log configuration that is also passed to the log function.
 pub fn ScopedLogger(comptime log_function: LogFn, comptime scope: @Type(.enum_literal), comptime log_level: Level) type {
     return struct {
         const Self = @This();
+        /// Reference to the log configuration that is passed to the log function
         config: *LogConfig,
 
         pub fn init(config: *LogConfig) Self {

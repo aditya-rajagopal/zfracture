@@ -5,9 +5,13 @@ pub const Image = T.Image;
 
 pub const LoadImageError = Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError;
 
+/// Load an image from a file.
 pub fn load(
+    /// The filename of the image to load. This is a relative path to the current working directory.
     filename: []const u8,
+    /// The allocator to use for allocating the image data and other intermediate data.
     allocator: Allocator,
+    /// The configuration for the load operation.
     comptime load_config: ImageLoadConfig,
 ) (LoadImageError || png.PNGError)!T.Image {
     const file = try std.fs.cwd().openFile(filename, .{});
@@ -47,7 +51,6 @@ pub fn load(
 const T = @import("image/types.zig");
 const ImageLoadConfig = T.ImageLoadConfig;
 const TrackingAlloctor = @import("memory.zig").TrackingAllocator;
-const log = @import("log.zig");
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;

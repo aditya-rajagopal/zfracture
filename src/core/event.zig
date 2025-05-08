@@ -1,3 +1,58 @@
+//! The event system
+//!
+//! The event system is a simple implmentation of an structure that stores callbacks for specific event types and
+//! allows firing events.
+//!
+//! Currently events are fired sequentially and the order of callbacks is garunteed to be the same as the order of
+//! registration. You can register the same callback with different listener payloads for the same event type.
+//!
+//! There is a limit of max_callbacks_per_event and max_event_types. The max_callbacks_per_event is the maximum number
+//! of callbacks that can be registered for a single event type. The max_event_types is the maximum number of event
+//! types that can be registered. The default values are 512 and 512 respectively.
+//! To increase these values change the global constants.
+//!
+//! For user defined events use integers codes converted to the EventCode enum with values greater than EVENT_CODE_USER_START.
+//!
+//! WARN: The event system does not support events that are fired from multiple threads currently. This is undefined behavior.
+//!
+//! # Examples
+//!
+//! ```zig
+//! const std = @import("std");
+//! const assert = std.debug.assert;
+//! const Event = @import("fr_core").Event;
+//! const EventCode = Event.EventCode;
+//! const KeyEventData = Event.KeyEventData;
+//!
+//! pub fn main() !void {
+//!     var event_system = Event.init(std.heap.page_allocator);
+//!     defer event_system.deinit();
+//!
+//!     const key_data: KeyEventData = .{ .key = .A, .pressed = 1, .mouse_pos = .{ .x = 69, .y = 420 }, .is_repeated = 1 };
+//!
+//!     const dispatcher = struct {
+//!         pub fn dipatch(e: *Event) bool {
+//!             return e.fire(EventCode.KEY_PRESS, null, @bitCast(key_data));
+//!         }
+//!     };
+//!
+//!     const listener = struct {
+//!         pub fn listen(event_code: EventCode, event_data: EventData, _: ?*anyopaque, _: ?*anyopaque) bool {
+//!             const in_data: KeyEventData = @bitCast(event_data);
+//!             assert(event_code == EventCode.KEY_PRESS) // Not a key press event.
+//!             assert(in_data == key_data) // Event data is the same as the data sent by the dispatcher
+//!             return true;
+//!         }
+//!     };
+//!
+//!     var success = event.register(.KEY_PRESS, null, listener.listen);
+//!     assert(success);
+//!     success = dispatcher.dipatch(event);
+//!     assert(success);
+//!     success = event.deregister(.KEY_PRESS, null, listener.listen);
+//!     assert(success);
+//! }
+//! ```
 //  TODO:
 //      - [ ] Create a static multiarrayList
 //      - [ ] Check if we need SoA or AoS for the event data.
@@ -14,24 +69,21 @@ const Memory = @import("fracture.zig").mem.Memory;
 pub const max_callbacks_per_event = 512;
 pub const max_event_types = 512;
 
-// const EventCallbackList = core.StaticArrayList(EventCallback, max_callbacks_per_event);
 // TODO: Does this need to be SoA or AoS
 const Listeners = [max_callbacks_per_event * max_event_types]?*anyopaque;
 const CallbackFuncList = [max_callbacks_per_event * max_event_types]EventCallback;
 
 const Event = @This();
 
+/// The list of listerners for all event types. The index is the event_code * max_callbacks_per_event + callback_index
 listeners_list: [max_callbacks_per_event * max_event_types]?*anyopaque = undefined,
+/// The list of callbacks for all event types. The index is the event_code * max_callbacks_per_event + callback_index
 callback_list: [max_callbacks_per_event * max_event_types]EventCallback = undefined,
+/// The number of listeners for each event type
 lens: [max_event_types]usize,
-// local_arena: std.heap.ArenaAllocator = undefined,
-// initialized: bool = false,
 
 /// Initialize the event system
 pub fn init(self: *Event) !void {
-    // const allocator = ctx.gpa.get_type_allocator(.event);
-    // local_arena = std.heap.ArenaAllocator.init(allocator);
-
     @memset(self.lens[0..max_event_types], 0);
     @memset(self.listeners_list[0 .. max_event_types * max_callbacks_per_event], null);
 }
@@ -41,17 +93,20 @@ pub fn deinit(self: *Event) void {
     _ = self;
 }
 
-// TODO: If we know an event is going to handle the event before hand can we place it in front of the callback queue?
 /// Register a callback to handle a specific event.
 /// The function pointer uniquely identifies a particular function and you can only have the callback registered
 /// once per event code type.
 /// You are forced to know event_code at compile time when registering for events
-///
-/// Arguments:
-///     - event_code: code for the type of event that needs to be listened for
-///     - listener: Pointer to data the listener wants to pass to the callback function
-///     - callback: Function to call when an event is fired
-pub fn register(self: *Event, event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
+pub fn register(
+    self: *Event,
+    /// The code for which the callback will be called
+    event_code: EventCode,
+    /// Pointer to data the listener wants to pass to the callback function
+    listener: ?*anyopaque,
+    /// Function to call when an event is fired
+    callback: EventCallback,
+) bool {
+    // TODO: If we know an event is going to handle the event before hand can we place it in front of the callback queue?
     const code: usize = @intFromEnum(event_code);
     const len = self.lens[code];
     assert(len <= max_callbacks_per_event);
@@ -79,12 +134,15 @@ pub fn register(self: *Event, event_code: EventCode, listener: ?*anyopaque, call
 
 /// Comptime version of the register function. This expects you to know the event_code at compile time.
 /// Not really needed but if you are registering and deregistering events rapidly you might want to use this one.
-///
-/// Arguments:
-///     - event_code: Comptime code for the type of event that needs to be listened for
-///     - listener: Pointer to data the listener wants to pass to the callback function
-///     - callback: Function to call when an event is fired
-pub fn register_static(self: *Event, comptime event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
+pub fn register_static(
+    self: *Event,
+    /// The code for which the callback will be called
+    comptime event_code: EventCode,
+    /// Pointer to data the listener wants to pass to the callback function
+    listener: ?*anyopaque,
+    /// Function to call when an event is fired
+    callback: EventCallback,
+) bool {
     const code: usize = @intFromEnum(event_code);
     const start = code * max_callbacks_per_event;
     comptime assert(code < max_event_types);
@@ -115,12 +173,15 @@ pub fn register_static(self: *Event, comptime event_code: EventCode, listener: ?
 /// This will check if the function actually exists and will return false if it could not find it. In debug builds
 /// it will throw an error and breakpoint.
 /// For now the event is removed from the list and the order of the remaining events are maintained.
-///
-/// Arguments:
-///     - event_code:code for the type of event that the callback was registered for
-///     - listener: Pointer to data the listener wants to pass to the callback function
-///     - callback: Function pointer that was registered
-pub fn deregister(self: *Event, event_code: EventCode, listener: ?*anyopaque, callback: EventCallback) bool {
+pub fn deregister(
+    self: *Event,
+    /// The code for which the callback will be called
+    event_code: EventCode,
+    /// Pointer to data the listener had registered for the callback
+    listener: ?*anyopaque,
+    /// Function to call when an event is fired
+    callback: EventCallback,
+) bool {
     const code: usize = @intFromEnum(event_code);
     const len = self.lens[code];
     assert(code < max_event_types);
@@ -149,21 +210,24 @@ pub fn deregister(self: *Event, event_code: EventCode, listener: ?*anyopaque, ca
     }
 }
 
+/// WARNING: NOT IMPLEMENTED
 pub fn dispatch_deffered(self: *Event) bool {
     _ = self;
-    // not_implemented(@src());
     return false;
 }
 
 /// Fire an event with a specific event code.
 /// The event is fired immediately and every callback is called. If a specific callback handles the event and returns
 /// true then the remaining events in the list are not proccessed. So be aware of order of registrations.
-///
-/// Arguments:
-///     - event_code: code for the type of event that is being fired
-///     - sender: pointer that the sender wants to send to all the callbacks
-///     - event_data: the packet that is forwarded to all callbacks
-pub fn fire(self: *const Event, event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
+pub fn fire(
+    self: *const Event,
+    /// The even to be fired
+    event_code: EventCode,
+    /// Pointer to data the sender wants to send to all the callbacks
+    sender: ?*anyopaque,
+    /// The payload that is forwarded to all callbacks
+    event_data: EventData,
+) bool {
     const code: usize = @intFromEnum(event_code);
     const start = code * max_callbacks_per_event;
 
@@ -186,12 +250,15 @@ pub fn fire(self: *const Event, event_code: EventCode, sender: ?*anyopaque, even
 /// and allow the compiler to optimize a bit more.
 ///
 /// THough i am not sure if it is truly better as you get a lot of different functions that will hit the icache
-///
-/// Arguments:
-///     - event_code: code for the type of event that is being fired
-///     - sender: pointer that the sender wants to send to all the callbacks
-///     - event_data: the packet that is forwarded to all callbacks
-pub fn fire_static(self: *const Event, comptime event_code: EventCode, sender: ?*anyopaque, event_data: EventData) bool {
+pub fn fire_static(
+    self: *const Event,
+    /// The even to be fired
+    comptime event_code: EventCode,
+    /// Pointer to data the sender wants to send to all the callbacks
+    sender: ?*anyopaque,
+    /// The payload that is forwarded to all callbacks
+    event_data: EventData,
+) bool {
     const code: usize = @intFromEnum(event_code);
     const len = self.lens[code];
     comptime assert(code < max_event_types);
@@ -208,12 +275,13 @@ pub fn fire_static(self: *const Event, comptime event_code: EventCode, sender: ?
     return true;
 }
 
+/// WARNING: NOT IMPLEMENTED
 pub fn fire_deffered(self: *Event) bool {
-    // not_implemented(@src());
     _ = self;
     return false;
 }
 
+/// WARNING: NOT IMPLEMENTED
 pub fn fire_deffered_static(self: *Event) bool {
     // not_implemented(@src());
     _ = self;
@@ -222,28 +290,27 @@ pub fn fire_deffered_static(self: *Event) bool {
 
 /// The function signature that any event handler must satisfy.
 pub const EventCallback = *const fn (
+    /// The code of the even that the callback is handling
     event_code: EventCode,
+    /// The opaque event payload that must be interpreted based on the event code
     data: EventData,
+    /// Pointer to data registed with the callback
     listener: ?*anyopaque,
+    /// Pointer to data the sender wants to send to the callback
     sender: ?*anyopaque,
 ) bool;
 
-pub const EventHandle = struct {
-    index: usize,
-    generation: usize,
-};
-
-/// The data that will be recieved by the handlers
+/// The data that will be recieved by the handlers. The data is opaque and is interpreted based on the event code.
 pub const EventData = [16]u8;
 
 pub const MousePosition = packed struct(i32) { x: i16 = 0, y: i16 = 0 };
 
-/// Representation of EventData for KeyEvents
+/// Representation of EventData for KeyEvents.
 pub const KeyEventData = packed struct(u128) {
     /// The position of the mouse when the key event was triggered.
     /// This is passed as a convinience and removes a query to the input system.
     mouse_pos: MousePosition = .{},
-    /// The code of the key that was pressed. Cast this to KeyCode enum.
+    /// The code of the key that was pressed.
     key: input.Key = .UNKOWN,
     /// "bool" representing if this is a key press or release event
     pressed: u8 = 0,
@@ -306,6 +373,10 @@ comptime {
 
 pub const EventCodeBacking = u16;
 
+/// The event codes that uniquely identify the event.
+///
+/// The ones defined here are the ones that are used by the engine and usually are not meant to be fired by the application.
+/// For user defined events use integers codes converted to this enum with values greater than EVENT_CODE_USER_START
 pub const EventCode = enum(EventCodeBacking) {
     BUTTON_LEFT = 0x0,
     BUTTON_RIGHT = 0x1,
@@ -506,12 +577,15 @@ pub const EventCode = enum(EventCodeBacking) {
     MOUSE_SCROLL = 0x105,
     WINDOW_RESIZE = 0x106,
 
+    /// Debug events that are used for debugging and testing. Do not use these in production.
+    /// They have no defined behaviour and are purely used for debugging specific parts of the engine.
     DEBUG0 = 0x107,
     DEBUG1 = 0x108,
     DEBUG2 = 0x109,
     DEBUG3 = 0x10a,
     DEBUG4 = 0x10b,
 
+    /// The first event code that is reserved for application specific events.
     APPLICATION_EVENTS_START = 0x144,
     _,
 

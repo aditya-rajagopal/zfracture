@@ -1,3 +1,4 @@
+//! WIP: Resource module
 const T = @import("systems/types.zig");
 
 pub const ResourceHandle = T.ResourceHandle;

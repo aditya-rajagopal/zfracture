@@ -1,3 +1,49 @@
+//! The input system
+//!
+//! The input system provides a simple interface for handling input events and polling the state of the input devices.
+//!
+//! The system stores the state of the keyboard and mouse for the current state and the previous state.
+//! The state must be updated by the application to shift the current state to the previous state.
+//!
+//! There are no allocations and the system is designed to fit on the stack.
+//!
+//! # Examples
+//!
+//! ```zig
+//! const std = @import("std");
+//! const assert = std.debug.assert;
+//! const Input = @import("fr_core").Input;
+//! const Key = Input.Key;
+//! const Button = Input.Button;
+//!
+//! pub fn main() !void {
+//!     var input: Input = undefined;
+//!     input.init();
+//!
+//!     // Pressing a key
+//!     input.process_key(.A, 1);
+//!     assert(input.is_key_down(.A));
+//!     assert(input.key_pressed_this_frame(.A));
+//!     input.process_button(.LEFT, 1);
+//!     assert(input.is_button_down(.LEFT));
+//!     assert(input.button_pressed_this_frame(.LEFT));
+//!
+//!     // Update the state
+//!     input.update();
+//!
+//!     assert(input.was_key_down(.A));
+//!     assert(input.was_button_down(.LEFT));
+//!
+//!     // Releasing a key
+//!     input.process_key(.A, 0);
+//!     assert(!input.is_key_down(.A));
+//!     assert(input.key_released_this_frame(.A));
+//!     assert(input.was_key_down(.A));
+//!     input.process_button(.LEFT, 0);
+//!     assert(!input.is_button_down(.LEFT));
+//!     assert(input.button_released_this_frame(.LEFT));
+//!     assert(input.was_button_down(.LEFT));
+//! }
 // TODO:
 //      - [ ] Think of using a bit set for the keys instead of an array
 //      - [ ] Are the comptime versions of the functions necessary
@@ -9,24 +55,33 @@ const MousePosition = struct { x: i16 = 0, y: i16 = 0 };
 
 const Input = @This();
 
+/// The previous state of the buttons
 buttons_previous_state: ButtonsArray = std.mem.zeroes(ButtonsArray),
+/// The previous state of the keys
 keys_previous_state: KeysArray = std.mem.zeroes(KeysArray),
 
+/// The current state of the buttons
 buttons_current_state: ButtonsArray = std.mem.zeroes(ButtonsArray),
+/// The current state of the keys
 keys_current_state: KeysArray = std.mem.zeroes(KeysArray),
 
+/// The previous mouse position
 previous_mouse_pos: MousePosition = .{},
+/// The current mouse position
 current_mouse_pos: MousePosition = .{},
 
+/// The current mouse scroll
 current_mouse_scroll: i8 = 0,
 
+/// True if the application allows repeated key presses events
 allow_repeats: bool = false,
 
+/// Initialize the input system. Sets all the states to zero.
 pub fn init(self: *Input) void {
     self.* = std.mem.zeroes(Input);
-    // self.allow_repeats = true;
 }
 
+/// Update the input system. Pushes the current state to the previous state
 pub fn update(self: *Input) void {
     self.keys_previous_state = self.keys_current_state;
     self.buttons_previous_state = self.buttons_current_state;
@@ -113,6 +168,15 @@ pub inline fn is_scroll(self: *const Input) bool {
     return self.current_mouse_scroll != 0;
 }
 
+/// Process a key state change request. This will not fire any events.
+pub fn process_key(self: *Input, key: Key, pressed: u8) void {
+    const key_state_change = pressed != self.keys_current_state[@intFromEnum(key)];
+    if (self.allow_repeats or key_state_change) {
+        self.keys_current_state[@intFromEnum(key)] = pressed;
+    }
+}
+
+/// Process a key state change and fire the event if the state changed.
 pub fn process_key_event(self: *Input, event_system: *Event, key: Key, comptime pressed: u8) void {
     const is_repeated = pressed & self.keys_current_state[@intFromEnum(key)];
     const key_state_change = pressed != self.keys_current_state[@intFromEnum(key)];
@@ -133,6 +197,15 @@ pub fn process_key_event(self: *Input, event_system: *Event, key: Key, comptime 
 
         const event_code: Event.EventCode = @enumFromInt(@as(u8, @intFromEnum(key)));
         _ = event_system.fire(event_code, null, @bitCast(data));
+    }
+}
+
+/// Process a mouse state change request. This will not fire any events.
+pub fn process_mouse(self: *Input, button: Button, pressed: u8) void {
+    const is_repeated = pressed & self.buttons_current_state[@intFromEnum(button)];
+    const button_state_change = pressed != self.buttons_current_state[@intFromEnum(button)];
+    if ((self.allow_repeats and is_repeated != 0) or button_state_change) {
+        self.buttons_current_state[@intFromEnum(button)] = pressed;
     }
 }
 
@@ -195,16 +268,28 @@ pub fn process_xmouse_event(
     }
 }
 
-pub fn process_mouse_move(self: *Input, event_system: *Event, x: i16, y: i16) void {
+/// Process a mouse move event. This will not fire any events.
+pub inline fn process_mouse_move(self: *Input, x: i16, y: i16) void {
     self.current_mouse_pos.x = x;
     self.current_mouse_pos.y = y;
+}
+
+/// Process a mouse move event and fire a mouse move event
+pub fn process_mouse_move_event(self: *Input, event_system: *Event, x: i16, y: i16) void {
+    self.process_mouse_move(x, y);
     const mouse_move_data: Event.MouseMoveEventData = .{
         .mouse_pos = .{ .x = x, .y = y },
     };
     _ = event_system.fire(.MOUSE_MOVE, null, @bitCast(mouse_move_data));
 }
 
-pub fn process_mouse_wheel(self: *Input, event_system: *Event, z_delta: i8, mousepos: i32) void {
+/// Process a mouse wheel event. This will not fire any events.
+pub inline fn process_mouse_wheel(self: *Input, z_delta: i8) void {
+    self.current_mouse_scroll = z_delta;
+}
+
+/// Process a mouse wheel event and fire a mouse scroll event
+pub fn process_mouse_wheel_event(self: *Input, event_system: *Event, z_delta: i8, mousepos: i32) void {
     self.current_mouse_scroll = z_delta;
     const data: Event.MouseScrollEventData = .{
         .z_delta = z_delta,
@@ -214,6 +299,8 @@ pub fn process_mouse_wheel(self: *Input, event_system: *Event, z_delta: i8, mous
 }
 
 pub const MAX_BUTTONS = 6;
+
+/// Enumeration of the mouse buttons
 pub const Button = enum(u8) {
     UNKOWN = 0xFF,
     LEFT = 0x0,
@@ -223,6 +310,10 @@ pub const Button = enum(u8) {
     X2 = 0x4,
 };
 
+/// Enumeration of the keyboard keys. The values are the same as the values in the windows API and are the same as the
+/// values in the EventCode enum of the corresponding key event.
+///
+/// Platforms other than windows will have to map the platform specific values to the Key enum values.
 pub const Key = enum(u8) {
     UNKOWN = 0xFF,
     BACKSPACE = 0x08,

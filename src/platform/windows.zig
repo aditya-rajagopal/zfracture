@@ -214,7 +214,7 @@ fn win32_process_message(
         win32.WM_MOUSEMOVE => {
             const x_pos: i16 = @truncate(l_param & 0xffff);
             const y_pos: i16 = @truncate((l_param >> 16) & 0xffff);
-            application_state.engine.input.process_mouse_move(&application_state.engine.event, x_pos, y_pos);
+            application_state.engine.input.process_mouse_move_event(&application_state.engine.event, x_pos, y_pos);
             return 0;
         },
         win32.WM_MOUSEWHEEL => {
@@ -222,7 +222,7 @@ fn win32_process_message(
             const z_delta: i16 = @bitCast(@as(u16, @truncate((w_param >> 16) & 0xffff)));
             if (z_delta != 0) {
                 const delta: i8 = if (z_delta < 0) -1 else 1;
-                application_state.engine.input.process_mouse_wheel(
+                application_state.engine.input.process_mouse_wheel_event(
                     &application_state.engine.event,
                     delta,
                     @truncate(l_param),

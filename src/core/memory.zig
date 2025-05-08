@@ -1,6 +1,60 @@
-///! An allocator that allows you to track total allocations and deallocations of the backing allocator
-///! During release memory stats are not tracked and this essentially becomes a thin wrapper around
-///! the backing allocator
+//! Memory module
+//!
+//! This module provides a TrackingAllocator type that allows you to track total allocations and deallocations of the backing allocator.
+//! This allocator returns is used to return allocators using the backing allocators with a scope that taggs all
+//! allocations and deallocations to the given tag.
+//!
+//! In release modes the memory stats are not tracked and this essentially becomes a thin wrapper around
+//! the backing allocator.
+//!
+//! # Examples
+//!
+//! ```zig
+//! const std = @import("std");
+//! const assert = std.debug.assert;
+//! const TrackingAllocator = @import("fr_core").memory.TrackingAllocator;
+//! const log = @import("fr_core").log;
+//!
+//! const MemoryTag = enum(u8) {
+//!     untagged = 0,
+//!     testing1,
+//!     testing2,
+//! };
+//!
+//! const TestAllocator = TrackingAllocator(.testing, EngineMemoryTag, true);
+//!
+//! pub fn main() !void {
+//!     var config: log.LogConfig = undefined;
+//!     var test_alloc: TestAllocator = TestAllocator{};
+//!     test_alloc.init(std.testing.allocator, &config);
+//!     defer test_alloc.deinit();
+//!
+//!     const untagged_alloc = test_alloc.get_type_allocator(.untagged);
+//!     const data = try untagged_alloc.create(i32);
+//!     assert(test_alloc.query_stats().current_total_memory == 4);
+//!     assert(test_alloc.query_stats().current_memory[0] == 4);
+//!     untagged_alloc.destroy(data);
+//!     assert(test_alloc.query_stats().current_total_memory == 0);
+//!
+//!     const testing1_alloc = test_alloc.get_type_allocator(.testing1);
+//!     const testing2_alloc = test_alloc.get_type_allocator(.testing2);
+//!
+//!     const data2 = try testing1_alloc.create(i32);
+//!     const data3 = try testing2_alloc.create(i32);
+//!     assert(test_alloc.query_stats().current_total_memory == 8);
+//!     assert(test_alloc.query_stats().current_memory[0] == 0);
+//!     assert(test_alloc.query_stats().current_memory[1] == 4);
+//!     assert(test_alloc.query_stats().current_memory[2] == 4);
+//!     testing1_alloc.destroy(data2);
+//!     assert(test_alloc.query_stats().current_total_memory == 4);
+//!     assert(test_alloc.query_stats().current_memory[0] == 0);
+//!     assert(test_alloc.query_stats().current_memory[1] == 0);
+//!     testing2_alloc.destroy(data3);
+//!     assert(test_alloc.query_stats().current_total_memory == 0);
+//!
+//!     test_alloc.print_memory_stats();
+//! }
+//!
 pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime MemoryTag: type, comptime enable_log: bool) type {
     if (comptime @typeInfo(MemoryTag) != .@"enum") {
         @compileError("Memory Tag must be an enum");
@@ -10,7 +64,7 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
         else => 0,
     };
 
-    const MemoryLog = if (enable_log) log.ScopedLogger(log.default_log, .MEMORY, log.default_level) else void;
+    const MemoryLog = if (enable_log) log.ScopedLogger(log.default_log, alloc_tag, log.default_level) else void;
 
     return struct {
         backing_allocator: Allocator = undefined,
@@ -41,12 +95,6 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
         const Self = @This();
 
         pub fn init(self: *Self, allocator: Allocator, log_config: *log.LogConfig) void {
-            // debug_assert(
-            //     !initialized,
-            //     @src(),
-            //     "Reinitializing {s} allocator. Each allocator type can only be initalized once.",
-            //     .{@tagName(struct_tag)},
-            // );
             self.backing_allocator = allocator;
             if (comptime memory_tag_len != 0) {
                 inline for (AllocatorTypes, 0..) |t, i| {
@@ -65,27 +113,13 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
             if (comptime enable_log) {
                 self.log = MemoryLog.init(log_config);
             }
-            // initialized = true;
         }
 
         pub fn deinit(self: *Self) void {
-            // debug_assert(
-            //     initialized,
-            //     @src(),
-            //     "Double shutdown of {s} allocator.",
-            //     .{@tagName(struct_tag)},
-            // );
             self.backing_allocator = undefined;
-            // initialized = false;
         }
 
-        pub fn get_type_allocator(self: *const Self, comptime tag: MemoryTag) Allocator {
-            // debug_assert(
-            //     initialized,
-            //     @src(),
-            //     "Use of {s} allocator before init or after shutdown.",
-            //     .{@tagName(struct_tag)},
-            // );
+        pub inline fn get_type_allocator(self: *const Self, comptime tag: MemoryTag) Allocator {
             if (comptime memory_tag_len != 0) {
                 return self.type_allocators[@intFromEnum(tag)];
             } else {
@@ -94,12 +128,6 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
         }
 
         pub fn reset_stats(self: *Self) void {
-            // debug_assert(
-            //     initialized,
-            //     @src(),
-            //     "Use of {s} allocator before init or after shutdown.",
-            //     .{@tagName(struct_tag)},
-            // );
             if (comptime memory_tag_len != 0) {
                 self.memory_stats.current_total_memory = 0;
                 self.memory_stats.current_memory = [_]u64{0} ** memory_tag_len;
@@ -107,23 +135,11 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
             }
         }
 
-        pub fn query_stats(self: *Self) *const MemoryStats {
-            // debug_assert(
-            //     initialized,
-            //     @src(),
-            //     "Use of {s} allocator before init or after shutdown.",
-            //     .{@tagName(struct_tag)},
-            // );
+        pub fn query_stats(self: *const Self) *const MemoryStats {
             return &self.memory_stats;
         }
 
         pub fn print_memory_stats(self: *Self) void {
-            // debug_assert(
-            //     initialized,
-            //     @src(),
-            //     "Use of {s} allocator before init or after shutdown.",
-            //     .{@tagName(struct_tag)},
-            // );
             if (comptime memory_tag_len != 0) {
                 if (enable_log) {
                     self.log.debug("Memory Subsystem[{s}]: ", .{@tagName(struct_tag)});
@@ -161,6 +177,8 @@ pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime Memo
             else => struct {},
         };
 
+        /// An allocator that wraps the backing allocator calls and tracks allocations and deallocations
+        /// using the given tag.
         pub fn TypedAllocator(comptime tag: MemoryTag) type {
             return struct {
                 backing_allocator: Allocator,
@@ -292,8 +310,6 @@ test "allocations" {
     allocator.destroy(data);
     gallocator.destroy(gdata);
 }
-
-// ------------------------------------------- TYPES -----------------------------------------------------/
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

@@ -1,6 +1,6 @@
-///! The application system contains the main loop of the application
-///!
-///! It owns the engine state and dispatches events
+//! The application system contains the main loop of the application
+//!
+//! It owns the engine state and dispatches events
 // TODO:
 //      - [ ] Should i replace the frame arena by a fixed buffer allocator that is defined by asking the application
 //            how much memory it needs at startup and give it that much memory to work with forever. Instead of an arena

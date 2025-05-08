@@ -1,3 +1,23 @@
+//! The core fracture engine library
+//!
+//! This module provides all the core functionality provided by fracture.
+//!
+//! The engine is designed to contain all the state and have 0 global state so that it can be hot swapped.
+//!
+//! # Examples
+//!
+//! ```zig
+//! const std = @import("std");
+//! const Fracture = @import("fr_core").Fracture;
+//!
+//! pub fn main() !void {
+//!     var engine = try std.heap.page_allocator.create(Fracture);
+//!     defer engine.deinit();
+//!     defer std.heap.page_allocator.destroy(engine);
+//!     // Initialize the individual systems
+//!     try engine.renderer.init(std.heap.page_allocator, "My Application", &.{});
+//! }
+//! ```
 const root = @import("root");
 /// Renderer backend
 pub const renderer_backend: type = if (@hasDecl(root, "config") and @hasDecl(root.config, "renderer_backend"))
@@ -10,18 +30,28 @@ pub const Renderer = renderer.Renderer(renderer_backend);
 
 /// The core engine that contains all the state
 pub const Fracture = struct {
+    /// The renderer that provides a frontend to the chosen renderer backend
     renderer: Renderer,
+    /// The memory system. Contains the persistent allocator and the frame allocator
     memory: Memory,
+    /// The event system
     event: Event,
+    /// The log configuration that can be used to configure application side logging
     log_config: log.LogConfig,
+    /// The last time the application was updated
     last_time: f64 = 0,
+    /// The extent of the window
     extent: math.Extent2D = .{
         .width = 1280,
         .height = 720,
     },
+    /// The delta time of the last frame
     delta_time: f32 = 0,
+    /// The input system
     input: Input,
+    /// True if the application is suspended
     is_suspended: bool = false,
+    /// True if the application is running
     is_running: bool = false,
 };
 
@@ -34,9 +64,7 @@ pub const math = @import("fr_math");
 pub const resource = @import("resource.zig");
 pub const image = @import("image.zig");
 pub const renderer = @import("renderer.zig");
-
-// pub const MergeEnums = comptime_funcs.MergeEnums;
-// pub const Distinct = comptime_funcs.Distinct;
+pub const @"comptime" = @import("comptime.zig");
 
 pub const GPA = mem.TrackingAllocator(.gpa, EngineMemoryTag, true);
 pub const FrameArena: type = mem.TrackingAllocator(.frame_arena, ArenaMemoryTags, true);
@@ -106,10 +134,6 @@ pub const AppConfig = struct {
     log_fn: log.LogFn = log.default_log,
 };
 
-pub fn not_implemented(comptime src: std.builtin.SourceLocation) void {
-    @compileError("NOT IMPLEMENTED: " ++ src.fn_name ++ " - " ++ src.file);
-}
-
 // TODO: Bring back tests failing due to missing backend in root
 // test Fracture {
 //     testing.refAllDecls(@This());
@@ -118,5 +142,4 @@ pub fn not_implemented(comptime src: std.builtin.SourceLocation) void {
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
-const comptime_funcs = @import("comptime.zig");
 const static_array_list = @import("containers/static_array_list.zig");

@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 
+/// Query the clock freqency of the OS clock
 pub fn query_performance_frequency() u64 {
     if (builtin.os.tag == .windows) {
         var result: LARGE_INTEGER = 0;
@@ -10,6 +11,7 @@ pub fn query_performance_frequency() u64 {
     @compileError("Platform not supported");
 }
 
+/// query the OS performance counter
 pub fn query_performance_counter() u64 {
     if (builtin.os.tag == .windows) {
         var result: LARGE_INTEGER = 0;
@@ -20,6 +22,7 @@ pub fn query_performance_counter() u64 {
     @compileError("Platform not supported");
 }
 
+/// Get the current process handle
 pub fn InitializeOSMetrics() windows.HANDLE {
     if (builtin.os.tag == .windows) {
         return windows.kernel32.GetCurrentProcess();
@@ -28,6 +31,7 @@ pub fn InitializeOSMetrics() windows.HANDLE {
     @compileError("Platform not supported");
 }
 
+/// Get the number of page faults for the current process
 pub fn ReadOSPageFaultCount(handle: windows.HANDLE) windows.GetProcessMemoryInfoError!u64 {
     if (builtin.os.tag == .windows) {
         var memory_counters: windows.PROCESS_MEMORY_COUNTERS_EX = std.mem.zeroInit(windows.PROCESS_MEMORY_COUNTERS_EX, .{});
@@ -42,6 +46,8 @@ pub fn ReadOSPageFaultCount(handle: windows.HANDLE) windows.GetProcessMemoryInfo
     @compileError("Platform not supported");
 }
 
+/// The RDTSC instruction is a serializing instruction that reads the time-stamp counter (or time-base
+/// register) into a 64-bit register.
 pub fn rdtsc() u64 {
     var low: u32 = 0;
     var hi: u32 = 0;
@@ -54,7 +60,8 @@ pub fn rdtsc() u64 {
     return (@as(u64, @intCast(hi)) << 32) | @as(u64, @intCast(low));
 }
 
-/// NOTE: This function will spin your CPU while sleeping. For actual sleep you probably should use a syscall
+/// Sleep thread for a given number of milliseconds.
+/// NOTE: This function will spin your CPU while sleeping. For actual sleep you probably should use a syscall or std.time.sleep
 pub fn sleep(ms: u64) void {
     const freq: u64 = query_performance_frequency();
     const ticks_to_run = ms * @divFloor(freq, 1000);
@@ -63,6 +70,7 @@ pub fn sleep(ms: u64) void {
     while (query_performance_counter() -% start < ticks_to_run) {}
 }
 
+/// Calibrate the frequency of a given time counter function using the OS performance counter
 pub fn calibrate_frequency(ms: u64, time_fn: *const fn () u64) f64 {
     const freq: u64 = query_performance_frequency();
     const ticks_to_run = ms * (freq / 1000);
