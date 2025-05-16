@@ -791,7 +791,7 @@ const HuffmanTree = struct {
 
     pub fn init(self: *HuffmanTree, sizes: []const u8) !void {
         // 1. Create a list that counts the frequency of each bit length that represents a symbol
-        // 1 - 16 + 0 = 17
+        // 1 to 16 + 0 = 17
         var size_counts: [17]u16 = [_]u16{0} ** 17;
         for (sizes) |s| {
             size_counts[s] += 1;

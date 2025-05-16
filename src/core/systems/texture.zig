@@ -1,17 +1,17 @@
 // TODO: Make this configurable
-pub const MAX_TEXTURES = 1024;
+pub const MAX_TEXTURES_COUNT = 4096;
 pub const MAX_TEXTURE_DIM = 4096;
+
+pub const DimnsionType = u14;
+comptime {
+    assert(std.math.maxInt(DimnsionType) > MAX_TEXTURE_DIM);
+}
 
 pub const TextureHandle = enum(u64) {
     missing_texture = @bitCast(MissingTexture),
     base_colour = @bitCast(BaseColour),
     null_handle = @bitCast(NullReference),
     _,
-};
-
-pub const TextureUse = enum(u8) {
-    unknown = 0,
-    diffuse,
 };
 
 const NullReference = TextureReference{ .id = .null_handle, .string = std.math.maxInt(u32) };
@@ -21,7 +21,7 @@ const DefaultType = enum(u8) {
     base_colour = 1,
 };
 
-const RESERVED_TEXTUES = std.meta.fields(DefaultType).len;
+const RESERVED_TEXTUES_COUNT = std.meta.fields(DefaultType).len;
 
 const MissingTexture = TextureReference{
     .id = @enumFromInt(@intFromEnum(DefaultType.missing_texture)),
@@ -36,11 +36,19 @@ const BaseColour = TextureReference{
 };
 const BaseColourName: []const u8 = @tagName(DefaultType.base_colour);
 
-const FREE_SLOTS = MAX_TEXTURES - RESERVED_TEXTUES;
+const FREE_SLOTS_COUNT = MAX_TEXTURES_COUNT - RESERVED_TEXTUES_COUNT;
 
 const TextureReference = packed struct(u64) {
     id: T.ResourceHandle,
     string: u32,
+};
+
+pub const TextureConfig = struct {
+    auto_release: bool,
+
+    pub const default = TextureConfig{
+        .auto_release = false,
+    };
 };
 
 pub fn Textures(renderer_backend: type) type {
@@ -48,24 +56,14 @@ pub fn Textures(renderer_backend: type) type {
 
     return struct {
         pub const Self = @This();
-        //TODO: Should this be dynamic?
-        //TODO: Make this safe when more textures are available. Overwrite the oldest texture?
-        // items: [MAX_TEXTURES]Texture,
-        /// Texture Data
-        handles: [MAX_TEXTURES]T.Handle,
-        uses: [MAX_TEXTURES]TextureUse,
-        infos: [MAX_TEXTURES]Texture.Info,
-        data: [MAX_TEXTURES]Data,
-
-        reference_counts: [MAX_TEXTURES]u16,
-        auto_release: [MAX_TEXTURES]bool,
-
-        // The first element of the freelist holds the pointer this corresponds to the default texture
-        free_list_ptr: u16,
-        free_list: [FREE_SLOTS]u16,
+        // TODO: Should this be a diferent handle?
+        handles: [MAX_TEXTURES_COUNT]T.Handle,
+        infos: [MAX_TEXTURES_COUNT]Texture.Info,
+        data: [MAX_TEXTURES_COUNT]Data,
+        reference_counts: [MAX_TEXTURES_COUNT]u16,
+        auto_release: [MAX_TEXTURES_COUNT]bool,
 
         // TODO: Maybe make the names instead be fron a virtual file system id or something
-        /// Hashmap storing the current handle for a given texture name
         hash_map: TextureNameMap,
 
         /// Local cache to store string keys for the lifetime of this system
@@ -86,6 +84,7 @@ pub fn Textures(renderer_backend: type) type {
             else
                 std.AutoHashMap(TextureKey, TextureReference);
 
+        // TODO: Make this just be a u32 start so and add null terminator to define the end
         const StringRef = packed struct(u64) {
             start: u32,
             end: u32,
@@ -96,15 +95,21 @@ pub fn Textures(renderer_backend: type) type {
 
         pub const Texture = struct {
             handle: T.Handle = .{},
-            use: TextureUse = .unknown,
             info: Info = .{},
             data: Data = .{},
 
-            pub const Info = struct {
-                width: u32 = 0,
-                height: u32 = 0,
-                has_transparency: u8 = 0,
-                channel_count: u8 = 0,
+            pub const Info = packed struct(u32) {
+                width: DimnsionType = 0,
+                height: DimnsionType = 0,
+                channel_count: u3 = 0,
+                has_transparency: bool = false,
+
+                pub const default = Info{
+                    .width = 0,
+                    .height = 0,
+                    .channel_count = 0,
+                    .has_transparency = false,
+                };
             };
         };
 
@@ -126,16 +131,10 @@ pub fn Textures(renderer_backend: type) type {
         };
 
         // TODO: Best way to handle this
-
         pub fn init(self: *Self, renderer: *RendererType, allocator: std.mem.Allocator) !void {
-            self.free_list_ptr = 0;
-            for (0..MAX_TEXTURES - RESERVED_TEXTUES) |i| {
-                self.free_list[i] = @as(u16, @truncate(i)) + @as(u16, RESERVED_TEXTUES);
-            }
             self.renderer = renderer;
             @memset(&self.handles, .{});
-            @memset(&self.uses, .unknown);
-            @memset(&self.infos, .{});
+            @memset(&self.infos, .default);
             @memset(&self.data, .{});
             @memset(&self.reference_counts, 0);
             @memset(&self.auto_release, false);
@@ -153,7 +152,7 @@ pub fn Textures(renderer_backend: type) type {
             // TODO: THis is dynamic. I dont like
             self.string_cache = try std.ArrayList(u8).initCapacity(allocator, 4096);
             self.string_reference = try std.ArrayList(StringRef).initCapacity(allocator, 4096);
-            self.string_reference.appendNTimesAssumeCapacity(.{ .start = 0, .end = 0 }, RESERVED_TEXTUES + 1);
+            self.string_reference.appendNTimesAssumeCapacity(.{ .start = 0, .end = 0 }, RESERVED_TEXTUES_COUNT + 1);
         }
 
         pub fn deinit(self: *Self) void {
@@ -168,20 +167,60 @@ pub fn Textures(renderer_backend: type) type {
             self.image_arena.deinit();
         }
 
-        pub fn get_default(self: *const Self) *const Texture {
-            return Texture{
-                .handle = self.handles[1],
-                .use = self.uses[1],
-                .width = self.widths[1],
-                .height = self.heights[1],
-                .channel_count = self.channel_counts[1],
-                .has_transparency = self.has_transparencys[1],
-                .data = self.data[1],
-            };
-        }
+        // pub fn create_from_image(self: *Self, name: []const u8, img: image.Image, config: TextureConfig) TextureHandle {
+        //     if (std.mem.eql(u8, name, BaseColourName)) {
+        //         self.renderer._log.warn(
+        //             "Trying to create base colour texture. Just use .base_colour",
+        //             .{},
+        //         );
+        //         return TextureHandle.base_colour;
+        //     }
+        //     if (std.mem.eql(u8, name, MissingTextureName)) {
+        //         self.renderer._log.warn(
+        //             "Trying to create base colour texture. Just use .missing_texture",
+        //             .{},
+        //         );
+        //         return TextureHandle.missing_texture;
+        //     }
+        //
+        //     const gop = self.hash_map.getOrPut(name) catch unreachable;
+        //
+        //     if (!gop.found_existing) {
+        //         const start = self.string_cache.items.len;
+        //         self.string_cache.appendSlice(name) catch return .missing_texture;
+        //         // HACK: This is not valid behavior
+        //         gop.key_ptr.* = self.string_cache.items[start .. start + name.len];
+        //         self.string_reference.append(
+        //             .{ .start = @truncate(start), .end = @truncate(start + name.len) },
+        //         ) catch return .missing_texture;
+        //
+        //         gop.value_ptr.* = .{
+        //             .id = .null_handle,
+        //             .string = @truncate(self.string_reference.items.len - 1),
+        //         };
+        //     } else {
+        //         return @enumFromInt(@as(u64, @bitCast(gop.value_ptr.*)));
+        //     }
+        //
+        //     var handle: TextureReference = gop.value_ptr.*;
+        //     var location: u32 = @intFromEnum(handle.id);
+        //
+        //     if (handle.id == .null_handle) {
+        //         // INFO: Image is already provided so load that image as a texture
+        //     }
+        //
+        //     if (self.reference_counts[location] == 0) {
+        //         self.auto_release[location] = config.auto_release;
+        //     } else {
+        //         assert(self.auto_release[location] == config.auto_release);
+        //     }
+        //
+        //     return @enumFromInt(@as(u64, @bitCast(handle)));
+        // }
 
         // TODO(adi): I hate this. Can we not use strings here?
-        pub fn create(self: *Self, name: []const u8, auto_release: bool) TextureHandle {
+        // TODO(adi): Should the image be stored instead of being discarded? This could be an option
+        pub fn create(self: *Self, name: []const u8, config: TextureConfig) TextureHandle {
             if (std.mem.eql(u8, name, BaseColourName)) {
                 self.renderer._log.warn(
                     "Trying to create base colour texture. Just use .base_colour",
@@ -202,6 +241,7 @@ pub fn Textures(renderer_backend: type) type {
             if (!gop.found_existing) {
                 const start = self.string_cache.items.len;
                 self.string_cache.appendSlice(name) catch return .missing_texture;
+                // HACK: This is not valid behavior
                 gop.key_ptr.* = self.string_cache.items[start .. start + name.len];
                 self.string_reference.append(
                     .{ .start = @truncate(start), .end = @truncate(start + name.len) },
@@ -211,6 +251,8 @@ pub fn Textures(renderer_backend: type) type {
                     .id = .null_handle,
                     .string = @truncate(self.string_reference.items.len - 1),
                 };
+            } else {
+                return @enumFromInt(@as(u64, @bitCast(gop.value_ptr.*)));
             }
 
             var handle: TextureReference = gop.value_ptr.*;
@@ -218,34 +260,34 @@ pub fn Textures(renderer_backend: type) type {
 
             if (handle.id == .null_handle) {
                 // INFO: Texture does not exist so load the texture
-                assert(self.free_list_ptr < MAX_TEXTURES);
                 var texture: Texture = .{};
-                if (!self.load_texture(&texture, self.image_arena.allocator(), name, .png)) {
+                if (!Self.load_texture(self.renderer, &texture, self.image_arena.allocator(), name, .png)) {
                     self.renderer._log.err("Unable to open texture: {s}", .{name});
                     return TextureHandle.missing_texture;
                 }
                 _ = self.image_arena.reset(.retain_capacity);
 
-                const free_index = self.free_list[self.free_list_ptr];
-                location = free_index;
-                assert(self.handles[free_index].id == .null_handle);
-                texture.handle.id = @enumFromInt(free_index);
-                handle.id = @enumFromInt(free_index);
+                for (self.handles[RESERVED_TEXTUES_COUNT..], RESERVED_TEXTUES_COUNT..) |h, i| {
+                    if (h.id == .null_handle) {
+                        location = @truncate(i);
+                        break;
+                    }
+                }
+                texture.handle.id = @enumFromInt(location);
+                handle.id = @enumFromInt(location);
 
-                self.handles[free_index] = texture.handle;
-                self.uses[free_index] = texture.use;
-                self.data[free_index] = texture.data;
-                self.infos[free_index] = texture.info;
+                self.handles[location] = texture.handle;
+                self.data[location] = texture.data;
+                self.infos[location] = texture.info;
 
                 gop.value_ptr.* = @bitCast(handle);
-                self.reference_counts[free_index] = 0;
-                self.free_list_ptr += 1;
+                self.reference_counts[location] = 0;
             }
 
             if (self.reference_counts[location] == 0) {
-                self.auto_release[location] = auto_release;
+                self.auto_release[location] = config.auto_release;
             } else {
-                assert(self.auto_release[location] == auto_release);
+                assert(self.auto_release[location] == config.auto_release);
             }
 
             return @enumFromInt(@as(u64, @bitCast(handle)));
@@ -254,6 +296,14 @@ pub fn Textures(renderer_backend: type) type {
         pub fn reload_texture(self: *Self, handle: TextureHandle) bool {
             _ = self;
             _ = handle;
+            @compileError("NOT IMPLEMENTED");
+        }
+
+        pub fn resize_texture(self: *Self, handle: TextureHandle, new_width: u32, new_height: u32) bool {
+            _ = self;
+            _ = handle;
+            _ = new_width;
+            _ = new_height;
             @compileError("NOT IMPLEMENTED");
         }
 
@@ -270,7 +320,7 @@ pub fn Textures(renderer_backend: type) type {
             }
             const reference: TextureReference = @bitCast(@intFromEnum(handle));
             const location: u32 = @intFromEnum(reference.id);
-            assert(location < MAX_TEXTURES);
+            assert(location < MAX_TEXTURES_COUNT);
             return self.handles[location];
         }
 
@@ -281,7 +331,7 @@ pub fn Textures(renderer_backend: type) type {
                 return &self.data[0];
             }
             const location: u32 = @intFromEnum(reference.id);
-            assert(location < MAX_TEXTURES);
+            assert(location < MAX_TEXTURES_COUNT);
             if (self.handles[location].id == .null_handle) {
                 self.renderer._log.err("Expired handle: {any}. Texture not available", .{reference});
                 return &self.data[0];
@@ -305,19 +355,20 @@ pub fn Textures(renderer_backend: type) type {
             }
             const location = @intFromEnum(reference.id);
 
+            if (self.handles[location].id == .null_handle) {
+                self.renderer._log.err("Invalid texture handle, cannot release", .{});
+                return;
+            }
+
             self.reference_counts[location] -= 1;
 
             if (self.reference_counts[location] == 0 and self.auto_release[location]) {
-                // const texture = &self.items[location];
-
                 self.renderer._backend.destroy_texture(&self.data[location]);
 
+                // TODO: We dont need to set the other fields here. Seperate id and generation
+                self.infos[location] = .default;
                 self.handles[location].id = .null_handle;
                 self.handles[location].generation = .null_handle;
-                self.infos[location].has_transparency = 0;
-                self.infos[location].channel_count = 0;
-                self.infos[location].width = 0;
-                self.infos[location].height = 0;
 
                 assert(reference.string <= self.string_reference.items.len);
                 const string_ref = self.string_reference.items[reference.string];
@@ -328,7 +379,7 @@ pub fn Textures(renderer_backend: type) type {
         }
 
         fn load_texture(
-            self: *Self,
+            renderer: *RendererType,
             texture: *Texture,
             allocator: std.mem.Allocator,
             texture_name: []const u8,
@@ -338,7 +389,7 @@ pub fn Textures(renderer_backend: type) type {
             var img: image.Image = undefined;
             var resource: Resource = .{ .tag = .image, .data = @ptrCast(&img) };
             resource.load(.{ .image = .{ .requested_image_type = .rgba, .extension = texture_type } }, allocator, texture_name) catch |err| {
-                self.renderer._log.err("Unable to load texture image: {s}", .{@errorName(err)});
+                renderer._log.err("Unable to load texture image: {s}", .{@errorName(err)});
                 return false;
             };
 
@@ -361,23 +412,23 @@ pub fn Textures(renderer_backend: type) type {
 
             var old = texture.*;
 
-            texture.info.width = img.width;
-            texture.info.height = img.height;
-            texture.info.channel_count = img.channels;
+            texture.info.width = @truncate(img.width);
+            texture.info.height = @truncate(img.height);
+            texture.info.channel_count = @truncate(img.channels);
 
-            texture.data = self.renderer._backend.create_texture(
+            texture.data = renderer._backend.create_texture(
                 img.width,
                 img.height,
                 img.channels,
                 img.data,
             ) catch |err| {
-                self.renderer._log.err("Unable to create texture: {s}", .{@errorName(err)});
+                renderer._log.err("Unable to create texture: {s}", .{@errorName(err)});
                 return false;
             };
-            texture.info.has_transparency = @intFromBool(has_transparency);
+            texture.info.has_transparency = has_transparency;
             texture.handle.id = .null_handle;
 
-            self.renderer._backend.destroy_texture(&old.data);
+            renderer._backend.destroy_texture(&old.data);
 
             if (current_generation == .null_handle) {
                 texture.handle.generation = @enumFromInt(0);
@@ -395,7 +446,6 @@ pub fn Textures(renderer_backend: type) type {
                 const missing_texture = 0;
                 self.handles[missing_texture].generation = @enumFromInt(0);
                 self.handles[missing_texture].id = MissingTexture.id;
-                self.uses[missing_texture] = .diffuse;
 
                 const texture_dim = 1;
                 const channels = 4;
@@ -414,7 +464,7 @@ pub fn Textures(renderer_backend: type) type {
                 missing_texture_info.width = 1;
                 missing_texture_info.height = 1;
                 missing_texture_info.channel_count = 4;
-                missing_texture_info.has_transparency = 0;
+                missing_texture_info.has_transparency = false;
                 self.hash_map.put(MissingTextureName, MissingTexture) catch return error.InitFailed;
             }
 
@@ -423,8 +473,7 @@ pub fn Textures(renderer_backend: type) type {
 
                 const base_colour = 1;
                 self.handles[base_colour].generation = @enumFromInt(0);
-                self.handles[base_colour].id = MissingTexture.id;
-                self.uses[base_colour] = .diffuse;
+                self.handles[base_colour].id = BaseColour.id;
 
                 const texture_dim = 1;
                 const channels = 4;
@@ -443,13 +492,9 @@ pub fn Textures(renderer_backend: type) type {
                 base_colour_info.width = 1;
                 base_colour_info.height = 1;
                 base_colour_info.channel_count = 4;
-                base_colour_info.has_transparency = 0;
+                base_colour_info.has_transparency = false;
                 self.hash_map.put(MissingTextureName, MissingTexture) catch return error.InitFailed;
             }
-        }
-
-        test Self {
-            std.debug.print("{any}\n", .{Self.default_hash});
         }
     };
 }

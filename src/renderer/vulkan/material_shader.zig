@@ -1,18 +1,25 @@
-const vk = @import("vulkan");
-const Context = @import("context.zig");
+const std = @import("std");
+const assert = std.debug.assert;
+
 const builtin = @import("shaders").builtin;
-const T = @import("types.zig");
 const core = @import("fr_core");
 const m = core.math;
 const Textures = core.Renderer.TexturesType;
+const vk = @import("vulkan");
 
-const Pipeline = @import("pipeline.zig");
 const Buffer = @import("buffer.zig");
+const Context = @import("context.zig");
+const Pipeline = @import("pipeline.zig");
+const T = @import("types.zig");
 
-// vertex, frag
+/// vertex, frag
 pub const MATERIAL_SHADER_STAGE_COUNT = 2;
-pub const MAX_DESCRIPTOR_SETS = 3;
+
+/// diffuse, specular, normal, height, roughness, metallic, ao, emissive
+/// for now we only have one for the diffuse texture
 pub const NUM_SAMPLERS = 1;
+
+const MAX_DESCRIPTOR_SETS = T.MAX_DESCRIPTOR_SETS;
 
 const MaterialShader = @This();
 
@@ -20,16 +27,21 @@ stages: [MATERIAL_SHADER_STAGE_COUNT]ShaderStage,
 
 // This is the actual buffer that holds our uniforms. And this buffer is attached to the descriptor set
 global_uniform_buffer: Buffer,
+/// The global uniform object that is uploaded to the shader
 global_uo: T.GlobalUO,
+/// The global descriptor pool that is used to allocate descriptor sets for the global uniforms
 global_descriptor_pool: vk.DescriptorPool,
+/// The global descriptor set layout that is used to allocate descriptor sets for the global uniforms
 global_descriptor_set_layout: vk.DescriptorSetLayout,
-// NOTE: one per frame with 3 max for triple buffering
+/// The global descriptor sets
+/// NOTE: one per frame with 3 max for triple buffering
 global_descriptor_sets: [MAX_DESCRIPTOR_SETS]vk.DescriptorSet,
 
-// NOTE: These are for the per material instance uniforms
+/// The layout for the per material instance uniforms
 local_descriptor_set_layout: vk.DescriptorSetLayout,
+/// The descriptor pool for the per material instance uniforms
 local_descriptor_pool: vk.DescriptorPool,
-// This will store the uniforms for all the material instance
+/// The uniform buffer for the per material instance uniforms
 local_uniform_buffer: Buffer,
 // TODO: Make this a free list
 material_free_list: u32,
@@ -78,7 +90,6 @@ pub fn create(ctx: *const Context, texture_system: *Textures) Error!MaterialShad
     // INFO: Global Descriptiors
     // NOTE: Descriptors are not created bu allocated from a pool
     // A Descriptor Set is a grouping of uniforms. That is what the set=0 in the vertex shader means
-
     const global_ubo_layout_binding = vk.DescriptorSetLayoutBinding{
         .binding = 0, // This means this is the first binding. this is what binding=0 in the vert shader indicates
         .descriptor_count = 1, // We only have 1 object
@@ -575,6 +586,3 @@ const shaders: []const Shader = &.{
     .{ .tag = .vertex, .binary = builtin.MaterialShader.vert },
     .{ .tag = .fragment, .binary = builtin.MaterialShader.frag },
 };
-
-const std = @import("std");
-const assert = std.debug.assert;

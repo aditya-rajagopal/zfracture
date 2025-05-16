@@ -1,3 +1,5 @@
+const std = @import("std");
+const assert = std.debug.assert;
 const vk = @import("vulkan");
 const T = @import("types.zig");
 
@@ -7,9 +9,13 @@ const Buffer = @import("buffer.zig");
 
 const Image = @This();
 
+/// The handle to the vulkan image
 handle: vk.Image,
+/// The memory handle to the vulkan image memory
 memory: vk.DeviceMemory,
+/// The image view handle to the vulkan image
 view: vk.ImageView,
+/// The extent of the image
 extent: vk.Extent2D,
 
 pub const Error =
@@ -19,48 +25,84 @@ pub const Error =
     T.LogicalDevice.BindImageMemoryError ||
     T.LogicalDevice.AllocateMemoryError;
 
-pub fn create(
-    ctx: *const Context,
+pub const ImageCreateInfo = struct {
+    /// The image type
     image_type: vk.ImageType,
+    /// The extent of the image. This is the size of the image in pixels
     extent: vk.Extent2D,
+    /// The depth of the image
+    /// TODO: Support depth more than 1
+    depth: u32 = 1,
+    /// The format of the image
     format: vk.Format,
+    /// The tiling of the image
     tiling: vk.ImageTiling,
+    /// The usage flags for the image
     usage: vk.ImageUsageFlags,
+    /// The memory flags for the image memory allocation
     memory_flags: vk.MemoryPropertyFlags,
+    /// Whether to create an image view
     create_view: bool,
+    /// The aspects of the image view
     view_aspects: vk.ImageAspectFlags,
-) Error!Image {
-    var image: Image = undefined;
-    image.extent = extent;
+    /// The number of mipmap levels in the image
+    /// TODO: Support mipmaps
+    mip_levels: u32 = 1,
+    /// The number of layers in the image
+    /// TODO: More than 1 layer is not supported yet
+    layer_count: u32 = 1,
+    /// The number of samples in the image
+    /// TODO: Support multiple samples
+    samples: vk.SampleCountFlags = .{ .@"1_bit" = true },
+    /// Sharing mode for the image
+    /// TODO: Support sharing mode other than exclusive
+    sharing_mode: vk.SharingMode = .exclusive,
+};
 
-    const create_info = vk.ImageCreateInfo{
-        .image_type = image_type,
+/// Creates an image with the given parameters and also creates an image view if create_view is true
+/// TODO: Need to provide configuration for depth, mipmaps and multiplayer images
+pub fn create(
+    /// The vulkan context
+    ctx: *const Context,
+    /// The image create info
+    create_info: *const ImageCreateInfo,
+) Error!Image {
+    // TODO: Suppport depth more than 1
+    assert(create_info.depth == 1);
+    // TODO: Support multiple layers
+    assert(create_info.layer_count == 1);
+    // TODO: Support mipmaps
+    assert(create_info.mip_levels == 1);
+    // TODO: Support sharing mode other than exclusive
+    assert(create_info.sharing_mode == .exclusive);
+
+    var image: Image = undefined;
+    image.extent = create_info.extent;
+
+    const image_create_info = vk.ImageCreateInfo{
+        .image_type = create_info.image_type,
         .extent = .{
-            .width = extent.width,
-            .height = extent.height,
-            // TODO: Support configurable depth
-            .depth = 1,
+            .width = create_info.extent.width,
+            .height = create_info.extent.height,
+            .depth = create_info.depth,
         },
-        // TODO: Need to support mipmapping
-        .mip_levels = 1,
+        .mip_levels = create_info.mip_levels,
         // TODO: support multiple layers
-        .array_layers = 1,
-        .format = format,
-        .tiling = tiling,
+        .array_layers = create_info.layer_count,
+        .format = create_info.format,
+        .tiling = create_info.tiling,
         .initial_layout = .undefined,
-        .usage = usage,
-        // TODO: Make this configurable
-        .samples = .{ .@"1_bit" = true },
-        // TODO: Make this configurable
-        .sharing_mode = .exclusive,
+        .usage = create_info.usage,
+        .samples = create_info.samples,
+        .sharing_mode = create_info.sharing_mode,
     };
 
-    image.handle = try ctx.device.handle.createImage(&create_info, null);
+    image.handle = try ctx.device.handle.createImage(&image_create_info, null);
     errdefer ctx.device.handle.destroyImage(image.handle, null);
 
     const memory_requirements = ctx.device.handle.getImageMemoryRequirements(image.handle);
 
-    const memory_type = try ctx.find_memory_index(memory_requirements.memory_type_bits, memory_flags);
+    const memory_type = try ctx.find_memory_index(memory_requirements.memory_type_bits, create_info.memory_flags);
 
     const allocate_info = vk.MemoryAllocateInfo{
         .allocation_size = memory_requirements.size,
@@ -73,8 +115,8 @@ pub fn create(
     // TODO: Configurable memory offset when using image pools
     try ctx.device.handle.bindImageMemory(image.handle, image.memory, 0);
 
-    if (create_view) {
-        image.view = try create_image_view(ctx, image.handle, format, view_aspects);
+    if (create_info.create_view) {
+        image.view = try create_image_view(ctx, image.handle, create_info.format, create_info.view_aspects);
     } else {
         image.view = .null_handle;
     }

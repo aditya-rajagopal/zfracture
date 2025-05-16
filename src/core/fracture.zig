@@ -142,4 +142,3 @@ pub const AppConfig = struct {
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
-const static_array_list = @import("containers/static_array_list.zig");

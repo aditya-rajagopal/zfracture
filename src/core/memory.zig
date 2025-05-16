@@ -55,7 +55,15 @@
 //!     test_alloc.print_memory_stats();
 //! }
 //!
-pub fn TrackingAllocator(comptime alloc_tag: @Type(.enum_literal), comptime MemoryTag: type, comptime enable_log: bool) type {
+pub fn TrackingAllocator(
+    /// Just a tag stored in the allocator to differentiate this struct from other structs constructed with this function
+    comptime alloc_tag: @Type(.enum_literal),
+    /// The tags that are tracked by this allocator and allocators provided
+    comptime MemoryTag: type,
+    /// Setting this to true will allow logging
+    comptime enable_log: bool,
+    //TODO: Add verbositiy level. Maybe we want to track every allocation and deallocation with a log
+) type {
     if (comptime @typeInfo(MemoryTag) != .@"enum") {
         @compileError("Memory Tag must be an enum");
     }

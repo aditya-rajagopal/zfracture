@@ -1,3 +1,4 @@
+//! WIP: Renderer module
 pub const texture_system = @import("systems/texture.zig");
 // TODO: Move these to the right places
 pub const MAX_MATERIAL_INSTANCES = 64;

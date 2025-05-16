@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const core = @import("fr_core");
-const m = core.math;
+const math = core.math;
 
 const config = @import("config.zig");
 
@@ -16,11 +16,11 @@ pub const GameState = struct {
     // HACK: Camera needed here
     near_clip: f32,
     far_clip: f32,
-    projection: m.Mat4,
-    camera_pos: m.Vec3,
-    camera_euler: m.Vec3,
+    view: math.Mat4,
+    projection: math.Mat4,
+    camera_pos: math.Vec3,
+    camera_euler: math.Vec3,
     camera_dirty: bool,
-    view: m.Mat4,
     move_speed: f32,
     // HACK: For now this lives here
     render_data: core.renderer.RenderData,
@@ -33,23 +33,26 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     const state = foo_allocator.create(GameState) catch return null;
     state.delta_time = 1.0;
     state.log = GameLog.init(&engine.log_config);
-    state.camera_pos = m.vec3s(0, 0, 2.0);
-    state.camera_euler = m.Vec3.zeros;
+
+    state.camera_pos = math.vec3s(0, 0, 2.0);
+    state.camera_euler = math.Vec3.zeros;
     state.camera_dirty = true;
     state.move_speed = 5.0;
     state.generation = 0;
     state.near_clip = 0.1;
-    state.near_clip = 0.1;
     state.far_clip = 1000.0;
-    state.projection = m.Mat4.perspective(m.deg_to_rad(45.0), 1920.0 / 1080.0, state.near_clip, state.far_clip);
-    state.view = m.Transform.init_trans(&m.Vec3.init(0.0, 0.0, -2.0)).to_mat();
+
+    state.projection = math.Mat4.perspective(math.deg_to_rad(45.0), 1920.0 / 1080.0, state.near_clip, state.far_clip);
+    state.view = math.Transform.init_trans(&math.Vec3.init(0.0, 0.0, -2.0)).to_mat();
+
     state.render_data.material_id = engine.renderer.shader_acquire_resource();
-    state.render_data.model = m.Transform.identity;
+    state.render_data.model = math.Transform.identity;
     state.render_data.textures[0] = .missing_texture;
     state.textures = [_]core.renderer.texture_system.TextureHandle{.null_handle} ** 3;
+
     const names = [_][]const u8{ "paving", "cobblestone", "paving2" };
     for (names, 0..) |name, i| {
-        state.textures[i] = engine.renderer.textures.create(name, false);
+        state.textures[i] = engine.renderer.textures.create(name, .default);
     }
     return state;
 }
@@ -99,7 +102,7 @@ pub fn update_and_render(engine: *core.Fracture, game_state: *anyopaque) bool {
             camera_pitch(state, -1.0 * delta_time);
         }
 
-        var velocity = m.Vec3.zeros;
+        var velocity = math.Vec3.zeros;
 
         if (engine.input.is_key_down(.W)) {
             const forward = state.view.to_affine().get_forward();
@@ -131,29 +134,29 @@ pub fn update_and_render(engine: *core.Fracture, game_state: *anyopaque) bool {
             velocity = velocity.add(&down);
         }
 
-        if (!velocity.eql_approx(&m.Vec3.zeros, 0.0002)) {
+        if (!velocity.eql_approx(&math.Vec3.zeros, 0.0002)) {
             velocity = velocity.normalize(0.00000001);
             state.camera_pos = state.camera_pos.add(&velocity.muls(delta_time * state.move_speed));
             state.camera_dirty = true;
         }
 
         if (engine.input.is_key_down(.KEY_1)) {
-            state.camera_pos = m.vec3s(0, 0, 2.0);
-            state.camera_euler = m.Vec3.zeros;
+            state.camera_pos = math.vec3s(0, 0, 2.0);
+            state.camera_euler = math.Vec3.zeros;
             state.camera_dirty = true;
         }
 
         // Re calculate the view matrix
         if (state.camera_dirty) {
-            const rot = m.Transform.init_rot_xyz(state.camera_euler.x(), state.camera_euler.y(), state.camera_euler.z());
-            const trans = m.Transform.init_trans(&state.camera_pos);
+            const rot = math.Transform.init_rot_xyz(state.camera_euler.x(), state.camera_euler.y(), state.camera_euler.z());
+            const trans = math.Transform.init_trans(&state.camera_pos);
             state.view = trans.mul(&rot).inv_tr().to_mat();
             state.camera_dirty = false;
         }
     }
 
     { // HACK: Rendering
-        engine.renderer.update_global_state(state.projection, state.view, m.Vec3.zeros, m.Vec4.ones, 0);
+        engine.renderer.update_global_state(state.projection, state.view, math.Vec3.zeros, math.Vec4.ones, 0);
         engine.renderer.draw_temp_object(state.render_data);
     }
 
@@ -162,8 +165,8 @@ pub fn update_and_render(engine: *core.Fracture, game_state: *anyopaque) bool {
 
 inline fn camera_pitch(state: *GameState, amount: f32) void {
     // NOTE: Limiting the pitch to prevent gimble lock
-    const pitch_limit = comptime m.deg_to_rad(89.0);
-    state.camera_euler.vec[0] = m.clamp(state.camera_euler.vec[0] + amount, -pitch_limit, pitch_limit);
+    const pitch_limit = comptime math.deg_to_rad(89.0);
+    state.camera_euler.vec[0] = math.clamp(state.camera_euler.vec[0] + amount, -pitch_limit, pitch_limit);
     state.camera_dirty = true;
 }
 
@@ -181,5 +184,5 @@ pub fn on_resize(engine: *core.Fracture, game_state: *anyopaque, width: u32, hei
     _ = engine;
     const state: *GameState = @ptrCast(@alignCast(game_state));
     const aspect_ratio = @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
-    state.projection = m.Mat4.perspective(m.deg_to_rad(45.0), aspect_ratio, state.near_clip, state.far_clip);
+    state.projection = math.Mat4.perspective(math.deg_to_rad(45.0), aspect_ratio, state.near_clip, state.far_clip);
 }

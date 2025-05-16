@@ -54,6 +54,7 @@ Making use of zig comptime allows many features to be implemented in interesting
 The following is the list of features that the engine has and is planned. More will be added as time goes on.
 
 ## Features TODO:
+- [ ] Unified asset management system once the types of resources are defined
 - [ ] Create a command buffer like structure that could accept commands to execute over many frames or defer execution to future frames
 - [ ] Fracture Structure Definiton
     - [x] Basic parser
@@ -125,17 +126,18 @@ The following is the list of features that the engine has and is planned. More w
     - [ ] Benchmarks
     - [ ] Tests
     - [ ] Shapes
-        - [x] Rectangle
-        - [ ] Circle
+        - [x] Quad
+        - [x] Circle
         - [ ] Triangle
         - [ ] Point
         - [ ] Line
 - [ ] Containers
-    - [ ] StaticArrayList: Partially implemented
     - [ ] Array backed linked list?
     - [ ] Array backed memory pool?
     - [ ] Create a static multiarrayList
 - [ ] Instrumentation
+    - [x] rtdsc
+    - [x] tracer with anchors
 - [ ] Renderer
     - [ ] Unify all errors into a small set that are allowed to crash the program. Everything else needs to be handled
     - [ ] Create renderer settings on the engine/app side rather than hard coded settings
@@ -237,7 +239,7 @@ The following is the list of features that the engine has and is planned. More w
 - [ ] control focus (tab order?)
 - [ ] docking
 - [ ] drag and drop support
-- [ ] UI Controls (one of the few engine-level areas that uses OOP):
+- [ ] UI Controls (one of the few engine-level areas that might use OOP):
   * [ ] Base control - all controls come from this
   * [ ] panel
   * [ ] image box

@@ -3,7 +3,6 @@ const entrypoint = @import("entrypoint");
 pub const main = entrypoint.entrypoint;
 
 export fn init(engine: *core.Fracture) ?*anyopaque {
-    std.debug.print("In the first call: {*}\n", .{engine});
     return game.init(engine);
 }
 

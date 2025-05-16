@@ -154,16 +154,19 @@ fn create(ctx: *const Context, extent: vk.Extent2D, old_handle: vk.SwapchainKHR)
     // TODO: Is this something we can recover from?
     swapchain.depth_format = try ctx.detect_depth_format();
 
+    const depth_attachement_create_info = Image.ImageCreateInfo{
+        .image_type = .@"2d",
+        .extent = actual_extent,
+        .tiling = .optimal,
+        .format = swapchain.depth_format,
+        .usage = .{ .depth_stencil_attachment_bit = true },
+        .memory_flags = .{ .device_local_bit = true },
+        .create_view = true,
+        .view_aspects = .{ .depth_bit = true },
+    };
     swapchain.depth_attachement = try Image.create(
         ctx,
-        .@"2d",
-        actual_extent,
-        swapchain.depth_format,
-        .optimal,
-        .{ .depth_stencil_attachment_bit = true },
-        .{ .device_local_bit = true },
-        true,
-        .{ .depth_bit = true },
+        &depth_attachement_create_info,
     );
     ctx.log.debug("Swapchain Created Successfully!: present mode: {s}", .{@tagName(swapchain.present_mode)});
     swapchain.ctx = ctx;
@@ -239,8 +242,6 @@ pub fn present(self: *Swapchain, command_buffer: *CommandBuffer) SwapchainPresen
         },
     }
 
-    // TODO: Understand the mechanics of this
-    // LEFTOFF: How does this mechanic work of swapping semephores
     const next_image = self.ctx.device.handle.acquireNextImageKHR(
         self.handle,
         std.math.maxInt(u64),

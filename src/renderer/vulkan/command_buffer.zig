@@ -5,8 +5,11 @@ const T = @import("types.zig");
 const Context = @import("context.zig");
 pub const CommandBuffer = @This();
 
+/// The handle to the command buffer
 handle: T.CommandBufferProxy,
+/// The state of the command buffer
 state: T.CommandBufferState,
+/// The command pool that the command buffer is allocated from
 pool: vk.CommandPool,
 
 pub const Error =
@@ -16,7 +19,14 @@ pub const Error =
     T.LogicalDevice.QueueSubmitError ||
     T.LogicalDevice.QueueWaitIdleError;
 
-pub fn allocate(ctx: *const Context, pool: vk.CommandPool, is_primary: bool) Error!CommandBuffer {
+/// Allocates a command buffer from the provided pool.
+pub fn allocate(
+    ctx: *const Context,
+    /// The command pool to allocate from
+    pool: vk.CommandPool,
+    /// Whether the command buffer is primary or secondary
+    is_primary: bool,
+) Error!CommandBuffer {
     const allocate_info = vk.CommandBufferAllocateInfo{
         .command_pool = pool,
         .command_buffer_count = 1,
@@ -41,16 +51,15 @@ pub fn free(self: *CommandBuffer, ctx: *const Context) void {
 }
 
 /// Start command buffer and allow it to record commands
-/// Arguments:
-///     is_single_use: True if you know for sure that you will reset this command buffer after submitting one time
-///     is_renderpass_continuation: This is for secondary command buffers that will be executed within a renderpass
-///                                 and is ignored for primary command buffers.
-///     is_simultaneous_use: True when the command buffer can be submitted to the queue multiple times while it is in the
-///                          pending state.
 pub fn begin(
     self: *CommandBuffer,
+    ///True if you know for sure that you will reset this command buffer after submitting one time
     is_single_use: bool,
+    ///This is for secondary command buffers that will be executed within a renderpass
+    ///and is ignored for primary command buffers.
     is_renderpass_continuation: bool,
+    ///True when the command buffer can be submitted to the queue multiple times while it is in the
+    ///pending state.
     is_simultaneous_use: bool,
 ) T.CommandBufferProxy.BeginCommandBufferError!void {
     const begin_info = vk.CommandBufferBeginInfo{
@@ -91,7 +100,16 @@ pub fn allocate_and_begin_single_use(ctx: *const Context, pool: vk.CommandPool) 
     return command_buffer;
 }
 
-pub fn end_single_use(self: *CommandBuffer, ctx: *const Context, fence: vk.Fence, queue: vk.Queue) !void {
+/// Ends a single use command buffer and submits it to the queue. It will wait
+pub fn end_single_use(
+    self: *CommandBuffer,
+    /// The vulkan context
+    ctx: *const Context,
+    /// The fence to signal when the command buffer is finished
+    fence: vk.Fence,
+    /// The queue to submit to
+    queue: vk.Queue,
+) !void {
     try self.end();
     const submit_info = vk.SubmitInfo{
         .command_buffer_count = 1,
@@ -100,6 +118,8 @@ pub fn end_single_use(self: *CommandBuffer, ctx: *const Context, fence: vk.Fence
 
     try ctx.device.handle.queueSubmit(queue, 1, @ptrCast(&submit_info), fence);
     self.update_submitted();
+    // Wait for the queu to finish. This is equivalent to providing a fence and waiting for it to be signaled
+    // TODO: Should we use the fence to signal instead? or let the user do it?
     try ctx.device.handle.queueWaitIdle(queue);
     self.free(ctx);
 }

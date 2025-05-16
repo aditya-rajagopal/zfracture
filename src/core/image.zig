@@ -6,6 +6,7 @@ pub const Image = T.Image;
 pub const LoadImageError = Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError;
 
 /// Load an image from a file.
+/// TODO: There should be 1 asset managment system that handles all of this
 pub fn load(
     /// The filename of the image to load. This is a relative path to the current working directory.
     filename: []const u8,

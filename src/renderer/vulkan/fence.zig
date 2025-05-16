@@ -4,7 +4,9 @@ const Context = @import("context.zig");
 
 const Fence = @This();
 
+/// The handle to the vulkan fence
 handle: vk.Fence = .null_handle,
+/// Whether the fence is signaled
 is_signaled: bool = false,
 
 pub fn create(ctx: *const Context, create_signaled: bool) !Fence {

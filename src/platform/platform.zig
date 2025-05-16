@@ -24,13 +24,7 @@ pub const pump_messages = platform.pump_messages;
 /// Get the platform specific allocator
 pub const get_allocator = platform.get_allocator;
 
-pub const load_library = platform.load_library;
-
 pub const copy_file = platform.copy_file;
-
-pub const library_lookup = platform.library_lookup;
-
-pub const free_library = platform.free_library;
 
 // test {
 //     std.testing.refAllDeclsRecursive(platform);

@@ -222,7 +222,44 @@ pub fn fill_pointers(
 //     // std.debug.print("{d}\n", .{comptime get_recursive_field_len(CustomStructure)});
 // }
 
-pub fn get_access_type(dtype: type, comptime field_stack: []const []const u8) type {
+/// Get the type of a field in a struct. This allows you to get types of nested fields.
+/// For example, if you have a struct like this:
+/// ```
+/// const MyStruct = struct {
+///     x: u32,
+///     y: u32,
+///     z: u32,
+/// };
+/// ```
+/// You can get the type of `x` by doing:
+/// ```
+/// const x_type = get_field_type(MyStruct, &[_][]const u8{"x"});
+/// ```
+/// This will return `u32`.
+///
+/// This function is recursive. So if you have a struct like this:
+/// ```
+/// const MyStruct = struct {
+///     x: u32,
+///     y: u32,
+///     z: u32,
+///     w: struct {
+///         a: u32,
+///         b: u32,
+///     },
+/// };
+/// ```
+/// You can get the type of `w.b` by doing:
+/// ```
+/// const w_b_type = get_field_type(MyStruct, &[_][]const u8{"w", "b"});
+/// ```
+/// This will return `u32`.
+pub fn get_access_type(
+    /// The struct type
+    dtype: type,
+    /// The access path to the field
+    comptime field_stack: []const []const u8,
+) type {
     comptime assert(field_stack.len > 0);
     var current_type = dtype;
     var info = @typeInfo(current_type);
@@ -248,9 +285,49 @@ pub fn get_access_type(dtype: type, comptime field_stack: []const []const u8) ty
     }
 }
 
+/// Get a pointer to a field in a struct. This allows you to get pointers to nested fields.
+/// For example, if you have a struct like this:
+/// ```
+/// const MyStruct = struct {
+///     x: u32,
+///     y: u32,
+///     z: u32,
+/// };
+/// ```
+/// You can get the pointer to `x` by doing:
+/// ```
+/// const x_type = get_field_type(MyStruct, &[_][]const u8{"x"});
+/// const x_ptr = get_nested_field_ptr(x_type, MyStruct, &[_][]const u8{"x"});
+/// ```
+/// This will return a pointer to `x`.
+///
+/// This function is recursive. So if you have a struct like this:
+/// ```
+/// const MyStruct = struct {
+///     x: u32,
+///     y: u32,
+///     z: u32,
+///     w: struct {
+///         a: u32,
+///         b: u32,
+///     },
+/// };
+/// ```
+///
+/// You can get the pointer to `w.b` by doing:
+/// ```
+/// const w_b_type = get_field_type(MyStruct, &[_][]const u8{"w", "b"});
+/// const w_b_ptr = get_nested_field_ptr(MyStruct, &[_][]const u8{"w", "b"});
+/// ```
+/// This will return a pointer to `w.b`.
+///
+/// TODO: Is there a way to not require the final_type?
 pub fn get_nested_field_ptr(
+    /// The type of the field being accessed. Obtained from `get_field_type`
     final_type: type,
+    /// The pointer to the struct that contains the field
     data_ptr: anytype,
+    /// The access path to the field
     comptime field_stack: []const []const u8,
 ) *final_type {
     if (comptime field_stack.len > 1) {

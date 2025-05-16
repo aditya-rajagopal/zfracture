@@ -58,7 +58,14 @@ const TracerLog = log.ScopedLogger(log.default_log, .TRACER, log.default_level);
 ///     tracer.print_stdout();
 /// }
 /// ```
-pub fn Tracer(comptime AnchorsEnum: type, comptime time_fn: *const fn () u64, comptime enabled: bool) type {
+pub fn Tracer(
+    /// The enum that contains the anchors that can be provided as a scope
+    comptime AnchorsEnum: type,
+    /// A function that returns a performance counter. This is clocked against the system clock.
+    comptime time_fn: *const fn () u64,
+    /// Whether the tracer is enabled or not. This will globally disable all tracing and make them no-ops
+    comptime enabled: bool,
+) type {
     const info = @typeInfo(AnchorsEnum);
     comptime assert(info == .@"enum");
 

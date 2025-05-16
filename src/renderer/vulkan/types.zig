@@ -86,8 +86,8 @@ pub const vkTextureData = struct {
 };
 
 // TODO: Should this be somehting universal?
-
 pub const MATERIAL_SHADER_DESCRIPTOR_COUNT = 2;
+pub const MAX_DESCRIPTOR_SETS = 3;
 
 pub const DescriptorState = extern struct {
     // One per frame
@@ -101,7 +101,6 @@ pub const MaterialShaderInstanceState = extern struct {
     descriptor_states: [MATERIAL_SHADER_DESCRIPTOR_COUNT]DescriptorState,
 };
 
-const MAX_DESCRIPTOR_SETS = @import("material_shader.zig").MAX_DESCRIPTOR_SETS;
 const std = @import("std");
 const builtin = @import("builtin");
 const windows = @import("std").os.windows;

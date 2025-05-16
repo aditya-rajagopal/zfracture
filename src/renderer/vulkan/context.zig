@@ -46,7 +46,7 @@ framebuffers: []Framebuffer,
 material_shader: MaterialShader,
 object_vertex_buffer: Buffer,
 object_index_buffer: Buffer,
-/// Runnint offset that is maintained when using the above buffers
+/// Running offset that is maintained when using the above buffers
 geometry_vertex_offset: u64 = 0,
 geometry_index_offset: u64 = 0,
 frame_delta_time: f32 = 0.0,
@@ -97,12 +97,13 @@ pub fn init(
 
     self.vkb = try T.BaseDispatch.load(self.vkGetInstanceProcAddr);
     self.allocator = allocator;
+
     self.cached_framebuffer_extent = .{ .width = 0, .height = 0 };
     self.framebuffer_extent.width = if (framebuffer_extent.width != 0) framebuffer_extent.width else 800;
     self.framebuffer_extent.height = if (framebuffer_extent.height != 0) framebuffer_extent.height else 600;
     self.frame_delta_time = 0.0;
 
-    self.log.info("Loaded Base Dispatch", .{});
+    self.log.info("Loaded Vulkan Base Dispatch", .{});
 
     // ============================================ INSTANCE ====================================/
     try self.create_instance(application_name);
@@ -110,7 +111,7 @@ pub fn init(
         self.instance.destroyInstance(null);
         self.allocator.destroy(self.instance.wrapper);
     }
-    self.log.info("Instance Created", .{});
+    self.log.info("Vulkan Instance Created", .{});
 
     // ========================================== DEBUGGER ======================================/
     try self.create_debugger();
@@ -383,6 +384,7 @@ pub fn end_frame(self: *Context, delta_time: f32) bool {
 
     // NOTE: Only false when swapchain needs to be recreated
     if (!res) {
+        @branchHint(.cold);
         self.log.info("Swapchain out of date. Recreating swapchain and trying again.", .{});
         _ = self.recreate_swapchain() catch |err| {
             @branchHint(.cold);
@@ -451,6 +453,7 @@ pub fn create_texture(
     const internal_data = texture_data.as(T.vkTextureData);
 
     // Create staging buffer and load data into it.
+    // TODO: Should the staging buffer be reused?
     const usage = vk.BufferUsageFlags{ .transfer_src_bit = true };
     const props = vk.MemoryPropertyFlags{ .host_visible_bit = true, .host_coherent_bit = true };
     var staging_buffer = Buffer.create(self, image_size, usage, props, true) catch |err| {
@@ -465,19 +468,23 @@ pub fn create_texture(
     // TODO: Maybe this should be configurable
     const format: vk.Format = .r8g8b8a8_unorm;
 
-    internal_data.image = Image.create(
-        self,
+    const image_create_info = Image.ImageCreateInfo{
         // TODO: Do I need 3D?
-        .@"2d",
-        .{ .width = width, .height = height },
-        format,
-        .optimal,
-        // NOTE: THis is specific to the texture
-        .{ .transfer_src_bit = true, .transfer_dst_bit = true, .sampled_bit = true, .color_attachment_bit = true },
-        .{ .device_local_bit = true },
-        true,
-        .{ .color_bit = true },
-    ) catch |err| {
+        .image_type = .@"2d",
+        .extent = .{ .width = width, .height = height },
+        .format = format,
+        .tiling = .optimal,
+        .usage = .{
+            .transfer_src_bit = true,
+            .transfer_dst_bit = true,
+            .sampled_bit = true,
+            .color_attachment_bit = true,
+        },
+        .memory_flags = .{ .device_local_bit = true },
+        .create_view = true,
+        .view_aspects = .{ .color_bit = true },
+    };
+    internal_data.image = Image.create(self, &image_create_info) catch |err| {
         @branchHint(.cold);
         self.log.err("Unable to create vulkan image for texture creation: {s}", .{@errorName(err)});
         return error.UnableToLoadTexture;
@@ -551,6 +558,7 @@ fn upload_data_range(
     // NOTE: We create a temporary buffer on the host side because the vertex and index buffers are on the device
     // and we cannot access the device memory directly. But we can transfer the data from the host to the device using
     // a command
+    // TODO: Should the staging buffer be reused?
     const staging_usage_flags = vk.MemoryPropertyFlags{ .host_visible_bit = true, .host_coherent_bit = true };
     var staging_buffer = try Buffer.create(self, size, .{ .transfer_src_bit = true }, staging_usage_flags, true);
     defer staging_buffer.destroy(self);
@@ -605,6 +613,7 @@ pub fn regen_framebuffers(self: *Context) Framebuffer.Error!void {
     for (self.swapchain.images) |*img| {
         const attachments = [_]vk.ImageView{
             img.view,
+            // NOTE(adi): We only need a single depth attachment because only one draw operation is active at a time
             self.swapchain.depth_attachement.view,
         };
         self.framebuffers[i] = try Framebuffer.create(
@@ -746,12 +755,12 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
     switch (builtin.mode) {
         .Debug => {
             required_extensions.appendAssumeCapacity("VK_EXT_debug_utils");
-            self.log.info("Required Extensions: ", .{});
-            for (required_extensions.items, 0..) |ext, i| {
-                self.log.info("\t{d}. {s}", .{ i, ext });
-            }
         },
         else => {},
+    }
+    self.log.info("Required Extensions: ", .{});
+    for (required_extensions.items, 0..) |ext, i| {
+        self.log.info("\t{d}. {s}", .{ i, ext });
     }
     defer required_extensions.deinit();
 
@@ -790,6 +799,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
                     return error.FailedToFindValidationLayer;
                 }
             }
+
             create_info.enabled_layer_count = @truncate(layers.items.len);
             create_info.pp_enabled_layer_names = layers.items.ptr;
         },
@@ -814,7 +824,9 @@ fn debug_callback(
 ) callconv(vk.vulkan_call_conv) vk.Bool32 {
     _ = message_types;
     const severity: u32 = @bitCast(message_severity);
+
     const debug_flag = vk.DebugUtilsMessageSeverityFlagsEXT;
+
     const err: u32 = @bitCast(debug_flag{ .error_bit_ext = true });
     const warn: u32 = @bitCast(debug_flag{ .warning_bit_ext = true });
     const info: u32 = @bitCast(debug_flag{ .info_bit_ext = true });
