@@ -160,7 +160,7 @@ fn create_logical_device(self: Device, ctx: *const Context) Error!T.LogicalDevic
     const vkd = try ctx.allocator.create(T.LogicalDeviceDispatch);
     errdefer ctx.allocator.destroy(vkd);
 
-    vkd.* = try T.LogicalDeviceDispatch.load(device, ctx.instance.wrapper.dispatch.vkGetDeviceProcAddr);
+    vkd.* = T.LogicalDeviceDispatch.load(device, ctx.instance.wrapper.dispatch.vkGetDeviceProcAddr.?);
     return T.LogicalDevice.init(device, vkd);
 }
 

@@ -32,25 +32,15 @@ pub const VulkanPlatform = struct {
     hwnd: ?windows.HWND,
 };
 
-/// To construct base, instance and device wrappers for vulkan-zig, you need to pass a list of 'apis' to it.
-pub const apis: []const vk.ApiInfo = &(.{
-    vk.features.version_1_0,
-    vk.features.version_1_1,
-    vk.features.version_1_2,
-    vk.extensions.khr_surface,
-    vk.extensions.khr_win_32_surface,
-    vk.extensions.khr_swapchain,
-} ++ debug_apis);
-
 /// Next, pass the `apis` to the wrappers to create dispatch tables.
-pub const BaseDispatch = vk.BaseWrapper(apis);
-pub const InstanceDispatch = vk.InstanceWrapper(apis);
-pub const LogicalDeviceDispatch = vk.DeviceWrapper(apis);
+pub const BaseDispatch = vk.BaseWrapper;
+pub const InstanceDispatch = vk.InstanceWrapper;
+pub const LogicalDeviceDispatch = vk.DeviceWrapper;
 
 // Also create some proxying wrappers, which also have the respective handles
-pub const Instance = vk.InstanceProxy(apis);
-pub const LogicalDevice = vk.DeviceProxy(apis);
-pub const CommandBufferProxy = vk.CommandBufferProxy(apis);
+pub const Instance = vk.InstanceProxy;
+pub const LogicalDevice = vk.DeviceProxy;
+pub const CommandBufferProxy = vk.CommandBufferProxy;
 
 pub const RenderPassState = enum(u8) {
     /// Ready to being

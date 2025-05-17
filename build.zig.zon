@@ -17,16 +17,16 @@
     // internet connectivity.
     .dependencies = .{
         .vulkan = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/dcd5388.tar.gz",
-            .hash = "vulkan-0.0.0-r7Ytxy5bAwASnqFlLMD4V42z3LolS8n7xv3RlbXhAhv0",
+            .url = "https://github.com/Snektron/vulkan-zig/archive/9b4090c.tar.gz",
+            .hash = "vulkan-0.0.0-r7Ytx2dUAwDhoUvuIqliqPUbyDZZi0bl_CQIwspUpHs_",
         },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
             .hash = "1220a7e73d72a0d56bc2a65f9d8999a7c019e42260a0744c408d1cded111bc205e10",
         },
         .shader_compiler = .{
-            .url = "https://github.com/Games-by-Mason/shader_compiler/archive/7f0c4c4.tar.gz",
-            .hash = "shader_compiler-0.0.0-bOVsalpvAAATNIRMouquuDpg55A8Sqhg22EnX9kQ6Cl7",
+            .url = "https://github.com/Games-by-Mason/shader_compiler/archive/b08673.tar.gz",
+            .hash = "shader_compiler-1.0.0-bOVsaiSKAAACAlVHRWTx4PNQRIolwkPQF_zGDRPiorrh",
         },
     },
     .paths = .{

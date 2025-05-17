@@ -95,7 +95,7 @@ pub fn init(
 
     // ========================================== SETUP BASICS =================================/
 
-    self.vkb = try T.BaseDispatch.load(self.vkGetInstanceProcAddr);
+    self.vkb = T.BaseDispatch.load(self.vkGetInstanceProcAddr);
     self.allocator = allocator;
 
     self.cached_framebuffer_extent = .{ .width = 0, .height = 0 };
@@ -731,11 +731,11 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
     const info: vk.ApplicationInfo = .{
         .s_type = .application_info,
         .p_application_name = application_name,
-        .application_version = vk.makeApiVersion(1, 0, 0, 0),
+        .application_version = @bitCast(vk.makeApiVersion(1, 0, 0, 0)),
         .p_engine_name = "Fracture Engine",
-        .engine_version = vk.makeApiVersion(1, 0, 0, 0),
+        .engine_version = @bitCast(vk.makeApiVersion(1, 0, 0, 0)),
         .p_next = null,
-        .api_version = vk.API_VERSION_1_3,
+        .api_version = @bitCast(vk.API_VERSION_1_3),
     };
 
     var create_info: vk.InstanceCreateInfo = .{
@@ -812,7 +812,7 @@ fn create_instance(self: *Context, application_name: [:0]const u8) Error!void {
     // This creates the isntance dispatch tables
     const vk_inst = try self.allocator.create(T.InstanceDispatch);
     errdefer self.allocator.destroy(vk_inst);
-    vk_inst.* = try T.InstanceDispatch.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr);
+    vk_inst.* = T.InstanceDispatch.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr.?);
     self.instance = T.Instance.init(instance, vk_inst);
 }
 

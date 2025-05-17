@@ -1,4 +1,5 @@
 //! WIP: Resource module
+//! TODO: remove this. We just should hve individual resource systems. THis seems like an unnecessary abstraction
 const T = @import("systems/types.zig");
 
 pub const ResourceHandle = T.ResourceHandle;

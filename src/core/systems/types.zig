@@ -1,3 +1,6 @@
+// TODO: No need or a universal resource handle. The handles should probably be different per resource system
+// The only thing we can do is make a 64bit handle and the system can use it how it wants
+// just have 0 be the null handle
 pub const ResourceHandle = enum(u32) { null_handle = std.math.maxInt(u32), _ };
 
 pub const Generation = enum(u32) {
