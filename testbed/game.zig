@@ -25,7 +25,7 @@ pub const GameState = struct {
     // HACK: For now this lives here
     render_data: core.renderer.RenderData,
     // HACK: Load random textures
-    textures: [3]core.renderer.texture_system.TextureHandle,
+    textures: [3]core.renderer.Texture,
 };
 
 pub fn init(engine: *core.Fracture) ?*anyopaque {
@@ -48,11 +48,21 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     state.render_data.material_id = engine.renderer.shader_acquire_resource();
     state.render_data.model = math.Transform.identity;
     state.render_data.textures[0] = .missing_texture;
-    state.textures = [_]core.renderer.texture_system.TextureHandle{.null_handle} ** 3;
+    state.textures = [_]core.renderer.Texture{.null_handle} ** 3;
 
-    const names = [_][]const u8{ "paving", "cobblestone", "paving2" };
+    const names = [_][]const u8{
+        "assets/textures/paving",
+        "assets/textures/cobblestone",
+        "assets/textures/paving2",
+    };
     for (names, 0..) |name, i| {
-        state.textures[i] = engine.renderer.textures.create(name, .default);
+        const create_info = core.renderer.TextureCreateInfo{
+            .name = name,
+            .auto_release = false,
+            .image_type = .rgba,
+            .img = null,
+        };
+        state.textures[i] = engine.renderer.textures.create(&create_info);
     }
     return state;
 }

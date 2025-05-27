@@ -61,7 +61,6 @@ pub const mem = @import("memory.zig");
 pub const Event = @import("event.zig");
 pub const Input = @import("input.zig");
 pub const math = @import("fr_math");
-pub const resource = @import("resource.zig");
 pub const image = @import("image.zig");
 pub const renderer = @import("renderer.zig");
 pub const @"comptime" = @import("comptime.zig");

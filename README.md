@@ -54,6 +54,15 @@ Making use of zig comptime allows many features to be implemented in interesting
 The following is the list of features that the engine has and is planned. More will be added as time goes on.
 
 ## Features TODO:
+- [ ] Virtual File System
+    - [ ] Create a specification for the virtual file system.
+    - [ ] Create a schema for how folders and files are stored and how to access them using a name.
+    - [ ] Create a virtual file system that can be used to load assets from a directory
+- [ ] Assets should be imported by a sepearate child process that is run by the engine in editor mode.
+    - The engine itself will only import assets using the engine formats. 
+    - The engine will watch files for changes while in debug mode and reload them if they change.
+    - The importer process will watch the assets directory for all changes and update the binary files in the appropriate place
+        - The location of the binary and which asset blob stores it is defined in the meta file assocaited with the asset
 - [ ] Unified asset management system once the types of resources are defined
 - [ ] Create a command buffer like structure that could accept commands to execute over many frames or defer execution to future frames
 - [ ] Fracture Structure Definiton

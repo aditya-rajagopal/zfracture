@@ -7,6 +7,7 @@ const T = @import("types.zig");
 const core = @import("fr_core");
 const math = core.math;
 const Textures = core.Renderer.TexturesType;
+const TextureData = core.renderer.texture_system.Data;
 
 const platform = @import("platform.zig");
 const Device = @import("device.zig");
@@ -444,18 +445,22 @@ pub fn create_texture(
     height: u32,
     channel_count: u8,
     pixels: []const u8,
-) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!Textures.Data {
+) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!TextureData {
     const image_size: vk.DeviceSize = width * height * channel_count;
     assert(image_size <= pixels.len);
 
-    var texture_data: Textures.Data = undefined;
+    var texture_data: TextureData = undefined;
 
     const internal_data = texture_data.as(T.vkTextureData);
 
     // Create staging buffer and load data into it.
     // TODO: Should the staging buffer be reused?
     const usage = vk.BufferUsageFlags{ .transfer_src_bit = true };
-    const props = vk.MemoryPropertyFlags{ .host_visible_bit = true, .host_coherent_bit = true };
+    const props = vk.MemoryPropertyFlags{
+        // NOTE: This means the memory is visable to the host and can be memory mapped
+        .host_visible_bit = true,
+        .host_coherent_bit = true,
+    };
     var staging_buffer = Buffer.create(self, image_size, usage, props, true) catch |err| {
         @branchHint(.cold);
         self.log.err("Unable to create staging buffer for texture creation: {s}", .{@errorName(err)});
@@ -491,20 +496,20 @@ pub fn create_texture(
     };
     errdefer internal_data.image.destroy(self);
 
-    var temp_buffer = CommandBuffer.allocate_and_begin_single_use(self, self.device.graphics_command_pool) catch |err| {
+    var transfer_cmd_buffer = CommandBuffer.allocate_and_begin_single_use(self, self.device.graphics_command_pool) catch |err| {
         @branchHint(.cold);
         self.log.err("Unable to allocate command buffer to copy image data for texture creation: {s}", .{@errorName(err)});
         return error.UnableToLoadTexture;
     };
 
     // Transition from whatever it is to recieve the data from our staging buffer
-    internal_data.image.transition_layout(.undefined, .transfer_dst_optimal, self, &temp_buffer);
+    internal_data.image.transition_layout(.undefined, .transfer_dst_optimal, self, &transfer_cmd_buffer);
 
-    internal_data.image.copy_from_buffer(staging_buffer.handle, &temp_buffer);
+    internal_data.image.copy_from_buffer(staging_buffer.handle, &transfer_cmd_buffer);
 
-    internal_data.image.transition_layout(.transfer_dst_optimal, .shader_read_only_optimal, self, &temp_buffer);
+    internal_data.image.transition_layout(.transfer_dst_optimal, .shader_read_only_optimal, self, &transfer_cmd_buffer);
 
-    temp_buffer.end_single_use(self, .null_handle, self.device.queues.graphics.handle) catch |err| {
+    transfer_cmd_buffer.end_single_use(self, .null_handle, self.device.queues.graphics.handle) catch |err| {
         @branchHint(.cold);
         self.log.err("Unable to upload texture data from staging buffer for texture creation: {s}", .{@errorName(err)});
         return error.UnableToLoadTexture;
@@ -534,7 +539,7 @@ pub fn create_texture(
     return texture_data;
 }
 
-pub fn destroy_texture(self: *Context, texture_data: *Textures.Data) void {
+pub fn destroy_texture(self: *const Context, texture_data: *TextureData) void {
     const internal_data: *T.vkTextureData = texture_data.as(T.vkTextureData);
     if (internal_data.image.handle != .null_handle) {
         self.device.handle.deviceWaitIdle() catch unreachable;

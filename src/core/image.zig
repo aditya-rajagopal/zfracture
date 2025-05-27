@@ -3,6 +3,13 @@ const png = @import("image/png.zig");
 pub const ImageFileType = T.ImageFileType;
 pub const Image = T.Image;
 
+pub const ImageType = enum(u8) {
+    g,
+    ga,
+    rgb,
+    rgba,
+};
+
 pub const LoadImageError = Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError;
 
 /// Load an image from a file.

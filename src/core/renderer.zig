@@ -1,7 +1,9 @@
 //! WIP: Renderer module
 pub const texture_system = @import("systems/texture.zig");
-// TODO: Move these to the right places
-pub const MAX_MATERIAL_INSTANCES = 64;
+pub const Texture = texture_system.Texture;
+pub const TextureCreateInfo = texture_system.TextureCreateInfo;
+
+pub const Generation = @import("systems/types.zig").Generation;
 
 pub const RendererLog = log.ScopedLogger(log.default_log, .RENDERER, log.default_level);
 
@@ -35,16 +37,12 @@ pub const MaterialInstanceID = enum(u32) { null_handle = std.math.maxInt(u32), _
 pub const RenderData = extern struct {
     material_id: MaterialInstanceID,
     model: math.Transform,
-    textures: [16]TextureHandle = [_]TextureHandle{.null_handle} ** 16,
-};
-
-pub const Packet = struct {
-    delta_time: f32,
+    textures: [1]Texture = [_]Texture{.null_handle} ** 1,
 };
 
 // TODO: Create an interface definition for backend
-
 pub fn Renderer(renderer_backend: type) type {
+    // TODO: Check function signatures as well
     comptime assert(@hasDecl(renderer_backend, "init"));
     comptime assert(@hasDecl(renderer_backend, "deinit"));
     comptime assert(@hasDecl(renderer_backend, "create_texture"));
@@ -70,7 +68,7 @@ pub fn Renderer(renderer_backend: type) type {
         /// Private instance of a renderer backend. Do not access this directly unless you know what you are doing
         _backend: renderer_backend,
 
-        pub const TexturesType = Textures(renderer_backend);
+        pub const TexturesType = texture_system.TextureSystem;
 
         pub const Error = error{ InitFailed, EndFrameFailed } || renderer_backend.Error;
 
@@ -127,6 +125,20 @@ pub fn Renderer(renderer_backend: type) type {
             self._backend.update_global_state(projection, view, view_position, ambient_colour, mode);
         }
 
+        pub inline fn create_texture(
+            self: *Self,
+            width: u32,
+            height: u32,
+            channel_count: u8,
+            pixels: []const u8,
+        ) (error{UnableToLoadTexture} || std.mem.Allocator.Error)!texture_system.Data {
+            return self._backend.create_texture(width, height, channel_count, pixels);
+        }
+
+        pub inline fn destroy_texture(self: *const Self, texture_data: *texture_system.Data) void {
+            self._backend.destroy_texture(texture_data);
+        }
+
         pub inline fn shader_acquire_resource(self: *Self) MaterialInstanceID {
             return self._backend.material_shader.acquire_resources(&self._backend);
         }
@@ -152,7 +164,6 @@ pub fn Renderer(renderer_backend: type) type {
 const math = @import("fr_math");
 const log = @import("log.zig");
 const Textures = texture_system.Textures;
-const TextureHandle = texture_system.TextureHandle;
 const img = @import("image.zig");
 const std = @import("std");
 const assert = std.debug.assert;

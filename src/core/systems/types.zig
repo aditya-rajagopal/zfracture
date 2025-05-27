@@ -1,34 +1,21 @@
-// TODO: No need or a universal resource handle. The handles should probably be different per resource system
-// The only thing we can do is make a 64bit handle and the system can use it how it wants
-// just have 0 be the null handle
-pub const ResourceHandle = enum(u32) { null_handle = std.math.maxInt(u32), _ };
+pub fn Generation(comptime T: type) type {
+    const info = @typeInfo(T);
+    comptime assert(info == .int);
+    comptime assert(info.int.signedness == .unsigned);
 
-pub const Generation = enum(u32) {
-    null_handle = max_u32,
-    _,
-    pub fn increment(self: Generation) Generation {
-        assert(@intFromEnum(self) != max_u32 - 1);
-        return @enumFromInt(@as(u32, @intFromEnum(self)) +% 1);
-    }
-};
+    const max_int = std.math.maxInt(T);
 
-//TODO: Make the generation part of the systems. This does not need to be in teh handle? Or keep it and add the UUID
-// The UUID can be the thing that is used in the hash map instead of the string
-pub const Handle = extern struct {
-    id: ResourceHandle = .null_handle,
-    generation: Generation = .null_handle,
-};
+    return enum(T) {
+        null_handle = max_int,
+        _,
 
-pub const ResourceTypes = enum(u4) {
-    binary,
-    image,
-    // texture,
-    // material,
-    // sound,
-    // static_mesh,
-    // dynamic_mesh,
-    // custom = 15,
-};
+        const Self = @This();
+        pub fn increment(self: Self) Self {
+            assert(@intFromEnum(self) != max_int - 1);
+            return @enumFromInt(@as(T, @intFromEnum(self)) + 1);
+        }
+    };
+}
 
 const max_u32 = @import("std").math.maxInt(u32);
 const std = @import("std");

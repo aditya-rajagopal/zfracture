@@ -439,18 +439,12 @@ pub fn update_object(self: *MaterialShader, ctx: *const Context, geometry: T.Ren
     var image_infos: [NUM_SAMPLERS]vk.DescriptorImageInfo = undefined;
 
     for (&image_infos, 0..) |*info, i| {
-        var texture = geometry.textures[i];
+        const texture = geometry.textures[i];
         const generation = &instance_state.descriptor_states[descriptor_index].generations[image_index];
         const id = &instance_state.descriptor_states[descriptor_index].ids[image_index];
         const external_handle = &instance_state.descriptor_states[descriptor_index].external_handles[image_index];
 
-        var handle = self.textures.get_resource(texture);
-        if (handle.id == .null_handle or handle.generation == .null_handle) {
-            // TODO: Handle other texture maps
-            ctx.log.debug("The texture is set to missing texture", .{});
-            texture = .missing_texture;
-            handle = self.textures.get_resource(texture);
-        }
+        const handle = self.textures.get_handle(texture);
 
         if (texture != .null_handle) {
             if (id.* != handle.id or generation.* != handle.generation) {

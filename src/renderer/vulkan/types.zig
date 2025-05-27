@@ -1,6 +1,8 @@
 const vk = @import("vulkan");
 const core = @import("fr_core");
-const TextureHandle = core.renderer.texture_system.TextureHandle;
+const texture_system = core.renderer.texture_system;
+const Texture = core.renderer.texture_system.Texture;
+const Generation = core.renderer.Generation;
 
 const Image = @import("image.zig");
 
@@ -12,18 +14,9 @@ pub const GlobalUO = T.GlobalUO;
 pub const MaterialUO = T.MaterialUO;
 pub const RenderData = T.RenderData;
 
-pub const Generation = core.resource.Generation;
-pub const ResourceHandle = core.resource.ResourceHandle;
-
-pub const MAX_MATERIAL_INSTANCES = T.MAX_MATERIAL_INSTANCES;
+pub const MAX_MATERIAL_INSTANCES = 64;
 
 pub const MAX_OBJECTS = 1024;
-
-pub const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
-const debug_apis = switch (builtin.mode) {
-    .Debug => .{vk.extensions.ext_debug_utils},
-    else => .{},
-};
 
 pub const VulkanPlatform = struct {
     /// Handel to the instance of the application
@@ -32,12 +25,10 @@ pub const VulkanPlatform = struct {
     hwnd: ?windows.HWND,
 };
 
-/// Next, pass the `apis` to the wrappers to create dispatch tables.
 pub const BaseDispatch = vk.BaseWrapper;
 pub const InstanceDispatch = vk.InstanceWrapper;
 pub const LogicalDeviceDispatch = vk.DeviceWrapper;
 
-// Also create some proxying wrappers, which also have the respective handles
 pub const Instance = vk.InstanceProxy;
 pub const LogicalDevice = vk.DeviceProxy;
 pub const CommandBufferProxy = vk.CommandBufferProxy;
@@ -81,9 +72,9 @@ pub const MAX_DESCRIPTOR_SETS = 3;
 
 pub const DescriptorState = extern struct {
     // One per frame
-    generations: [MAX_DESCRIPTOR_SETS]Generation,
-    ids: [MAX_DESCRIPTOR_SETS]ResourceHandle,
-    external_handles: [MAX_DESCRIPTOR_SETS]TextureHandle,
+    generations: [MAX_DESCRIPTOR_SETS]texture_system.TextureGeneration,
+    ids: [MAX_DESCRIPTOR_SETS]texture_system.Index,
+    external_handles: [MAX_DESCRIPTOR_SETS]Texture,
 };
 
 pub const MaterialShaderInstanceState = extern struct {
