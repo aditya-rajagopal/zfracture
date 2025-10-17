@@ -29,8 +29,8 @@ pub const GameState = struct {
 };
 
 pub fn init(engine: *core.Fracture) ?*anyopaque {
-    const foo_allocator: std.mem.Allocator = engine.memory.gpa.get_type_allocator(.game);
-    const state = foo_allocator.create(GameState) catch return null;
+    const game_allocator: std.mem.Allocator = engine.memory.gpa.get_type_allocator(.game);
+    const state = game_allocator.create(GameState) catch return null;
     state.delta_time = 1.0;
     state.log = GameLog.init(&engine.log_config);
 
@@ -50,6 +50,7 @@ pub fn init(engine: *core.Fracture) ?*anyopaque {
     state.render_data.textures[0] = .missing_texture;
     state.textures = [_]core.renderer.Texture{.null_handle} ** 3;
 
+    // TODO(adi): Implement idea for asset paths
     const names = [_][]const u8{
         "assets/textures/paving",
         "assets/textures/cobblestone",

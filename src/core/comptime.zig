@@ -137,6 +137,47 @@ test get_nested_field_ptr {
     try testing.expectEqual(value_ptr.*, 69);
 }
 
+/// Creates a buffer that can hold max_size elements of type u8.
+/// Additionally, the buffer will store the size of the buffer in the first 2 bytes.
+/// This is useful for storing strings in a buffer that can live on the stack if needed.
+pub fn StaticBuffer(comptime max_capacity: u16) type {
+    if (max_capacity > std.math.maxInt(u16)) {
+        @compileError("Max size of buffer must be less than or equal to " ++ @typeName(u16));
+    }
+    const size_type = if (max_capacity < 256) u8 else u16;
+    return struct {
+        pub const capacity = max_capacity;
+        const Self = @This();
+
+        /// The length of the buffer that contains the data.
+        len: size_type,
+        /// The buffer that contains the data.
+        buffer: [max_capacity]u8,
+
+        pub fn init(self: *Self, data: []const u8) void {
+            assert(data.len <= max_capacity);
+            self.len = @intCast(data.len);
+            std.mem.copy(u8, self.buffer[0..data.len], data);
+        }
+
+        pub fn clear(self: *Self) void {
+            self.len = 0;
+        }
+
+        pub fn to_slice(self: *const Self) []const u8 {
+            return self.buffer[0..self.len];
+        }
+
+        pub fn to_mut_slice(self: *Self) []u8 {
+            return self.buffer[0..self.len];
+        }
+
+        pub fn overwrite(self: *Self, data: []const u8) void {
+            self.init(data);
+        }
+    };
+}
+
 const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;

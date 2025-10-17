@@ -54,6 +54,10 @@ Making use of zig comptime allows many features to be implemented in interesting
 The following is the list of features that the engine has and is planned. More will be added as time goes on.
 
 ## Features TODO:
+- [ ] Fast logging library
+    - [ ] Create a logging library that is fast and has a small memory footprint
+    - [ ] In multithreaded environments the logging library should be able to perform well.
+        - https://www.youtube.com/watch?v=QeXrPVD5LJA
 - [ ] Virtual File System
     - [ ] Create a specification for the virtual file system.
     - [ ] Create a schema for how folders and files are stored and how to access them using a name.
