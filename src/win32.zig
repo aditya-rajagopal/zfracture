@@ -1,3 +1,179 @@
+pub const DIB_USAGE = enum(u32) {
+    RGB_COLORS = 0,
+    PAL_COLORS = 1,
+};
+pub const DIB_RGB_COLORS = DIB_USAGE.RGB_COLORS;
+pub const DIB_PAL_COLORS = DIB_USAGE.PAL_COLORS;
+
+pub const ROP_CODE = packed struct(u32) {
+    _0: u1 = 0,
+    _1: u1 = 0,
+    _2: u1 = 0,
+    _3: u1 = 0,
+    _4: u1 = 0,
+    _5: u1 = 0,
+    _6: u1 = 0,
+    _7: u1 = 0,
+    _8: u1 = 0,
+    _9: u1 = 0,
+    _10: u1 = 0,
+    _11: u1 = 0,
+    _12: u1 = 0,
+    _13: u1 = 0,
+    _14: u1 = 0,
+    _15: u1 = 0,
+    _16: u1 = 0,
+    _17: u1 = 0,
+    _18: u1 = 0,
+    _19: u1 = 0,
+    _20: u1 = 0,
+    _21: u1 = 0,
+    _22: u1 = 0,
+    _23: u1 = 0,
+    _24: u1 = 0,
+    _25: u1 = 0,
+    _26: u1 = 0,
+    _27: u1 = 0,
+    _28: u1 = 0,
+    _29: u1 = 0,
+    CAPTUREBLT: u1 = 0,
+    NOMIRRORBITMAP: u1 = 0,
+};
+pub const BLACKNESS = ROP_CODE{
+    ._1 = 1,
+    ._6 = 1,
+};
+pub const NOTSRCERASE = ROP_CODE{
+    ._1 = 1,
+    ._2 = 1,
+    ._5 = 1,
+    ._7 = 1,
+    ._16 = 1,
+    ._20 = 1,
+};
+pub const NOTSRCCOPY = ROP_CODE{
+    ._3 = 1,
+    ._16 = 1,
+    ._17 = 1,
+    ._20 = 1,
+    ._21 = 1,
+};
+pub const SRCERASE = ROP_CODE{
+    ._3 = 1,
+    ._5 = 1,
+    ._8 = 1,
+    ._9 = 1,
+    ._18 = 1,
+    ._22 = 1,
+};
+pub const DSTINVERT = ROP_CODE{
+    ._0 = 1,
+    ._3 = 1,
+    ._16 = 1,
+    ._18 = 1,
+    ._20 = 1,
+    ._22 = 1,
+};
+pub const PATINVERT = ROP_CODE{
+    ._0 = 1,
+    ._3 = 1,
+    ._6 = 1,
+    ._17 = 1,
+    ._19 = 1,
+    ._20 = 1,
+    ._22 = 1,
+};
+pub const SRCINVERT = ROP_CODE{
+    ._1 = 1,
+    ._2 = 1,
+    ._6 = 1,
+    ._17 = 1,
+    ._18 = 1,
+    ._21 = 1,
+    ._22 = 1,
+};
+pub const SRCAND = ROP_CODE{
+    ._1 = 1,
+    ._2 = 1,
+    ._6 = 1,
+    ._7 = 1,
+    ._19 = 1,
+    ._23 = 1,
+};
+pub const MERGEPAINT = ROP_CODE{
+    ._1 = 1,
+    ._2 = 1,
+    ._5 = 1,
+    ._9 = 1,
+    ._16 = 1,
+    ._17 = 1,
+    ._19 = 1,
+    ._20 = 1,
+    ._21 = 1,
+    ._23 = 1,
+};
+pub const MERGECOPY = ROP_CODE{
+    ._1 = 1,
+    ._3 = 1,
+    ._6 = 1,
+    ._7 = 1,
+    ._22 = 1,
+    ._23 = 1,
+};
+pub const SRCCOPY = ROP_CODE{
+    ._5 = 1,
+    ._18 = 1,
+    ._19 = 1,
+    ._22 = 1,
+    ._23 = 1,
+};
+pub const SRCPAINT = ROP_CODE{
+    ._1 = 1,
+    ._2 = 1,
+    ._7 = 1,
+    ._17 = 1,
+    ._18 = 1,
+    ._19 = 1,
+    ._21 = 1,
+    ._22 = 1,
+    ._23 = 1,
+};
+pub const PATCOPY = ROP_CODE{
+    ._0 = 1,
+    ._5 = 1,
+    ._20 = 1,
+    ._21 = 1,
+    ._22 = 1,
+    ._23 = 1,
+};
+pub const PATPAINT = ROP_CODE{
+    ._0 = 1,
+    ._3 = 1,
+    ._9 = 1,
+    ._11 = 1,
+    ._16 = 1,
+    ._17 = 1,
+    ._19 = 1,
+    ._20 = 1,
+    ._21 = 1,
+    ._22 = 1,
+    ._23 = 1,
+};
+pub const WHITENESS = ROP_CODE{
+    ._1 = 1,
+    ._5 = 1,
+    ._6 = 1,
+    ._16 = 1,
+    ._17 = 1,
+    ._18 = 1,
+    ._19 = 1,
+    ._20 = 1,
+    ._21 = 1,
+    ._22 = 1,
+    ._23 = 1,
+};
+pub const CAPTUREBLT = ROP_CODE{ .CAPTUREBLT = 1 };
+pub const NOMIRRORBITMAP = ROP_CODE{ .NOMIRRORBITMAP = 1 };
 pub const PEEK_MESSAGE_REMOVE_TYPE = packed struct(u32) {
     REMOVE: u1 = 0,
     NOYIELD: u1 = 0,
@@ -247,7 +423,7 @@ pub const WNDPROC = *const fn (
     param1: u32,
     param2: windows.WPARAM,
     param3: windows.LPARAM,
-) callconv(windows.WINAPI) windows.LRESULT;
+) callconv(.winapi) windows.LRESULT;
 
 pub const WNDCLASSA = extern struct {
     style: WNDCLASS_STYLES,
@@ -260,6 +436,19 @@ pub const WNDCLASSA = extern struct {
     hbrBackground: ?windows.HBRUSH,
     lpszMenuName: ?[*:0]const u8,
     lpszClassName: ?[*:0]const u8,
+
+    pub const zero = WNDCLASSA{
+        .style = .{},
+        .lpfnWndProc = null,
+        .cbClsExtra = 0,
+        .cbWndExtra = 0,
+        .hInstance = null,
+        .hIcon = null,
+        .hCursor = null,
+        .hbrBackground = null,
+        .lpszMenuName = null,
+        .lpszClassName = null,
+    };
 };
 
 pub const MSG = extern struct {
@@ -591,7 +780,7 @@ pub const MAPVK_VK_TO_VSC_EX = @as(u32, 4);
 
 pub extern "kernel32" fn GetModuleHandleA(
     lpModuleName: ?[*:0]const u8,
-) callconv(@import("std").os.windows.WINAPI) ?windows.HINSTANCE;
+) callconv(.winapi) ?windows.HINSTANCE;
 
 pub extern "user32" fn LoadIconA(
     proccess_handle: ?windows.HINSTANCE,
@@ -601,25 +790,25 @@ pub extern "user32" fn LoadIconA(
 pub extern "user32" fn LoadCursorA(
     hInstance: ?windows.HINSTANCE,
     lpCursorName: ?[*:0]const u8,
-) callconv(windows.WINAPI) ?windows.HCURSOR;
+) callconv(.winapi) ?windows.HCURSOR;
 
 pub extern "user32" fn RegisterClassA(
     lpWndClass: ?*const WNDCLASSA,
-) callconv(windows.WINAPI) u16;
+) callconv(.winapi) u16;
 
 pub extern "user32" fn MessageBoxA(
     hWnd: ?windows.HWND,
     lpText: ?[*:0]const u8,
     lpCaption: ?[*:0]const u8,
     uType: MESSAGEBOX_STYLE,
-) callconv(windows.WINAPI) MESSAGEBOX_RESULT;
+) callconv(.winapi) MESSAGEBOX_RESULT;
 
 pub extern "user32" fn AdjustWindowRectEx(
     lpRect: ?*windows.RECT,
     dwStyle: WINDOW_STYLE,
     bMenu: windows.BOOL,
     dwExStyle: WINDOW_EX_STYLE,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn CreateWindowExA(
     dwExStyle: WINDOW_EX_STYLE,
@@ -634,16 +823,16 @@ pub extern "user32" fn CreateWindowExA(
     hMenu: ?windows.HMENU,
     hInstance: ?windows.HINSTANCE,
     lpParam: ?*anyopaque,
-) callconv(windows.WINAPI) ?windows.HWND;
+) callconv(.winapi) ?windows.HWND;
 
 pub extern "user32" fn ShowWindow(
     hWnd: ?windows.HWND,
     nCmdShow: SHOW_WINDOW_CMD,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn DestroyWindow(
     hWnd: ?windows.HWND,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn PeekMessageA(
     lpMsg: ?*MSG,
@@ -651,55 +840,109 @@ pub extern "user32" fn PeekMessageA(
     wMsgFilterMin: u32,
     wMsgFilterMax: u32,
     wRemoveMsg: PEEK_MESSAGE_REMOVE_TYPE,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn TranslateMessage(
     lpMsg: ?*const MSG,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn DispatchMessageA(
     lpMsg: ?*const MSG,
-) callconv(windows.WINAPI) windows.LRESULT;
+) callconv(.winapi) windows.LRESULT;
 
 pub extern "user32" fn PostQuitMessage(
     nExitCode: i32,
-) callconv(windows.WINAPI) void;
+) callconv(.winapi) void;
 
 pub extern "user32" fn GetClientRect(
     hWnd: ?windows.HWND,
     lpRect: ?*windows.RECT,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn DefWindowProcA(
     hWnd: ?windows.HWND,
     Msg: u32,
     wParam: windows.WPARAM,
     lParam: windows.LPARAM,
-) callconv(windows.WINAPI) windows.LRESULT;
+) callconv(.winapi) windows.LRESULT;
 
 pub extern "kernel32" fn CopyFileA(
     lpExistingFileName: ?[*:0]const u8,
     lpNewFileName: ?[*:0]const u8,
     bFailIfExists: windows.BOOL,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "kernel32" fn LoadLibraryA(
     lpLibFileName: ?[*:0]const u8,
-) callconv(windows.WINAPI) ?windows.HINSTANCE;
+) callconv(.winapi) ?windows.HINSTANCE;
 
 pub extern "kernel32" fn GetProcAddress(
     hModule: ?windows.HINSTANCE,
     lpProcName: ?[*:0]const u8,
-) callconv(windows.WINAPI) ?windows.FARPROC;
+) callconv(.winapi) ?windows.FARPROC;
 
 pub extern "kernel32" fn FreeLibrary(
     hLibModule: ?windows.HINSTANCE,
-) callconv(windows.WINAPI) windows.BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn MapVirtualKeyA(
     uCode: u32,
     uMapType: u32,
-) callconv(windows.WINAPI) u32;
+) callconv(.winapi) u32;
+
+pub extern "user32" fn GetDC(
+    hWnd: ?windows.HWND,
+) callconv(.winapi) ?windows.HDC;
+
+pub extern "user32" fn ReleaseDC(
+    hWnd: ?windows.HWND,
+    hDC: ?windows.HDC,
+) callconv(.winapi) i32;
+
+pub const BI_RGB = @as(i32, 0);
+pub const BI_BITFIELDS = @as(i32, 3);
+
+pub const BITMAPINFOHEADER = extern struct {
+    biSize: u32,
+    biWidth: i32,
+    biHeight: i32,
+    biPlanes: u16,
+    biBitCount: u16,
+    biCompression: u32,
+    biSizeImage: u32,
+    biXPelsPerMeter: i32,
+    biYPelsPerMeter: i32,
+    biClrUsed: u32,
+    biClrImportant: u32,
+};
+
+pub const RGBQUAD = extern struct {
+    rgbBlue: u8,
+    rgbGreen: u8,
+    rgbRed: u8,
+    rgbReserved: u8,
+};
+
+pub const BITMAPINFO = extern struct {
+    bmiHeader: BITMAPINFOHEADER,
+    bmiColors: [1]RGBQUAD,
+};
+
+pub extern "gdi32" fn StretchDIBits(
+    hdc: windows.HDC,
+    dest_x: i32,
+    dest_y: i32,
+    dest_width: i32,
+    dest_height: i32,
+    src_x: i32,
+    src_y: i32,
+    src_width: i32,
+    src_height: i32,
+    lpBits: ?*const anyopaque,
+    lpBitsInfo: ?*const BITMAPINFO,
+    wUsage: u32,
+    dwRop: i32,
+) callconv(.winapi) i32;
 
 pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);
