@@ -217,6 +217,8 @@ pub const MouseButton = enum(u8) {
 // TODO(adi): Do we want to track the half transitions?
 // We could use that to determine if the button is pressed and released within the same frame.
 const InputState = struct {
+    // TODO(adi): Controller support
+    // TODO(adi): Support for multiple controllers/keyboards
     keys_ended_down: [NumKeys]u8,
     keys_half_transition_count: [NumKeys]u8,
     mouse_buttons_ended_down: [NumMouseButtons]u8,
@@ -278,29 +280,47 @@ const InputState = struct {
     }
 };
 
-const AppState = struct {
-    window: windows.HWND,
+pub const Win32PlatformState = struct {
     instance: windows.HINSTANCE,
+    window: windows.HWND,
     device_context: windows.HDC,
+};
+
+const AppState = struct {
+    platform_state: *anyopaque,
     class_name: [*:0]const u8,
     running: bool,
     back_buffer: FrameBuffer,
     input: InputState,
 
-    allocator: std.mem.Allocator,
+    permanent_allocator: std.mem.Allocator,
+    transient_allocator: std.mem.Allocator,
 };
 
-var app_state: AppState = undefined;
+pub const WindowCreateError = error{
+    FailedToCreateWindow,
+    FailedToGetModuleHandle,
+    FailedToRegisterWindowClass,
+    FailedToGetDeviceContext,
+} || std.mem.Allocator.Error;
 
-fn createWindow(allocator: std.mem.Allocator) !void {
-    app_state.class_name = "zfracture";
-    app_state.instance = win32.GetModuleHandleA(null) orelse return error.FailedToGetModuleHandle;
+fn createWindow(
+    allocator: std.mem.Allocator,
+    class_name: [*:0]const u8,
+    window_width: i32,
+    window_height: i32,
+) WindowCreateError!*anyopaque {
+    var platform_state: *Win32PlatformState = allocator.create(Win32PlatformState) catch |err| {
+        _ = win32.MessageBoxA(null, "Windows Creation Failed", "Error", win32.MB_ICONEXCLAMATION);
+        return err;
+    };
+    platform_state.instance = win32.GetModuleHandleA(null) orelse return error.FailedToGetModuleHandle;
 
     var window_class: win32.WNDCLASSA = .zero;
     window_class.style = .{ .OWNDC = 1 };
     window_class.lpfnWndProc = windowProc;
-    window_class.hInstance = app_state.instance;
-    window_class.lpszClassName = app_state.class_name;
+    window_class.hInstance = platform_state.instance;
+    window_class.lpszClassName = class_name;
 
     const result = win32.RegisterClassA(&window_class);
     if (result == 0) {
@@ -308,18 +328,10 @@ fn createWindow(allocator: std.mem.Allocator) !void {
         return error.FailedToRegisterWindowClass;
     }
 
-    app_state.back_buffer.width = 1280;
-    app_state.back_buffer.height = 720;
-
-    app_state.input = .init;
-
-    const bitmap_size: usize = @as(usize, app_state.back_buffer.width) * @as(usize, app_state.back_buffer.height) * FrameBuffer.bytes_per_pixel;
-    app_state.back_buffer.data = try allocator.alloc(u8, bitmap_size);
-
     var window_x: i32 = 0;
     var window_y: i32 = 0;
-    var window_width: i32 = app_state.back_buffer.width;
-    var window_height: i32 = app_state.back_buffer.height;
+    var window_final_width: i32 = window_width;
+    var window_final_height: i32 = window_height;
 
     var window_style: u32 = win32.WS_SYSMENU | win32.WS_CAPTION | win32.WS_OVERLAPPED;
     const window_style_ex: u32 = win32.WS_EX_APPWINDOW;
@@ -334,68 +346,60 @@ fn createWindow(allocator: std.mem.Allocator) !void {
     window_x += border_rect.left;
     window_y += border_rect.right;
 
-    window_width += border_rect.right - border_rect.left;
-    window_height += border_rect.bottom - border_rect.top;
+    window_final_width += border_rect.right - border_rect.left;
+    window_final_height += border_rect.bottom - border_rect.top;
 
-    app_state.window = win32.CreateWindowExA(
+    platform_state.window = win32.CreateWindowExA(
         @bitCast(window_style_ex),
-        app_state.class_name,
+        class_name,
         "Game",
         @bitCast(window_style),
         window_x,
         window_y,
-        window_width,
-        window_height,
+        window_final_width,
+        window_final_height,
         null,
         null,
-        app_state.instance,
+        platform_state.instance,
         null,
     ) orelse {
         _ = win32.MessageBoxA(null, "Windows Creation Failed", "Error", win32.MB_ICONEXCLAMATION);
         return error.FailedToCreateWindow;
     };
 
-    app_state.device_context = win32.GetDC(app_state.window) orelse return error.FailedToGetDeviceContext;
+    platform_state.device_context = win32.GetDC(platform_state.window) orelse return error.FailedToGetDeviceContext;
+
+    return platform_state;
 }
 
-fn destroyWindow() void {
-    _ = win32.DestroyWindow(app_state.window);
+fn destroyWindow(state: *anyopaque) void {
+    const platform_state: *Win32PlatformState = @ptrCast(@alignCast(state));
+    _ = win32.DestroyWindow(platform_state.window);
 }
 
-fn showWindow() void {
+fn showWindow(state: *anyopaque) void {
+    const platform_state: *Win32PlatformState = @ptrCast(@alignCast(state));
     const show_window_command_flags: u32 = win32.SW_SHOW;
-    _ = win32.ShowWindow(app_state.window, @bitCast(show_window_command_flags));
+    _ = win32.ShowWindow(platform_state.window, @bitCast(show_window_command_flags));
 }
 
-fn pumpMessages() void {
-    var msg: win32.MSG = undefined;
-    while (win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE) != 0) {
-        if (msg.message == win32.WM_QUIT) {
-            app_state.running = false;
-        }
-        _ = win32.TranslateMessage(&msg);
-        _ = win32.DispatchMessageA(&msg);
-    }
-}
-
-pub fn main() anyerror!void {
-    var debug_allocator = std.heap.DebugAllocator(.{}){};
-
-    const allocator = debug_allocator.allocator();
-    app_state.allocator = allocator;
-
-    try createWindow(allocator);
-
-    showWindow();
-
-    var offset_x: usize = 0;
-    var offset_y: usize = 0;
-
-    app_state.back_buffer.info = .{
+fn stretchBlitBits(
+    state: *const anyopaque,
+    dest_x: i32,
+    dest_y: i32,
+    dest_width: i32,
+    dest_height: i32,
+    src_x: i32,
+    src_y: i32,
+    src_width: i32,
+    src_height: i32,
+    frame: FrameBuffer,
+) void {
+    const info: win32.BITMAPINFO = .{
         .bmiHeader = .{
             .biSize = @sizeOf(win32.BITMAPINFOHEADER),
-            .biWidth = @intCast(app_state.back_buffer.width),
-            .biHeight = -@as(i32, @intCast(app_state.back_buffer.height)),
+            .biWidth = @intCast(frame.width),
+            .biHeight = -@as(i32, @intCast(frame.height)),
             .biPlanes = 1,
             .biBitCount = 32,
             .biCompression = win32.BI_RGB,
@@ -409,12 +413,217 @@ pub fn main() anyerror!void {
             .{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 },
         },
     };
+    // TODO(adi): We might want to blit to a zone that maintains the aspect ration of the rendered image.
+    const platform_state: *const Win32PlatformState = @ptrCast(@alignCast(state));
+    const blit_result = win32.StretchDIBits(
+        platform_state.device_context,
+        dest_x,
+        dest_y,
+        dest_width,
+        dest_height,
+        src_x,
+        src_y,
+        src_width,
+        src_height,
+        @ptrCast(frame.data.ptr),
+        &info,
+        @intFromEnum(win32.DIB_RGB_COLORS),
+        @bitCast(win32.SRCCOPY),
+    );
+
+    if (blit_result == 0) {
+        // TODO(adi): Log or return error. But we dont need to stop the program.
+    }
+}
+
+fn getWindowRect(state: *const anyopaque) struct { i32, i32 } {
+    const platform_state: *const Win32PlatformState = @ptrCast(@alignCast(state));
+    var rect: windows.RECT = undefined;
+    _ = win32.GetClientRect(platform_state.window, &rect);
+    return .{ rect.right - rect.left, rect.bottom - rect.top };
+}
+
+fn pumpMessages(app_state: *AppState) void {
+    var msg: win32.MSG = undefined;
+    while (win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE) != 0) {
+        const lparam: usize = @bitCast(msg.lParam);
+        const wparam: usize = @bitCast(msg.wParam);
+        switch (msg.message) {
+            win32.WM_QUIT => {
+                app_state.running = false;
+            },
+            win32.WM_MOUSEMOVE => {
+                app_state.input.mouse_position_current.x = @truncate(msg.lParam & 0xffff);
+                app_state.input.mouse_position_current.y = @truncate(msg.lParam >> 16);
+            },
+            win32.WM_MOUSEWHEEL => {
+                // TODO: Do we want to parse the rest of the message? l_param has the mouse position
+                // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousehwheel
+                const z_delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
+                // NOTE(adi): We are compressing the delta into just 1 direction.
+                const delta: i8 = if (z_delta < 0) -1 else 1;
+                // TODO(adi): We are only storing the last delta. Could we do better?
+                app_state.input.mouse_wheel_delta = delta;
+            },
+            win32.WM_LBUTTONDOWN => {
+                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.left)] = 1;
+            },
+            win32.WM_LBUTTONUP => {
+                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.left)] = 0;
+            },
+            win32.WM_RBUTTONDOWN => {
+                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.right)] = 1;
+            },
+            win32.WM_RBUTTONUP => {
+                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.right)] = 0;
+            },
+            win32.WM_MBUTTONDOWN => {
+                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.middle)] = 1;
+            },
+            win32.WM_MBUTTONUP => {
+                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.middle)] = 0;
+            },
+            win32.WM_XBUTTONDOWN => {
+                if (wparam & 0x100000000 != 0) {
+                    app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x1)] = 1;
+                } else {
+                    app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x2)] = 1;
+                }
+            },
+            win32.WM_XBUTTONUP => {
+                if (wparam & 0x100000000 != 0) {
+                    app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x1)] = 0;
+                } else {
+                    app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x2)] = 0;
+                }
+            },
+            win32.WM_KEYDOWN,
+            win32.WM_SYSKEYDOWN,
+            => {
+                var key: Key = @enumFromInt(wparam);
+
+                const is_extended: bool = lparam & 0x01000000 != 0;
+
+                switch (key) {
+                    .alt => key = if (is_extended) .ralt else .lalt,
+                    .control => key = if (is_extended) .rcontrol else .lcontrol,
+                    .shift => {
+                        // NOTE(adi): This scan code is defined by windows for left shift.
+                        // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
+                        const left_shift: u8 = 0x2A;
+                        const scan_code: u8 = @truncate(lparam >> 16);
+                        key = if (scan_code == left_shift) .lshift else .rshift;
+                    },
+                    else => {},
+                }
+
+                const key_code: u8 = @intFromEnum(key);
+
+                // NOTE(adi): For (sys)KeyDown messages this bit is set to 1 if the key was down before this message and 0 if it was up.
+                // this means for key down messages we need to check if this is 0 for transition count and 1 if it is sysUp message
+                const is_half_transition: u8 = @intFromBool(lparam & 0x40000000 == 0);
+                app_state.input.keys_half_transition_count[key_code] += is_half_transition;
+                app_state.input.keys_ended_down[key_code] = 1;
+            },
+            win32.WM_SIZE => {
+                // We have handled the resize event here.
+                // TODO(adi): Check if we get resize events when not parsing the message queue.
+            },
+            win32.WM_KEYUP,
+            win32.WM_SYSKEYUP,
+            => {
+                var key: Key = @enumFromInt(wparam);
+
+                const is_extended: bool = lparam & 0x01000000 != 0;
+
+                switch (key) {
+                    .alt => key = if (is_extended) .ralt else .lalt,
+                    .control => key = if (is_extended) .rcontrol else .lcontrol,
+                    .shift => {
+                        // NOTE(adi): This scan code is defined by windows for left shift.
+                        // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
+                        const left_shift: u8 = 0x2A;
+                        const scan_code: u8 = @truncate(lparam >> 16);
+                        key = if (scan_code == left_shift) .lshift else .rshift;
+                    },
+                    else => {},
+                }
+
+                const key_code: u8 = @intFromEnum(key);
+
+                // NOTE(adi): The 30th bit is always 1 for (sys)KeyUp messages. Since we only get up messages from the down state.
+                // this message always means a transition
+                app_state.input.keys_half_transition_count[key_code] += 1;
+                app_state.input.keys_ended_down[key_code] = 0;
+            },
+            else => {
+                _ = win32.TranslateMessage(&msg);
+                _ = win32.DispatchMessageA(&msg);
+            },
+        }
+    }
+}
+
+pub fn KB(value: comptime_int) comptime_int {
+    return value * 1024;
+}
+
+pub fn MB(value: comptime_int) comptime_int {
+    return value * 1024 * 1024;
+}
+
+pub fn GB(value: comptime_int) comptime_int {
+    return value * 1024 * 1024 * 1024;
+}
+
+pub fn main() anyerror!void {
+    // LEFTOFF(adi): Sound system implementation next
+    // TODO(adi): We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
+    // var debug_allocator = std.heap.DebugAllocator(.{}){};
+    // const allocator = debug_allocator.allocator();
+    const allocator = std.heap.page_allocator;
+
+    const permanenent_memory_size = MB(128);
+    const transient_memory_size = MB(128);
+    const game_memory: []u8 = try allocator.alloc(u8, permanenent_memory_size + transient_memory_size);
+    var permanent_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[0..permanenent_memory_size]);
+    var transient_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[permanenent_memory_size..]);
+    const permanent_allocator = permanent_fixed_buffer.allocator();
+    const transient_allocator = transient_fixed_buffer.allocator();
+
+    var app_state: *AppState = permanent_allocator.create(AppState) catch {
+        _ = win32.MessageBoxA(null, "Windows Creation Failed", "Error", win32.MB_ICONEXCLAMATION);
+        return error.FailedToCreateWindow;
+    };
+
+    app_state.permanent_allocator = permanent_allocator;
+    app_state.transient_allocator = transient_allocator;
+
+    app_state.input = .init;
+
+    const max_window_width = 4096;
+    const max_window_height = 2048;
+    const window_buffer_max_size = max_window_width * max_window_height * FrameBuffer.bytes_per_pixel;
+
+    app_state.back_buffer.width = 1280;
+    app_state.back_buffer.height = 720;
+    app_state.back_buffer.data = permanent_allocator.alloc(u8, window_buffer_max_size) catch |err| {
+        _ = win32.MessageBoxA(null, "Out of memory for back buffer allocation", "Error", win32.MB_ICONEXCLAMATION);
+        return err;
+    };
+
+    app_state.platform_state = try createWindow(permanent_allocator, "zfracture", app_state.back_buffer.width, app_state.back_buffer.height);
+
+    showWindow(app_state.platform_state);
+
+    var offset_x: usize = 0;
+    var offset_y: usize = 0;
 
     app_state.running = true;
     while (app_state.running) {
         app_state.input.update();
 
-        pumpMessages();
+        pumpMessages(app_state);
 
         {
             if (app_state.input.isKeyDown(.escape)) {
@@ -458,15 +667,10 @@ pub fn main() anyerror!void {
             }
         }
 
-        var rect: windows.RECT = undefined;
-        _ = win32.GetClientRect(app_state.window, &rect);
+        const window_width, const window_height = getWindowRect(app_state.platform_state);
 
-        const window_width = rect.right - rect.left;
-        const window_height = rect.bottom - rect.top;
-
-        // TODO(adi): We might want to blit to a zone that maintains the aspect ration of the rendered image.
-        const blit_result = win32.StretchDIBits(
-            app_state.device_context,
+        stretchBlitBits(
+            app_state.platform_state,
             0,
             0,
             window_width,
@@ -475,24 +679,19 @@ pub fn main() anyerror!void {
             0,
             app_state.back_buffer.width,
             app_state.back_buffer.height,
-            @ptrCast(app_state.back_buffer.data.ptr),
-            &app_state.back_buffer.info,
-            @intFromEnum(win32.DIB_RGB_COLORS),
-            @bitCast(win32.SRCCOPY),
+            app_state.back_buffer,
         );
 
-        if (blit_result == 0) {
-            // TODO(adi): Log error. But we dont need to stop the program.
-        }
+        transient_fixed_buffer.reset();
     }
 
     // Destroy the window
-    destroyWindow();
+    destroyWindow(app_state.platform_state);
 
-    allocator.free(app_state.back_buffer.data);
+    // allocator.free(game_memory);
 
-    const alloc_result = debug_allocator.deinit();
-    if (alloc_result != .ok) return error.MemoryLeak;
+    // const alloc_result = debug_allocator.deinit();
+    // if (alloc_result != .ok) return error.MemoryLeak;
 }
 
 fn windowProc(
@@ -511,128 +710,25 @@ fn windowProc(
         win32.WM_CLOSE => {
             _ = win32.PostQuitMessage(0);
         },
-        win32.WM_SIZE => {
-            // TODO(adi): We might not want to resize the back buffer every time the window is resized.
-            // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits to scale it.
-            // We could figure out a way to keep the aspect ration the same, but that might be tricky.
-            var rect: windows.RECT = undefined;
-            _ = win32.GetClientRect(app_state.window, &rect);
-            app_state.back_buffer.width = @intCast(rect.right - rect.left);
-            app_state.back_buffer.height = @intCast(rect.bottom - rect.top);
-
-            app_state.back_buffer.info.bmiHeader.biWidth = @intCast(app_state.back_buffer.width);
-            app_state.back_buffer.info.bmiHeader.biHeight = -@as(i32, @intCast(app_state.back_buffer.height));
-
-            const bytes_per_pixel: usize = 4;
-            const new_bitmap_size: usize = @as(usize, app_state.back_buffer.width) * @as(usize, app_state.back_buffer.height) * bytes_per_pixel;
-            app_state.back_buffer.data = app_state.allocator.realloc(app_state.back_buffer.data, new_bitmap_size) catch unreachable;
-        },
+        // win32.WM_SIZE => {
+        // TODO(adi): We might not want to resize the back buffer every time the window is resized.
+        // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits to scale it.
+        // We could figure out a way to keep the aspect ration the same, but that might be tricky.
+        // var rect: windows.RECT = undefined;
+        // _ = win32.GetClientRect(app_state.window, &rect);
+        // app_state.back_buffer.width = @intCast(rect.right - rect.left);
+        // app_state.back_buffer.height = @intCast(rect.bottom - rect.top);
+        //
+        // app_state.back_buffer.info.bmiHeader.biWidth = @intCast(app_state.back_buffer.width);
+        // app_state.back_buffer.info.bmiHeader.biHeight = -@as(i32, @intCast(app_state.back_buffer.height));
+        //
+        // const bytes_per_pixel: usize = 4;
+        // const new_bitmap_size: usize = @as(usize, app_state.back_buffer.width) * @as(usize, app_state.back_buffer.height) * bytes_per_pixel;
+        // app_state.back_buffer.data = app_state.allocator.realloc(app_state.back_buffer.data, new_bitmap_size) catch unreachable;
+        // },
         // TODO(adi): When we lose focus we should reset the input state so that the game does not react to input in anyway
         // win32.WM_KILLFOCUS => {},
         // win32.WM_SETFOCUS => {},
-        win32.WM_MOUSEMOVE => {
-            app_state.input.mouse_position_current.x = @truncate(l_param & 0xffff);
-            app_state.input.mouse_position_current.y = @truncate(l_param >> 16);
-        },
-        win32.WM_MOUSEWHEEL => {
-            // TODO: Do we want to parse the rest of the message? l_param has the mouse position
-            // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousehwheel
-            const z_delta: i16 = @bitCast(@as(u16, @truncate(w_param >> 16)));
-            // NOTE(adi): We are compressing the delta into just 1 direction.
-            const delta: i8 = if (z_delta < 0) -1 else 1;
-            // TODO(adi): We are only storing the last delta. Could we do better?
-            app_state.input.mouse_wheel_delta = delta;
-        },
-        win32.WM_LBUTTONDOWN => {
-            app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.left)] = 1;
-        },
-        win32.WM_LBUTTONUP => {
-            app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.left)] = 0;
-        },
-        win32.WM_RBUTTONDOWN => {
-            app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.right)] = 1;
-        },
-        win32.WM_RBUTTONUP => {
-            app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.right)] = 0;
-        },
-        win32.WM_MBUTTONDOWN => {
-            app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.middle)] = 1;
-        },
-        win32.WM_MBUTTONUP => {
-            app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.middle)] = 0;
-        },
-        win32.WM_XBUTTONDOWN => {
-            if (w_param & 0x100000000 != 0) {
-                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x1)] = 1;
-            } else {
-                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x2)] = 1;
-            }
-        },
-        win32.WM_XBUTTONUP => {
-            if (w_param & 0x100000000 != 0) {
-                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x1)] = 0;
-            } else {
-                app_state.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x2)] = 0;
-            }
-        },
-        win32.WM_KEYDOWN,
-        win32.WM_SYSKEYDOWN,
-        => {
-            var key: Key = @enumFromInt(w_param);
-
-            const lparam: usize = @bitCast(l_param);
-            const is_extended: bool = lparam & 0x01000000 != 0;
-
-            switch (key) {
-                .alt => key = if (is_extended) .ralt else .lalt,
-                .control => key = if (is_extended) .rcontrol else .lcontrol,
-                .shift => {
-                    // NOTE(adi): This scan code is defined by windows for left shift.
-                    // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
-                    const left_shift: u8 = 0x2A;
-                    const scan_code: u8 = @truncate(lparam >> 16);
-                    key = if (scan_code == left_shift) .lshift else .rshift;
-                },
-                else => {},
-            }
-
-            const key_code: u8 = @intFromEnum(key);
-
-            // NOTE(adi): For (sys)KeyDown messages this bit is set to 1 if the key was down before this message and 0 if it was up.
-            // this means for key down messages we need to check if this is 0 for transition count and 1 if it is sysUp message
-            const is_half_transition: u8 = @intFromBool(lparam & 0x40000000 == 0);
-            app_state.input.keys_half_transition_count[key_code] += is_half_transition;
-            app_state.input.keys_ended_down[key_code] = 1;
-        },
-        win32.WM_KEYUP,
-        win32.WM_SYSKEYUP,
-        => {
-            var key: Key = @enumFromInt(w_param);
-
-            const lparam: usize = @bitCast(l_param);
-            const is_extended: bool = lparam & 0x01000000 != 0;
-
-            switch (key) {
-                .alt => key = if (is_extended) .ralt else .lalt,
-                .control => key = if (is_extended) .rcontrol else .lcontrol,
-                .shift => {
-                    // NOTE(adi): This scan code is defined by windows for left shift.
-                    // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
-                    const left_shift: u8 = 0x2A;
-                    const scan_code: u8 = @truncate(lparam >> 16);
-                    key = if (scan_code == left_shift) .lshift else .rshift;
-                },
-                else => {},
-            }
-
-            const key_code: u8 = @intFromEnum(key);
-
-            // NOTE(adi): The 30th bit is always 1 for (sys)KeyUp messages. Since we only get up messages from the down state.
-            // this message always means a transition
-            app_state.input.keys_half_transition_count[key_code] += 1;
-            app_state.input.keys_ended_down[key_code] = 0;
-        },
-
         else => {
             result = win32.DefWindowProcA(window, message, w_param, l_param);
         },
