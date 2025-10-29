@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) !void {
 
     // ================================== MODULES ==================================/
     const entrypoint = b.createModule(.{
-        .root_source_file = b.path("src/entrypoint.zig"),
+        .root_source_file = b.path("src/entrypoint_win32.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
