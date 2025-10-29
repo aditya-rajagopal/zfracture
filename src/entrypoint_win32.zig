@@ -47,7 +47,7 @@ pub const AppState = struct {
     engine: EngineState,
 };
 
-pub fn main() anyerror!void {
+pub fn main() void {
     // Platform specific state
     var platform_state: Win32PlatformState = undefined;
     var running: bool = false;
@@ -69,7 +69,10 @@ pub fn main() anyerror!void {
     const total_game_memory_size = permanenent_memory_size + transient_memory_size;
 
     // TODO(adi): We may need more arenas depending on how the game goes.
-    const game_memory: []u8 = try allocator.alloc(u8, total_game_memory_size);
+    const game_memory: []u8 = allocator.alloc(u8, total_game_memory_size) catch {
+        _ = win32.MessageBoxA(null, "Failed to allocate game memory", "Error", win32.MB_ICONEXCLAMATION);
+        return;
+    };
 
     var permanent_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[0..permanenent_memory_size]);
     const permanent_allocator = permanent_fixed_buffer.allocator();
@@ -79,7 +82,7 @@ pub fn main() anyerror!void {
 
     const app_state: *AppState = permanent_allocator.create(AppState) catch {
         _ = win32.MessageBoxA(null, "Failed to allocate engine state", "Error", win32.MB_ICONEXCLAMATION);
-        return error.FailedToAllocateEngineState;
+        return;
     };
 
     // TODO(adi): Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
@@ -102,9 +105,9 @@ pub fn main() anyerror!void {
 
     back_buffer.width = 1280;
     back_buffer.height = 720;
-    back_buffer.data = permanent_allocator.alloc(u8, window_buffer_max_size) catch |err| {
+    back_buffer.data = permanent_allocator.alloc(u8, window_buffer_max_size) catch {
         _ = win32.MessageBoxA(null, "Out of memory for back buffer allocation", "Error", win32.MB_ICONEXCLAMATION);
-        return err;
+        return;
     };
 
     buffer_info = .{
@@ -125,7 +128,7 @@ pub fn main() anyerror!void {
             .{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 },
         },
     };
-    platform_state = try createWindow("zfracture", back_buffer.width, back_buffer.height);
+    platform_state = createWindow("zfracture", back_buffer.width, back_buffer.height) catch return;
 
     showWindow(platform_state.window);
 
