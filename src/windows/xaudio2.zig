@@ -7,28 +7,6 @@ const HRESULT = win.HRESULT;
 const BOOL = win.BOOL;
 const HINSTANCE = win.HINSTANCE;
 
-pub const WAVE_FORMAT_PCM = @as(u32, 1);
-
-const WAVEFORMATEX = extern struct {
-    wFormatTag: win.WORD,
-    nChannels: win.WORD,
-    nSamplesPerSec: win.DWORD,
-    nAvgBytesPerSec: win.DWORD,
-    nBlockAlign: win.WORD,
-    wBitsPerSample: win.WORD,
-    cbSize: win.WORD,
-
-    pub const default: WAVEFORMATEX = .{
-        .wFormatTag = WAVE_FORMAT_PCM,
-        .nChannels = 2,
-        .nSamplesPerSec = 44100,
-        .nAvgBytesPerSec = 4 * 44100, // nSamplesPerSec * nBlockAlign
-        .nBlockAlign = 4, // num_channels * bits_per_sample / 8
-        .wBitsPerSample = 16,
-        .cbSize = 0,
-    };
-};
-
 pub const PlaybackParams = struct {
     play_begin: u32 = 0,
     play_end: u32 = 0,
@@ -37,13 +15,17 @@ pub const PlaybackParams = struct {
     loop_count: u32 = 0,
 };
 
-// TODO(adi): This is placeholder
-
 dll: HINSTANCE = undefined,
 x_audio2: *IXAudio2 = undefined,
 mastering_voice: *IXAudio2MasteringVoice = undefined,
-voice: *IXAudio2SourceVoice = undefined,
-callback: *StopOnEndCallback = undefined,
+voice: XAudioVoice = .{},
+callback: StopOnEndCallback = undefined,
+
+pub const XAudioVoice = struct {
+    source: *IXAudio2SourceVoice = undefined,
+    playing: bool = false,
+    buffer: ?[]const u8 = null,
+};
 
 const Self = @This();
 
@@ -75,18 +57,15 @@ const StopOnEndCallback = extern struct {
     };
 
     fn _onBufferEnd(_: *IXAudio2VoiceCallback, context: ?*anyopaque) callconv(.winapi) void {
-        const voice: *IXAudio2SourceVoice = @ptrCast(@alignCast(context));
-        _ = voice.Stop(0, XAUDIO2_COMMIT_NOW);
-        // const self_ptr: *XAudioVoice = @ptrCast(@alignCast(self));
-        // _ = self_ptr.voice.Stop(0, XAUDIO2_COMMIT_NOW);
-        // self_ptr.playing = 0;
+        const voice: *XAudioVoice = @ptrCast(@alignCast(context));
+        _ = voice.source.Stop(0, XAUDIO2_COMMIT_NOW);
+        _ = voice.source.FlushSourceBuffers();
+        voice.playing = false;
     }
 
-    pub fn _onBufferStart(self: *IXAudio2VoiceCallback, pBufferContext: ?*anyopaque) callconv(.winapi) void {
-        _ = self;
-        _ = pBufferContext;
-        // const self_ptr: *XAudioVoice = @ptrCast(@alignCast(self));
-        // self_ptr.playing = 1;
+    pub fn _onBufferStart(_: *IXAudio2VoiceCallback, context: ?*anyopaque) callconv(.winapi) void {
+        const voice: *XAudioVoice = @ptrCast(@alignCast(context));
+        voice.playing = true;
     }
 
     fn _onStreamEnd(_: *IXAudio2VoiceCallback) callconv(.winapi) void {}
@@ -96,9 +75,8 @@ const StopOnEndCallback = extern struct {
     fn _onVoiceError(_: *IXAudio2VoiceCallback, _: ?*anyopaque, _: HRESULT) callconv(.winapi) void {}
 };
 
-pub fn init() Error!Self {
+pub fn init(audio_engine: *Self) Error!void {
     // NOTE(adi): We want to load the XAudio2 DLL dynamically
-    var audio_engine: Self = undefined;
 
     var result = win32.CoInitializeEx(null, win32.COINIT_MULTITHREADED);
     errdefer win32.CoUninitialize();
@@ -137,8 +115,8 @@ pub fn init() Error!Self {
     // TODO(adi): idk if this needs to be configurable
     const wave_format: WAVEFORMATEX = .default;
 
-    audio_engine.callback = std.heap.page_allocator.create(StopOnEndCallback) catch unreachable;
-    audio_engine.callback.* = .{};
+    // audio_engine.callback = std.heap.page_allocator.create(StopOnEndCallback) catch unreachable;
+    audio_engine.callback = .{};
 
     var voice: ?*IXAudio2SourceVoice = undefined;
     result = audio_engine.x_audio2.CreateSourceVoice(
@@ -146,7 +124,7 @@ pub fn init() Error!Self {
         &wave_format,
         0,
         XAUDIO2_DEFAULT_FREQ_RATIO,
-        @ptrCast(@alignCast(audio_engine.callback)),
+        @ptrCast(@alignCast(&audio_engine.callback)),
         null,
         null,
     );
@@ -155,17 +133,16 @@ pub fn init() Error!Self {
         return Error.FailedToCreateVoice;
     }
 
-    audio_engine.voice = voice orelse return Error.FailedToCreateVoice;
-    result = audio_engine.voice.SetVolume(1.0, XAUDIO2_COMMIT_NOW);
+    audio_engine.voice = .{};
+    audio_engine.voice.source = voice orelse return Error.FailedToCreateVoice;
+    result = audio_engine.voice.source.SetVolume(1.0, XAUDIO2_COMMIT_NOW);
 
     if (result != win32.S_OK) {
         std.log.info("Failed to set volume: {d}", .{result});
     }
-
-    return audio_engine;
 }
 
-pub fn deinit(self: Self) void {
+pub fn deinit(self: *Self) void {
     self.x_audio2.Relese();
     _ = win32.FreeLibrary(self.dll);
     win32.CoUninitialize();
@@ -173,6 +150,11 @@ pub fn deinit(self: Self) void {
 
 pub fn playSound(self: *Self, data: []const u8, params: PlaybackParams) void {
     _ = params;
+    if (self.voice.playing) {
+        _ = self.voice.source.Stop(0, XAUDIO2_COMMIT_NOW);
+        _ = self.voice.source.FlushSourceBuffers();
+        self.voice.playing = false;
+    }
     const x_audio_buffer = XAUDIO2_BUFFER{
         .Flags = XAUDIO2_END_OF_STREAM,
         .AudioBytes = @truncate(data.len),
@@ -182,36 +164,18 @@ pub fn playSound(self: *Self, data: []const u8, params: PlaybackParams) void {
         .LoopBegin = 0,
         .LoopLength = 0,
         .LoopCount = 0,
-        .pContext = self.voice,
+        .pContext = @ptrCast(&self.voice),
     };
-    var result = self.voice.SubmitSourceBuffer(&x_audio_buffer, null);
+    var result = self.voice.source.SubmitSourceBuffer(&x_audio_buffer, null);
     if (result != win32.S_OK) {
         std.log.info("Failed to submit source buffer: {d}", .{result});
         return;
     }
-    result = self.voice.Start(0, XAUDIO2_COMMIT_NOW);
+    result = self.voice.source.Start(0, XAUDIO2_COMMIT_NOW);
     if (result != win32.S_OK) {
         std.log.info("Failed to start source buffer: {d}", .{result});
         return;
     }
-
-    // var perf_data: XAUDIO2_PERFORMANCE_DATA = undefined;
-    // self.x_audio2.GetPerformanceData(&perf_data);
-    // std.log.info("---", .{});
-    // std.log.info("perf_data.AudioCyclesSinceLastQuery: {d}", .{perf_data.AudioCyclesSinceLastQuery});
-    // std.log.info("perf_data.TotalCyclesSinceLastQuery: {d}", .{perf_data.TotalCyclesSinceLastQuery});
-    // std.log.info("perf_data.MinimumCyclesPerQuantum: {d}", .{perf_data.MinimumCyclesPerQuantum});
-    // std.log.info("perf_data.MaximumCyclesPerQuantum: {d}", .{perf_data.MaximumCyclesPerQuantum});
-    // std.log.info("perf_data.MemoryUsageInBytes: {d}", .{perf_data.MemoryUsageInBytes});
-    // std.log.info("perf_data.CurrentLatencyInSamples: {d}", .{perf_data.CurrentLatencyInSamples});
-    // std.log.info("perf_data.GlitchesSinceEngineStarted: {d}", .{perf_data.GlitchesSinceEngineStarted});
-    // std.log.info("perf_data.ActiveSourceVoiceCount: {d}", .{perf_data.ActiveSourceVoiceCount});
-    // std.log.info("perf_data.ActiveSubmixVoiceCount: {d}", .{perf_data.ActiveSubmixVoiceCount});
-    // std.log.info("perf_data.ActiveResamplerCount: {d}", .{perf_data.ActiveResamplerCount});
-    // std.log.info("perf_data.ActiveMatrixMixCount: {d}", .{perf_data.ActiveMatrixMixCount});
-    // std.log.info("perf_data.ActiveXmaSourceVoices: {d}", .{perf_data.ActiveXmaSourceVoices});
-    // std.log.info("perf_data.ActiveXmaStreams: {d}", .{perf_data.ActiveXmaStreams});
-    // std.log.info("---", .{});
 }
 
 pub fn stopSound(self: Self) void {
@@ -223,6 +187,29 @@ pub fn stopSound(self: Self) void {
 // ------------------------------------------------------------------------------------------------------------
 
 // TODO(adi): Do we need XAPO? https://github.com/marlersoft/zigwin32/blob/main/win32/media/audio/xaudio2.zig
+//
+
+pub const WAVE_FORMAT_PCM = @as(u32, 1);
+
+const WAVEFORMATEX = extern struct {
+    wFormatTag: win.WORD,
+    nChannels: win.WORD,
+    nSamplesPerSec: win.DWORD,
+    nAvgBytesPerSec: win.DWORD,
+    nBlockAlign: win.WORD,
+    wBitsPerSample: win.WORD,
+    cbSize: win.WORD,
+
+    pub const default: WAVEFORMATEX = .{
+        .wFormatTag = WAVE_FORMAT_PCM,
+        .nChannels = 2,
+        .nSamplesPerSec = 44100,
+        .nAvgBytesPerSec = 4 * 44100, // nSamplesPerSec * nBlockAlign
+        .nBlockAlign = 4, // num_channels * bits_per_sample / 8
+        .wBitsPerSample = 16,
+        .cbSize = 0,
+    };
+};
 
 pub const FLAGS = packed struct(c_uint) {
     DEBUG_ENGINE: bool = false,

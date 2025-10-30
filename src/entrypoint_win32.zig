@@ -114,6 +114,7 @@ pub const c_note = blk: {
     break :blk data;
 };
 
+// LEFTOFF(adi): Implement WAV file loading and decoding. Complete audio system
 pub fn main() void {
     // Platform specific state
     var platform_state: Win32PlatformState = undefined;
@@ -123,7 +124,6 @@ pub fn main() void {
     var back_buffer: FrameBuffer = undefined;
     var buffer_info: win32.BITMAPINFO = undefined;
 
-    // LEFTOFF(adi): Sound system implementation next
     // TODO(adi): We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
     // var debug_allocator = std.heap.DebugAllocator(.{}){};
     // const allocator = debug_allocator.allocator();
@@ -155,7 +155,7 @@ pub fn main() void {
     // TODO(adi): Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
     // making a new type AppState and then allocating it.
     const engine_state: *EngineState = &app_state.engine;
-    engine_state.sound = SoundSystem.init() catch |err| {
+    engine_state.sound.init() catch |err| {
         var buffer: [1024]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buffer, "Failed to initialize sound system: {s}", .{@errorName(err)}) catch unreachable;
         _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);

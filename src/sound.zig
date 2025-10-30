@@ -11,9 +11,8 @@ pool: SoundPool,
 
 const Self = @This();
 
-pub fn init() AudioEngine.Error!Self {
-    const ctx = try AudioEngine.init();
-    return Self{ .ctx = ctx, .pool = undefined };
+pub fn init(self: *Self) AudioEngine.Error!void {
+    try self.ctx.init();
 }
 
 pub fn deinit(self: *Self) void {
