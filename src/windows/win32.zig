@@ -1,3 +1,8 @@
+const std = @import("std");
+const testing = std.testing;
+const windows = std.os.windows;
+const Guid = std.os.windows.GUID;
+
 pub const DIB_USAGE = enum(u32) {
     RGB_COLORS = 0,
     PAL_COLORS = 1,
@@ -944,6 +949,46 @@ pub extern "gdi32" fn StretchDIBits(
     dwRop: i32,
 ) callconv(.winapi) i32;
 
+// OLE32
+
+pub const COINIT_APARTMENTTHREADED: windows.DWORD = 0x2;
+pub const COINIT_MULTITHREADED: windows.DWORD = 0x0;
+pub const COINIT_DISABLE_OLE1DDE: windows.DWORD = 0x4;
+pub const COINIT_SPEED_OVER_MEMORY: windows.DWORD = 0x8;
+
+pub const S_OK: windows.HRESULT = std.os.windows.S_OK;
+pub const S_FALSE: windows.HRESULT = std.os.windows.S_FALSE;
+
+pub extern "ole32" fn CoInitializeEx(pvReserved: ?windows.LPVOID, dwCoInit: windows.DWORD) callconv(.winapi) windows.HRESULT;
+pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
+
+pub const IID_IUnknown = Guid.parse("00000000-0000-0000-c000-000000000046");
+pub const IUnknown = extern union {
+    pub const VTable = extern struct {
+        QueryInterface: *const fn (
+            self: *const IUnknown,
+            riid: *const Guid,
+            ppvObject: **anyopaque,
+        ) callconv(.winapi) windows.HRESULT,
+        AddRef: *const fn (
+            self: *const IUnknown,
+        ) callconv(.winapi) u32,
+        Release: *const fn (
+            self: *const IUnknown,
+        ) callconv(.winapi) u32,
+    };
+    vtable: *const VTable,
+    pub inline fn QueryInterface(self: *const IUnknown, riid: *const Guid, ppvObject: **anyopaque) windows.HRESULT {
+        return self.vtable.QueryInterface(self, riid, ppvObject);
+    }
+    pub inline fn AddRef(self: *const IUnknown) u32 {
+        return self.vtable.AddRef(self);
+    }
+    pub inline fn Release(self: *const IUnknown) u32 {
+        return self.vtable.Release(self);
+    }
+};
+
 pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);
 }
@@ -992,7 +1037,3 @@ test "typedConst" {
     try testing.expectEqual(@as(u32, 0xffffffff), typedConst(u32, 0xffffffff));
     try testing.expectEqual(@as(i32, @bitCast(@as(u32, 0x80000000))), typedConst(i32, 0x80000000));
 }
-
-const std = @import("std");
-const testing = std.testing;
-const windows = std.os.windows;

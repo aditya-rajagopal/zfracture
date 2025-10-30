@@ -7,6 +7,7 @@ pub const MouseButton = engine.MouseButton;
 pub const Key = engine.Key;
 
 pub const win32 = @import("windows/win32.zig");
+pub const SoundSystem = @import("sound.zig");
 
 // TODO(adi): Move this to some common place
 pub fn KB(value: comptime_int) comptime_int {
@@ -45,6 +46,72 @@ const WindowCreateError = error{
 
 pub const AppState = struct {
     engine: EngineState,
+};
+
+pub const a_note = blk: {
+    @setEvalBranchQuota(500000);
+    const sample_rate: u32 = 44100;
+    const num_channels: u32 = 2;
+    // const bits_per_sample: u32 = 16;
+    const seconds_of_data: f32 = 0.2;
+    const frequency: f32 = 440.0;
+    const num_samples: u32 = sample_rate * seconds_of_data;
+    var data = std.mem.zeroes([num_samples * num_channels]i16);
+    var i: u32 = 0;
+    while (i < num_samples) : (i += 1) {
+        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
+        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
+        var j: u32 = 0;
+        while (j < num_channels) : (j += 1) {
+            const offset: u32 = i * num_channels + j;
+            data[offset] = sample_value;
+        }
+    }
+    break :blk data;
+};
+
+pub const b_note = blk: {
+    @setEvalBranchQuota(500000);
+    const sample_rate: u32 = 44100;
+    const num_channels: u32 = 2;
+    // const bits_per_sample: u32 = 16;
+    const seconds_of_data: f32 = 0.2;
+    const frequency: f32 = 493.88;
+    const num_samples: u32 = sample_rate * seconds_of_data;
+    var data = std.mem.zeroes([num_samples * num_channels]i16);
+    var i: u32 = 0;
+    while (i < num_samples) : (i += 1) {
+        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
+        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
+        var j: u32 = 0;
+        while (j < num_channels) : (j += 1) {
+            const offset: u32 = i * num_channels + j;
+            data[offset] = sample_value;
+        }
+    }
+    break :blk data;
+};
+
+pub const c_note = blk: {
+    @setEvalBranchQuota(500000);
+    const sample_rate: u32 = 44100;
+    const num_channels: u32 = 2;
+    // const bits_per_sample: u32 = 16;
+    const seconds_of_data: f32 = 0.2;
+    const frequency: f32 = 523.251;
+    const num_samples: u32 = sample_rate * seconds_of_data;
+    var data = std.mem.zeroes([num_samples * num_channels]i16);
+    var i: u32 = 0;
+    while (i < num_samples) : (i += 1) {
+        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
+        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
+        var j: u32 = 0;
+        while (j < num_channels) : (j += 1) {
+            const offset: u32 = i * num_channels + j;
+            data[offset] = sample_value;
+        }
+    }
+    break :blk data;
 };
 
 pub fn main() void {
@@ -88,7 +155,12 @@ pub fn main() void {
     // TODO(adi): Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
     // making a new type AppState and then allocating it.
     const engine_state: *EngineState = &app_state.engine;
-    std.log.info("Engine state pointer: {*}", .{engine_state});
+    engine_state.sound = SoundSystem.init() catch |err| {
+        var buffer: [1024]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buffer, "Failed to initialize sound system: {s}", .{@errorName(err)}) catch unreachable;
+        _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
+        return;
+    };
 
     engine_state.permanent_allocator = permanent_allocator;
     engine_state.transient_allocator = transient_allocator;
@@ -128,7 +200,11 @@ pub fn main() void {
             .{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 },
         },
     };
-    platform_state = createWindow("zfracture", back_buffer.width, back_buffer.height) catch return;
+    platform_state = createWindow(
+        "Testbed",
+        back_buffer.width,
+        back_buffer.height,
+    ) catch return;
 
     showWindow(platform_state.window);
 
@@ -172,6 +248,16 @@ pub fn main() void {
                 std.log.info("Key a released this frame", .{});
             }
 
+            if (engine_state.input.keyPressedThisFrame(.a)) {
+                engine_state.sound.playSound(@ptrCast(&a_note), .{});
+            }
+            if (engine_state.input.keyPressedThisFrame(.b)) {
+                engine_state.sound.playSound(@ptrCast(&b_note), .{});
+            }
+            if (engine_state.input.keyPressedThisFrame(.c)) {
+                engine_state.sound.playSound(@ptrCast(&c_note), .{});
+            }
+
             for (0..back_buffer.height) |y| {
                 for (0..back_buffer.width) |x| {
                     const pixel_start: usize = (y * back_buffer.width + x) * FrameBuffer.bytes_per_pixel;
@@ -209,6 +295,14 @@ pub fn main() void {
     // Destroy the window
     destroyWindow(platform_state.window);
 
+    // NOTE(adi): Destroy the sound system after the window is destroyed for some reason there seeems to be an exception thrown
+    // when destroying the window after the sound system has been deinitialized. This is probably some intercation with
+    // the COM being deinitialized before the window is destroyed?
+    // TODO(adi): We need to figure out why this is happening and if this is the intended behavior.
+    engine_state.sound.deinit();
+
+    // NOTE(adi): Technically this free is not really needed as the OS will clean up after the application exits.
+    // But it is nice to do it anyway.
     allocator.free(game_memory);
 
     // const alloc_result = debug_allocator.deinit();
@@ -216,10 +310,11 @@ pub fn main() void {
 }
 
 fn createWindow(
-    class_name: [*:0]const u8,
+    window_title: [*:0]const u8,
     window_width: i32,
     window_height: i32,
 ) WindowCreateError!Win32PlatformState {
+    const engine_name: [*:0]const u8 = "zfracture";
     var platform_state: Win32PlatformState = undefined;
 
     platform_state.instance = win32.GetModuleHandleA(null) orelse return error.FailedToGetModuleHandle;
@@ -228,7 +323,7 @@ fn createWindow(
     window_class.style = .{ .OWNDC = 1 };
     window_class.lpfnWndProc = windowProc;
     window_class.hInstance = platform_state.instance;
-    window_class.lpszClassName = class_name;
+    window_class.lpszClassName = engine_name;
 
     const result = win32.RegisterClassA(&window_class);
     if (result == 0) {
@@ -259,8 +354,8 @@ fn createWindow(
 
     platform_state.window = win32.CreateWindowExA(
         @bitCast(window_style_ex),
-        class_name,
-        "Game",
+        engine_name,
+        window_title,
         @bitCast(window_style),
         window_x,
         window_y,

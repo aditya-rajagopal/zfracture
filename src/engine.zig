@@ -1,7 +1,10 @@
 const std = @import("std");
 
+pub const SoundSystem = @import("sound.zig");
+
 pub const EngineState = struct {
     input: InputState,
+    sound: SoundSystem,
     permanent_allocator: std.mem.Allocator,
     transient_allocator: std.mem.Allocator,
 };
