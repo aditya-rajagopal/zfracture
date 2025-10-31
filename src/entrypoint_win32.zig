@@ -1,34 +1,18 @@
 const std = @import("std");
 const windows = std.os.windows;
 
-pub const engine = @import("engine.zig");
-pub const EngineState = engine.EngineState;
-pub const MouseButton = engine.MouseButton;
-pub const Key = engine.Key;
+const engine = @import("fracture");
+const EngineState = engine.EngineState;
+const MouseButton = engine.MouseButton;
+const Key = engine.Key;
+const KB = engine.KB;
+const MB = engine.MB;
+const GB = engine.GB;
+const FrameBuffer = engine.FrameBuffer;
 
-pub const win32 = @import("windows/win32.zig");
+const win32 = engine.win32;
 
-// TODO(adi): Move this to some common place
-pub fn KB(value: comptime_int) comptime_int {
-    return value * 1024;
-}
-
-pub fn MB(value: comptime_int) comptime_int {
-    return value * 1024 * 1024;
-}
-
-pub fn GB(value: comptime_int) comptime_int {
-    return value * 1024 * 1024 * 1024;
-}
-
-// TODO(adi): This needs to go into a renderer
-const FrameBuffer = struct {
-    width: u16,
-    height: u16,
-    data: []u8,
-
-    pub const bytes_per_pixel: usize = 4;
-};
+const game = @import("game");
 
 const Win32PlatformState = struct {
     instance: windows.HINSTANCE,
@@ -47,72 +31,6 @@ pub const AppState = struct {
     engine: EngineState,
 };
 
-pub const a_note = blk: {
-    @setEvalBranchQuota(500000);
-    const sample_rate: u32 = 44100;
-    const num_channels: u32 = 2;
-    // const bits_per_sample: u32 = 16;
-    const seconds_of_data: f32 = 0.2;
-    const frequency: f32 = 440.0;
-    const num_samples: u32 = sample_rate * seconds_of_data;
-    var data = std.mem.zeroes([num_samples * num_channels]i16);
-    var i: u32 = 0;
-    while (i < num_samples) : (i += 1) {
-        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-        var j: u32 = 0;
-        while (j < num_channels) : (j += 1) {
-            const offset: u32 = i * num_channels + j;
-            data[offset] = sample_value;
-        }
-    }
-    break :blk data;
-};
-
-pub const b_note = blk: {
-    @setEvalBranchQuota(500000);
-    const sample_rate: u32 = 44100;
-    const num_channels: u32 = 2;
-    // const bits_per_sample: u32 = 16;
-    const seconds_of_data: f32 = 0.2;
-    const frequency: f32 = 493.88;
-    const num_samples: u32 = sample_rate * seconds_of_data;
-    var data = std.mem.zeroes([num_samples * num_channels]i16);
-    var i: u32 = 0;
-    while (i < num_samples) : (i += 1) {
-        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-        var j: u32 = 0;
-        while (j < num_channels) : (j += 1) {
-            const offset: u32 = i * num_channels + j;
-            data[offset] = sample_value;
-        }
-    }
-    break :blk data;
-};
-
-pub const c_note = blk: {
-    @setEvalBranchQuota(500000);
-    const sample_rate: u32 = 44100;
-    const num_channels: u32 = 2;
-    // const bits_per_sample: u32 = 16;
-    const seconds_of_data: f32 = 0.2;
-    const frequency: f32 = 523.251;
-    const num_samples: u32 = sample_rate * seconds_of_data;
-    var data = std.mem.zeroes([num_samples * num_channels]i16);
-    var i: u32 = 0;
-    while (i < num_samples) : (i += 1) {
-        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-        var j: u32 = 0;
-        while (j < num_channels) : (j += 1) {
-            const offset: u32 = i * num_channels + j;
-            data[offset] = sample_value;
-        }
-    }
-    break :blk data;
-};
-
 // LEFTOFF(adi): Implement WAV file loading and decoding. Complete audio system
 pub fn main() void {
     // Platform specific state
@@ -124,8 +42,6 @@ pub fn main() void {
     var buffer_info: win32.BITMAPINFO = undefined;
 
     // TODO(adi): We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
-    // var debug_allocator = std.heap.DebugAllocator(.{}){};
-    // const allocator = debug_allocator.allocator();
     const allocator = std.heap.page_allocator;
 
     // NOTE(adi): We want to gaurantee that the game can run in a fixed amount of memory. We can bump this up
@@ -154,6 +70,7 @@ pub fn main() void {
     // TODO(adi): Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
     // making a new type AppState and then allocating it.
     const engine_state: *EngineState = &app_state.engine;
+
     engine_state.sound.init() catch |err| {
         var buffer: [1024]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buffer, "Failed to initialize sound system: {s}", .{@errorName(err)}) catch unreachable;
@@ -212,66 +129,16 @@ pub fn main() void {
 
     showWindow(platform_state.window);
 
-    var offset_x: usize = 0;
-    var offset_y: usize = 0;
+    const game_state: *anyopaque = game.init(engine_state);
 
     running = true;
+
     while (running) {
         engine_state.input.update();
 
         running = pumpMessages(engine_state);
 
-        { // Game specific logic
-            if (engine_state.input.isKeyDown(.escape)) {
-                running = false;
-            }
-            if (engine_state.input.isMouseButtonDown(.left)) {
-                std.log.info(
-                    "Mouse button pressed at {d}, {d}",
-                    .{ engine_state.input.mouse_position_current.x, engine_state.input.mouse_position_current.y },
-                );
-            }
-
-            if (engine_state.input.isKeyDown(.a)) {
-                offset_x -%= 1;
-            }
-            if (engine_state.input.isKeyDown(.d)) {
-                offset_x +%= 1;
-            }
-            if (engine_state.input.isKeyDown(.w)) {
-                offset_y -%= 1;
-            }
-            if (engine_state.input.isKeyDown(.s)) {
-                offset_y +%= 1;
-            }
-
-            if (engine_state.input.keyPressedThisFrame(.a)) {
-                std.log.info("Key a pressed this frame", .{});
-            }
-            if (engine_state.input.keyReleasedThisFrame(.a)) {
-                std.log.info("Key a released this frame", .{});
-            }
-
-            if (engine_state.input.keyPressedThisFrame(.a)) {
-                _ = engine_state.sound.playSound(@ptrCast(&a_note), .{});
-            }
-            if (engine_state.input.keyPressedThisFrame(.b)) {
-                _ = engine_state.sound.playSound(@ptrCast(&b_note), .{});
-            }
-            if (engine_state.input.keyPressedThisFrame(.c)) {
-                _ = engine_state.sound.playSound(@ptrCast(&c_note), .{});
-            }
-
-            for (0..back_buffer.height) |y| {
-                for (0..back_buffer.width) |x| {
-                    const pixel_start: usize = (y * back_buffer.width + x) * FrameBuffer.bytes_per_pixel;
-                    back_buffer.data[pixel_start] = @truncate(x +% offset_x); // blue
-                    back_buffer.data[pixel_start + 1] = @truncate(y +% offset_y); // green
-                    back_buffer.data[pixel_start + 2] = 0x00; // red
-                    back_buffer.data[pixel_start + 3] = 0x00; // padding
-                }
-            }
-        }
+        running &= game.updateAndRender(engine_state, game_state, back_buffer);
 
         // TODO(adi): this should be done in the renderer
         var rect: windows.RECT = undefined;
@@ -295,6 +162,8 @@ pub fn main() void {
 
         transient_fixed_buffer.reset();
     }
+
+    game.deinit(engine_state, game_state);
 
     // Destroy the window
     destroyWindow(platform_state.window);

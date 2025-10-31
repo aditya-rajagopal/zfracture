@@ -10,10 +10,10 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     // ==================================== VULKAN ==================================/
 
-    const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
-    const vulkan = b.dependency("vulkan", .{
-        .registry = registry,
-    }).module("vulkan-zig");
+    // const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
+    // const vulkan = b.dependency("vulkan", .{
+    //     .registry = registry,
+    // }).module("vulkan-zig");
 
     // ====================================== Shader Compile =======================/
 
@@ -23,17 +23,34 @@ pub fn build(b: *std.Build) !void {
     // }).artifact("shader_compiler");
 
     // ================================== MODULES ==================================/
+    const libfracture = b.createModule(.{
+        .root_source_file = b.path("src/libfracture.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // TODO(adi): Import the module from a build file within the game folder
+    const game = b.createModule(.{
+        .root_source_file = b.path("testbed/game.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "fracture", .module = libfracture },
+        },
+    });
+
+    // ==================================== GAME ==================================/
     const entrypoint = b.createModule(.{
         .root_source_file = b.path("src/entrypoint_win32.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "vulkan", .module = vulkan },
+            .{ .name = "fracture", .module = libfracture },
+            .{ .name = "game", .module = game },
         },
     });
 
-    // ==================================== GAME ==================================/
-    const game = b.addExecutable(
+    const exe = b.addExecutable(
         .{
             .name = "game",
             .root_module = entrypoint,
@@ -42,14 +59,14 @@ pub fn build(b: *std.Build) !void {
 
     if (optimize == .ReleaseFast and target.query.os_tag == .windows) {
         // NOTE(adi): Disables debug console on windows
-        game.subsystem = .Windows;
+        exe.subsystem = .Windows;
     }
 
-    b.installArtifact(game);
+    b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
 
-    const run_cmd = b.addRunArtifact(game);
+    const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
 
     // By making the run step depend on the default step, it will be run from the
