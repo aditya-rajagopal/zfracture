@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const win32 = @import("windows/win32.zig");
+pub const wav = @import("wav.zig");
 
 // TODO(adi): Currently this is a direct call into the platform api. We maybe can explore abstracting
 // the loading of sounds especially when IO is going to be abstrated out into jobs.
@@ -9,6 +10,7 @@ pub const SoundSystem = switch (builtin.os.tag) {
     .windows => @import("windows/xaudio2.zig"),
     else => @compileError("Unsupported OS"),
 };
+
 pub const EngineState = struct {
     input: InputState,
     sound: SoundSystem,
@@ -293,7 +295,7 @@ const InputState = struct {
     }
 
     pub inline fn mouseButtonPressedThisFrame(self: *const InputState, button: MouseButton) bool {
-        return self.mouse_buttons_ended_down[@intFromEnum(button)] != 0 or self.mouse_buttons_half_transition_count[@intFromEnum(button)] >= 1;
+        return self.mouse_buttons_ended_down[@intFromEnum(button)] != 0 and self.mouse_buttons_half_transition_count[@intFromEnum(button)] >= 1;
     }
 
     pub inline fn keyReleasedThisFrame(self: *const InputState, key: Key) bool {

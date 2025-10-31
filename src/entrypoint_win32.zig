@@ -317,34 +317,44 @@ fn pumpMessages(eng: *EngineState) bool {
             },
             win32.WM_LBUTTONDOWN => {
                 eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.left)] = 1;
+                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.left)] += 1;
             },
             win32.WM_LBUTTONUP => {
                 eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.left)] = 0;
+                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.left)] += 1;
             },
             win32.WM_RBUTTONDOWN => {
                 eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.right)] = 1;
+                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.right)] += 1;
             },
             win32.WM_RBUTTONUP => {
                 eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.right)] = 0;
+                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.right)] += 1;
             },
             win32.WM_MBUTTONDOWN => {
                 eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.middle)] = 1;
+                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.middle)] += 1;
             },
             win32.WM_MBUTTONUP => {
                 eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.middle)] = 0;
+                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.middle)] += 1;
             },
             win32.WM_XBUTTONDOWN => {
                 if (wparam & 0x100000000 != 0) {
                     eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x1)] = 1;
+                    eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.x1)] += 1;
                 } else {
                     eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x2)] = 1;
+                    eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.x2)] += 1;
                 }
             },
             win32.WM_XBUTTONUP => {
                 if (wparam & 0x100000000 != 0) {
                     eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x1)] = 0;
+                    eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.x1)] += 1;
                 } else {
                     eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x2)] = 0;
+                    eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.x2)] += 1;
                 }
             },
             win32.WM_KEYDOWN,

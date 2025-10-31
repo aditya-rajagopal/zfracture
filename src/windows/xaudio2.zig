@@ -79,7 +79,7 @@ const StopOnEndCallback = extern struct {
 pub fn init(audio_engine: *Self) Error!void {
     // TODO(adi): Should the sound system be configurable
     // TODO(adi): Should we use COINIT_SPEED_OVER_MEMORY?
-    var result = win32.CoInitializeEx(null, win32.COINIT_MULTITHREADED);
+    var result = win32.CoInitializeEx(null, win32.COINIT_MULTITHREADED | win32.COINIT_SPEED_OVER_MEMORY);
     errdefer win32.CoUninitialize();
     if (result != win32.S_OK) {
         return Error.FailedToInitializeCOM;
