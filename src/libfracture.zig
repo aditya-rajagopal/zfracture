@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const win32 = @import("windows/win32.zig");
+
 // TODO(adi): Currently this is a direct call into the platform api. We maybe can explore abstracting
 // the loading of sounds especially when IO is going to be abstrated out into jobs.
 pub const SoundSystem = switch (builtin.os.tag) {
@@ -12,6 +14,28 @@ pub const EngineState = struct {
     sound: SoundSystem,
     permanent_allocator: std.mem.Allocator,
     transient_allocator: std.mem.Allocator,
+};
+
+// TODO(adi): Move this to some common place
+pub fn KB(value: comptime_int) comptime_int {
+    return value * 1024;
+}
+
+pub fn MB(value: comptime_int) comptime_int {
+    return value * 1024 * 1024;
+}
+
+pub fn GB(value: comptime_int) comptime_int {
+    return value * 1024 * 1024 * 1024;
+}
+
+// TODO(adi): This needs to go into a renderer
+pub const FrameBuffer = struct {
+    width: u16,
+    height: u16,
+    data: []u8,
+
+    pub const bytes_per_pixel: usize = 4;
 };
 
 /// Enumeration of the keyboard keys and mouse buttons. The values are the same as the values in the windows API
