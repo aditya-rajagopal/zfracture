@@ -7,7 +7,6 @@ pub const MouseButton = engine.MouseButton;
 pub const Key = engine.Key;
 
 pub const win32 = @import("windows/win32.zig");
-pub const SoundSystem = @import("sound.zig");
 
 // TODO(adi): Move this to some common place
 pub fn KB(value: comptime_int) comptime_int {
@@ -204,7 +203,12 @@ pub fn main() void {
         "Testbed",
         back_buffer.width,
         back_buffer.height,
-    ) catch return;
+    ) catch |err| {
+        var buffer: [1024]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buffer, "Failed to initialize window: {s}", .{@errorName(err)}) catch unreachable;
+        _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
+        return;
+    };
 
     showWindow(platform_state.window);
 
@@ -249,13 +253,13 @@ pub fn main() void {
             }
 
             if (engine_state.input.keyPressedThisFrame(.a)) {
-                engine_state.sound.playSound(@ptrCast(&a_note), .{});
+                _ = engine_state.sound.playSound(@ptrCast(&a_note), .{});
             }
             if (engine_state.input.keyPressedThisFrame(.b)) {
-                engine_state.sound.playSound(@ptrCast(&b_note), .{});
+                _ = engine_state.sound.playSound(@ptrCast(&b_note), .{});
             }
             if (engine_state.input.keyPressedThisFrame(.c)) {
-                engine_state.sound.playSound(@ptrCast(&c_note), .{});
+                _ = engine_state.sound.playSound(@ptrCast(&c_note), .{});
             }
 
             for (0..back_buffer.height) |y| {

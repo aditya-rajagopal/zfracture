@@ -9,16 +9,19 @@ const HINSTANCE = win.HINSTANCE;
 
 pub const PlaybackParams = struct {
     play_begin: u32 = 0,
-    play_end: u32 = 0,
+    play_length: u32 = 0,
     loop_begin: u32 = 0,
-    loop_end: u32 = 0,
+    loop_length: u32 = 0,
     loop_count: u32 = 0,
 };
+
+pub const MaxConcurrentVoices = 16;
 
 dll: HINSTANCE = undefined,
 x_audio2: *IXAudio2 = undefined,
 mastering_voice: *IXAudio2MasteringVoice = undefined,
-voice: XAudioVoice = .{},
+// TODO(io): Do we need different voice stacks for SFX and Music?
+voices: [MaxConcurrentVoices]XAudioVoice = undefined,
 callback: StopOnEndCallback = undefined,
 
 pub const XAudioVoice = struct {
@@ -43,6 +46,7 @@ const PFNXAudio2Create = *const fn (
     XAudio2Processor: win.UINT,
 ) callconv(.winapi) HRESULT;
 
+// TODO(sound): Do we need any other type of callbacks for different kinds of voices?
 const StopOnEndCallback = extern struct {
     vtable: *const IXAudio2VoiceCallback.VTable = &default,
 
@@ -60,14 +64,11 @@ const StopOnEndCallback = extern struct {
         const voice: *XAudioVoice = @ptrCast(@alignCast(context));
         _ = voice.source.Stop(0, XAUDIO2_COMMIT_NOW);
         _ = voice.source.FlushSourceBuffers();
+        voice.buffer = null;
         voice.playing = false;
     }
 
-    pub fn _onBufferStart(_: *IXAudio2VoiceCallback, context: ?*anyopaque) callconv(.winapi) void {
-        const voice: *XAudioVoice = @ptrCast(@alignCast(context));
-        voice.playing = true;
-    }
-
+    fn _onBufferStart(_: *IXAudio2VoiceCallback, _: ?*anyopaque) callconv(.winapi) void {}
     fn _onStreamEnd(_: *IXAudio2VoiceCallback) callconv(.winapi) void {}
     fn _onVoiceProcessingPassStart(_: *IXAudio2VoiceCallback, _: u32) callconv(.winapi) void {}
     fn _onVoiceProcessingPassEnd(_: *IXAudio2VoiceCallback) callconv(.winapi) void {}
@@ -76,8 +77,8 @@ const StopOnEndCallback = extern struct {
 };
 
 pub fn init(audio_engine: *Self) Error!void {
-    // NOTE(adi): We want to load the XAudio2 DLL dynamically
-
+    // TODO(adi): Should the sound system be configurable
+    // TODO(adi): Should we use COINIT_SPEED_OVER_MEMORY?
     var result = win32.CoInitializeEx(null, win32.COINIT_MULTITHREADED);
     errdefer win32.CoUninitialize();
     if (result != win32.S_OK) {
@@ -115,30 +116,31 @@ pub fn init(audio_engine: *Self) Error!void {
     // TODO(adi): idk if this needs to be configurable
     const wave_format: WAVEFORMATEX = .default;
 
-    // audio_engine.callback = std.heap.page_allocator.create(StopOnEndCallback) catch unreachable;
     audio_engine.callback = .{};
 
-    var voice: ?*IXAudio2SourceVoice = undefined;
-    result = audio_engine.x_audio2.CreateSourceVoice(
-        &voice,
-        &wave_format,
-        0,
-        XAUDIO2_DEFAULT_FREQ_RATIO,
-        @ptrCast(@alignCast(&audio_engine.callback)),
-        null,
-        null,
-    );
+    for (&audio_engine.voices) |*voice| {
+        var v: ?*IXAudio2SourceVoice = undefined;
+        result = audio_engine.x_audio2.CreateSourceVoice(
+            &v,
+            &wave_format,
+            0,
+            XAUDIO2_DEFAULT_FREQ_RATIO,
+            @ptrCast(@alignCast(&audio_engine.callback)),
+            null,
+            null,
+        );
 
-    if (result != win32.S_OK) {
-        return Error.FailedToCreateVoice;
-    }
+        if (result != win32.S_OK) {
+            return Error.FailedToCreateVoice;
+        }
 
-    audio_engine.voice = .{};
-    audio_engine.voice.source = voice orelse return Error.FailedToCreateVoice;
-    result = audio_engine.voice.source.SetVolume(1.0, XAUDIO2_COMMIT_NOW);
-
-    if (result != win32.S_OK) {
-        std.log.info("Failed to set volume: {d}", .{result});
+        voice.* = .{};
+        voice.source = v orelse return Error.FailedToCreateVoice;
+        result = voice.source.SetVolume(1.0, XAUDIO2_COMMIT_NOW);
+        if (result != win32.S_OK) {
+            // TODO(io):
+            std.log.info("Failed to set volume: {d}", .{result});
+        }
     }
 }
 
@@ -148,38 +150,59 @@ pub fn deinit(self: *Self) void {
     win32.CoUninitialize();
 }
 
-pub fn playSound(self: *Self, data: []const u8, params: PlaybackParams) void {
-    _ = params;
-    if (self.voice.playing) {
-        _ = self.voice.source.Stop(0, XAUDIO2_COMMIT_NOW);
-        _ = self.voice.source.FlushSourceBuffers();
-        self.voice.playing = false;
+fn getAvailableVoice(self: *Self) ?*XAudioVoice {
+    for (&self.voices) |*voice| {
+        if (!voice.playing) {
+            return voice;
+        }
     }
+    return null;
+}
+
+pub fn playSound(self: *Self, data: []const u8, params: PlaybackParams) bool {
+    // TODO(sound): if we are full on voices we are just not going to play the sound.
+    // Should we do something else?
+    const voice: *XAudioVoice = getAvailableVoice(self) orelse return false;
+    voice.buffer = data;
     const x_audio_buffer = XAUDIO2_BUFFER{
         .Flags = XAUDIO2_END_OF_STREAM,
         .AudioBytes = @truncate(data.len),
         .pAudioData = @ptrCast(data.ptr),
-        .PlayBegin = 0,
-        .PlayLength = 0,
-        .LoopBegin = 0,
-        .LoopLength = 0,
-        .LoopCount = 0,
-        .pContext = @ptrCast(&self.voice),
+        .PlayBegin = params.play_begin,
+        .PlayLength = params.play_length,
+        .LoopBegin = params.loop_begin,
+        .LoopLength = params.loop_length,
+        .LoopCount = params.loop_count,
+        .pContext = @ptrCast(voice),
     };
-    var result = self.voice.source.SubmitSourceBuffer(&x_audio_buffer, null);
+    var result = voice.source.SubmitSourceBuffer(&x_audio_buffer, null);
     if (result != win32.S_OK) {
+        // TODO(io): remove this log and should go into the IO queue
         std.log.info("Failed to submit source buffer: {d}", .{result});
-        return;
+        return false;
     }
-    result = self.voice.source.Start(0, XAUDIO2_COMMIT_NOW);
+    result = voice.source.Start(0, XAUDIO2_COMMIT_NOW);
     if (result != win32.S_OK) {
+        // TODO(io): remove this log and should go into the IO queue
         std.log.info("Failed to start source buffer: {d}", .{result});
-        return;
+        return false;
     }
+    voice.playing = true;
+    return true;
 }
 
-pub fn stopSound(self: Self) void {
-    _ = self;
+pub fn stopSound(self: *Self, data: []const u8) void {
+    for (&self.voices) |*voice| {
+        if (voice.buffer) |buffer| {
+            if (buffer.ptr == data.ptr) {
+                voice.Stop(0, XAUDIO2_COMMIT_NOW);
+                voice.FlushSourceBuffers();
+                voice.buffer = null;
+                voice.playing = false;
+                return;
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------------------------------------
@@ -187,7 +210,6 @@ pub fn stopSound(self: Self) void {
 // ------------------------------------------------------------------------------------------------------------
 
 // TODO(adi): Do we need XAPO? https://github.com/marlersoft/zigwin32/blob/main/win32/media/audio/xaudio2.zig
-//
 
 pub const WAVE_FORMAT_PCM = @as(u32, 1);
 
