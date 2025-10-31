@@ -40,6 +40,11 @@ pub fn build(b: *std.Build) !void {
         },
     );
 
+    if (optimize == .ReleaseFast and target.query.os_tag == .windows) {
+        // NOTE(adi): Disables debug console on windows
+        game.subsystem = .Windows;
+    }
+
     b.installArtifact(game);
 
     const run_step = b.step("run", "Run the app");
