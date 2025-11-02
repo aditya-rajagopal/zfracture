@@ -3,12 +3,30 @@ const builtin = @import("builtin");
 
 pub const win32 = @import("windows/win32.zig");
 pub const wav = @import("wav.zig");
+pub const XAudio2 = @import("windows/xaudio2.zig");
 
 // TODO(adi): Currently this is a direct call into the platform api. We maybe can explore abstracting
 // the loading of sounds especially when IO is going to be abstrated out into jobs.
 pub const SoundSystem = switch (builtin.os.tag) {
     .windows => @import("windows/xaudio2.zig"),
     else => @compileError("Unsupported OS"),
+};
+
+/// This struct will be used when the game is running in debug mode and/or we enable hot reoloading.
+/// So instead of importing the game as a module we will replace them with function pointers.
+pub const DebugGameDLLApi = struct {
+    pub const InitFn = *const fn (engine: *EngineState) *anyopaque;
+    pub const DeinitFn = *const fn (engine: *EngineState, game_state: *anyopaque) void;
+    pub const UpdateAndRenderFn = *const fn (
+        engine: *EngineState,
+        game_state: *anyopaque,
+        /// TODO(adi): This is temporary until we have a proper renderer
+        back_buffer: FrameBuffer,
+    ) bool;
+
+    init: InitFn,
+    deinit: DeinitFn,
+    updateAndRender: UpdateAndRenderFn,
 };
 
 pub const EngineState = struct {

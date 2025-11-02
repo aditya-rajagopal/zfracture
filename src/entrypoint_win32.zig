@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const windows = std.os.windows;
 
 const engine = @import("fracture");
@@ -12,7 +13,14 @@ const FrameBuffer = engine.FrameBuffer;
 
 const win32 = engine.win32;
 
-const game = @import("game");
+const Game = @import("game");
+const DLL = switch (builtin.mode) {
+    .Debug => struct {
+        instance: std.DynLib,
+        time_stamp: i128 align(8),
+    },
+    else => void,
+};
 
 const Win32PlatformState = struct {
     instance: windows.HINSTANCE,
@@ -29,9 +37,17 @@ const WindowCreateError = error{
 
 pub const AppState = struct {
     engine: EngineState,
+    dll: DLL,
 };
 
+const dll_name = "./zig-out/bin/dynamic_game.dll";
+
 // LEFTOFF(adi): Implement WAV file loading and decoding. Complete audio system
+// TODO(adi): We currently have 2 arenas. One is for permanent allocations which is the static lifetime arena.
+// The ther is the transient arena which has the lifetime of a frame. We probably want more arenas with potentially
+// different lifetimes such as a scene or game level arena. It is possible the renderer will need to allocate stuff
+// when it is performing the rendering pass. We could also have fixed size arena pools for each thread/task that can be
+// requested when one is run out.
 pub fn main() void {
     // Platform specific state
     var platform_state: Win32PlatformState = undefined;
@@ -129,8 +145,36 @@ pub fn main() void {
 
     showWindow(platform_state.window);
 
-    const game_state: *anyopaque = game.init(engine_state);
+    var game_api = switch (builtin.mode) {
+        .Debug => engine.DebugGameDLLApi{
+            .init = Game.init,
+            .deinit = Game.deinit,
+            .updateAndRender = Game.updateAndRender,
+        },
+        else => Game
+    };
 
+    switch (builtin.mode) {
+        .Debug => {
+            const file: std.fs.File = std.fs.cwd().openFile(dll_name, .{}) catch {
+                _ = win32.MessageBoxA(null, "Failed to open dynamic game library", "Error", win32.MB_ICONEXCLAMATION);
+                return;
+            };
+            const stats = file.stat() catch {
+                _ = win32.MessageBoxA(null, "Failed to get dynamic game library stats", "Error", win32.MB_ICONEXCLAMATION);
+                return;
+            };
+            file.close();
+            app_state.dll.time_stamp = stats.mtime;
+            if (!reload_library(&app_state.dll, &game_api)) {
+                _ = win32.MessageBoxA(null, "Failed to reload dynamic game library", "Error", win32.MB_ICONEXCLAMATION);
+                return;
+            }
+        },
+        else => {},
+    }
+
+    const game_state: *anyopaque = game_api.init(engine_state);
     running = true;
 
     while (running) {
@@ -138,7 +182,7 @@ pub fn main() void {
 
         running = pumpMessages(engine_state);
 
-        running &= game.updateAndRender(engine_state, game_state, back_buffer);
+        running &= game_api.updateAndRender(engine_state, game_state, back_buffer);
 
         // TODO(adi): this should be done in the renderer
         var rect: windows.RECT = undefined;
@@ -163,7 +207,7 @@ pub fn main() void {
         transient_fixed_buffer.reset();
     }
 
-    game.deinit(engine_state, game_state);
+    game_api.deinit(engine_state, game_state);
 
     // Destroy the window
     destroyWindow(platform_state.window);
@@ -467,4 +511,21 @@ fn windowProc(
     }
 
     return result;
+}
+
+fn reload_library(dll: *DLL, game_api: *engine.DebugGameDLLApi) bool {
+    const new_name = dll_name ++ "_tmp";
+    if (win32.CopyFileA(dll_name, new_name, 0) != 0) {
+        return false;
+    }
+
+    dll.instance = std.DynLib.open(new_name) catch return false;
+    const init_fn = dll.instance.lookup(engine.DebugGameDLLApi.InitFn, "init") orelse return false;
+    const deinit_fn = dll.instance.lookup(engine.DebugGameDLLApi.DeinitFn, "deinit") orelse return false;
+    const update_and_render = dll.instance.lookup(engine.DebugGameDLLApi.UpdateAndRenderFn, "update_and_render") orelse return false;
+
+    game_api.init = init_fn;
+    game_api.deinit = deinit_fn;
+    game_api.updateAndRender = update_and_render;
+    return true;
 }

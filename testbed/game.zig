@@ -60,15 +60,6 @@ pub fn updateAndRender(
         _ = engine.sound.playSound(state.pop_sound.data, .{});
     }
 
-    if (engine.input.keyPressedThisFrame(.a)) {
-        _ = engine.sound.playSound(@ptrCast(&a_note), .{});
-    }
-    if (engine.input.keyPressedThisFrame(.b)) {
-        _ = engine.sound.playSound(@ptrCast(&b_note), .{});
-    }
-    if (engine.input.keyPressedThisFrame(.c)) {
-        _ = engine.sound.playSound(@ptrCast(&c_note), .{});
-    }
     if (engine.input.keyPressedThisFrame(.space)) {
         _ = engine.sound.playSound(state.impact_sound.data, .{});
     }
@@ -86,68 +77,68 @@ pub fn updateAndRender(
 }
 
 // DEBUG SOUDS
-pub const a_note = blk: {
-    @setEvalBranchQuota(500000);
-    const sample_rate: u32 = 44100;
-    const num_channels: u32 = 2;
-    // const bits_per_sample: u32 = 16;
-    const seconds_of_data: f32 = 0.2;
-    const frequency: f32 = 440.0;
-    const num_samples: u32 = sample_rate * seconds_of_data;
-    var data = std.mem.zeroes([num_samples * num_channels]i16);
-    var i: u32 = 0;
-    while (i < num_samples) : (i += 1) {
-        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-        var j: u32 = 0;
-        while (j < num_channels) : (j += 1) {
-            const offset: u32 = i * num_channels + j;
-            data[offset] = sample_value;
-        }
-    }
-    break :blk data;
-};
-
-pub const b_note = blk: {
-    @setEvalBranchQuota(500000);
-    const sample_rate: u32 = 44100;
-    const num_channels: u32 = 2;
-    // const bits_per_sample: u32 = 16;
-    const seconds_of_data: f32 = 0.2;
-    const frequency: f32 = 493.88;
-    const num_samples: u32 = sample_rate * seconds_of_data;
-    var data = std.mem.zeroes([num_samples * num_channels]i16);
-    var i: u32 = 0;
-    while (i < num_samples) : (i += 1) {
-        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-        var j: u32 = 0;
-        while (j < num_channels) : (j += 1) {
-            const offset: u32 = i * num_channels + j;
-            data[offset] = sample_value;
-        }
-    }
-    break :blk data;
-};
-
-pub const c_note = blk: {
-    @setEvalBranchQuota(5000000);
-    const sample_rate: u32 = 44100;
-    const num_channels: u32 = 2;
-    // const bits_per_sample: u32 = 16;
-    const seconds_of_data: f32 = 3;
-    const frequency: f32 = 523.251;
-    const num_samples: u32 = sample_rate * seconds_of_data;
-    var data = std.mem.zeroes([num_samples * num_channels]i16);
-    var i: u32 = 0;
-    while (i < num_samples) : (i += 1) {
-        const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-        const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-        var j: u32 = 0;
-        while (j < num_channels) : (j += 1) {
-            const offset: u32 = i * num_channels + j;
-            data[offset] = sample_value;
-        }
-    }
-    break :blk data;
-};
+// pub const a_note = blk: {
+//     @setEvalBranchQuota(500000);
+//     const sample_rate: u32 = 44100;
+//     const num_channels: u32 = 2;
+//     // const bits_per_sample: u32 = 16;
+//     const seconds_of_data: f32 = 0.2;
+//     const frequency: f32 = 440.0;
+//     const num_samples: u32 = sample_rate * seconds_of_data;
+//     var data = std.mem.zeroes([num_samples * num_channels]i16);
+//     var i: u32 = 0;
+//     while (i < num_samples) : (i += 1) {
+//         const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
+//         const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
+//         var j: u32 = 0;
+//         while (j < num_channels) : (j += 1) {
+//             const offset: u32 = i * num_channels + j;
+//             data[offset] = sample_value;
+//         }
+//     }
+//     break :blk data;
+// };
+//
+// pub const b_note = blk: {
+//     @setEvalBranchQuota(500000);
+//     const sample_rate: u32 = 44100;
+//     const num_channels: u32 = 2;
+//     // const bits_per_sample: u32 = 16;
+//     const seconds_of_data: f32 = 0.2;
+//     const frequency: f32 = 493.88;
+//     const num_samples: u32 = sample_rate * seconds_of_data;
+//     var data = std.mem.zeroes([num_samples * num_channels]i16);
+//     var i: u32 = 0;
+//     while (i < num_samples) : (i += 1) {
+//         const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
+//         const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
+//         var j: u32 = 0;
+//         while (j < num_channels) : (j += 1) {
+//             const offset: u32 = i * num_channels + j;
+//             data[offset] = sample_value;
+//         }
+//     }
+//     break :blk data;
+// };
+//
+// pub const c_note = blk: {
+//     @setEvalBranchQuota(5000000);
+//     const sample_rate: u32 = 44100;
+//     const num_channels: u32 = 2;
+//     // const bits_per_sample: u32 = 16;
+//     const seconds_of_data: f32 = 3;
+//     const frequency: f32 = 523.251;
+//     const num_samples: u32 = sample_rate * seconds_of_data;
+//     var data = std.mem.zeroes([num_samples * num_channels]i16);
+//     var i: u32 = 0;
+//     while (i < num_samples) : (i += 1) {
+//         const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
+//         const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
+//         var j: u32 = 0;
+//         while (j < num_channels) : (j += 1) {
+//             const offset: u32 = i * num_channels + j;
+//             data[offset] = sample_value;
+//         }
+//     }
+//     break :blk data;
+// };
