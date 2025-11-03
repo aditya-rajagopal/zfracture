@@ -15,14 +15,9 @@ pub const SoundSystem = switch (builtin.os.tag) {
 /// This struct will be used when the game is running in debug mode and/or we enable hot reoloading.
 /// So instead of importing the game as a module we will replace them with function pointers.
 pub const DebugGameDLLApi = struct {
-    pub const InitFn = *const fn (engine: *EngineState) *anyopaque;
-    pub const DeinitFn = *const fn (engine: *EngineState, game_state: *anyopaque) void;
-    pub const UpdateAndRenderFn = *const fn (
-        engine: *EngineState,
-        game_state: *anyopaque,
-        /// TODO(adi): This is temporary until we have a proper renderer
-        back_buffer: FrameBuffer,
-    ) bool;
+    pub const InitFn = *const fn (engine: *EngineState) callconv(.c) *anyopaque;
+    pub const DeinitFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) void;
+    pub const UpdateAndRenderFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) bool;
 
     init: InitFn,
     deinit: DeinitFn,
@@ -34,6 +29,9 @@ pub const EngineState = struct {
     sound: SoundSystem,
     permanent_allocator: std.mem.Allocator,
     transient_allocator: std.mem.Allocator,
+
+    // TODO(adi): This is till we have a proper renderer
+    back_buffer: FrameBuffer,
 };
 
 // TODO(adi): Move this to some common place

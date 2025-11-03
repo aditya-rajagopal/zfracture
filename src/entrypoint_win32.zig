@@ -14,10 +14,12 @@ const FrameBuffer = engine.FrameBuffer;
 const win32 = engine.win32;
 
 const Game = @import("game");
-const DLL = switch (builtin.mode) {
+const DebugGame = switch (builtin.mode) {
     .Debug => struct {
         instance: std.DynLib,
+        is_loaded: bool = false,
         time_stamp: i128 align(8),
+        game_api: engine.DebugGameDLLApi,
     },
     else => void,
 };
@@ -37,7 +39,13 @@ const WindowCreateError = error{
 
 pub const AppState = struct {
     engine: EngineState,
-    dll: DLL,
+    debug_game: DebugGame,
+};
+
+const game_api_default = engine.DebugGameDLLApi{
+    .init = Game.init,
+    .deinit = Game.deinit,
+    .updateAndRender = Game.updateAndRender,
 };
 
 const dll_name = "./zig-out/bin/dynamic_game.dll";
@@ -54,7 +62,6 @@ pub fn main() void {
     var running: bool = false;
 
     // TODO(adi): What do we do about the back buffer? This is a renderer specific thing
-    var back_buffer: FrameBuffer = undefined;
     var buffer_info: win32.BITMAPINFO = undefined;
 
     // TODO(adi): We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
@@ -107,9 +114,9 @@ pub fn main() void {
     const max_window_height = 2048;
     const window_buffer_max_size = max_window_width * max_window_height * FrameBuffer.bytes_per_pixel;
 
-    back_buffer.width = 1280;
-    back_buffer.height = 720;
-    back_buffer.data = permanent_allocator.alloc(u8, window_buffer_max_size) catch {
+    engine_state.back_buffer.width = 1280;
+    engine_state.back_buffer.height = 720;
+    engine_state.back_buffer.data = permanent_allocator.alloc(u8, window_buffer_max_size) catch {
         _ = win32.MessageBoxA(null, "Out of memory for back buffer allocation", "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
@@ -117,8 +124,8 @@ pub fn main() void {
     buffer_info = .{
         .bmiHeader = .{
             .biSize = @sizeOf(win32.BITMAPINFOHEADER),
-            .biWidth = @intCast(back_buffer.width),
-            .biHeight = -@as(i32, @intCast(back_buffer.height)),
+            .biWidth = @intCast(engine_state.back_buffer.width),
+            .biHeight = -@as(i32, @intCast(engine_state.back_buffer.height)),
             .biPlanes = 1,
             .biBitCount = 32,
             .biCompression = win32.BI_RGB,
@@ -134,8 +141,8 @@ pub fn main() void {
     };
     platform_state = createWindow(
         "Testbed",
-        back_buffer.width,
-        back_buffer.height,
+        engine_state.back_buffer.width,
+        engine_state.back_buffer.height,
     ) catch |err| {
         var buffer: [1024]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buffer, "Failed to initialize window: {s}", .{@errorName(err)}) catch unreachable;
@@ -145,28 +152,16 @@ pub fn main() void {
 
     showWindow(platform_state.window);
 
-    var game_api = switch (builtin.mode) {
-        .Debug => engine.DebugGameDLLApi{
-            .init = Game.init,
-            .deinit = Game.deinit,
-            .updateAndRender = Game.updateAndRender,
-        },
-        else => Game
-    };
-
     switch (builtin.mode) {
         .Debug => {
-            const file: std.fs.File = std.fs.cwd().openFile(dll_name, .{}) catch {
-                _ = win32.MessageBoxA(null, "Failed to open dynamic game library", "Error", win32.MB_ICONEXCLAMATION);
+            app_state.debug_game.is_loaded = false;
+            app_state.debug_game.time_stamp = 0;
+            if (!(reload_library(&app_state.debug_game) catch |err| {
+                var buffer: [1024]u8 = undefined;
+                const msg = std.fmt.bufPrintZ(&buffer, "Failed to reload dynamic game library: {s}", .{@errorName(err)}) catch unreachable;
+                _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
                 return;
-            };
-            const stats = file.stat() catch {
-                _ = win32.MessageBoxA(null, "Failed to get dynamic game library stats", "Error", win32.MB_ICONEXCLAMATION);
-                return;
-            };
-            file.close();
-            app_state.dll.time_stamp = stats.mtime;
-            if (!reload_library(&app_state.dll, &game_api)) {
+            })) {
                 _ = win32.MessageBoxA(null, "Failed to reload dynamic game library", "Error", win32.MB_ICONEXCLAMATION);
                 return;
             }
@@ -174,7 +169,11 @@ pub fn main() void {
         else => {},
     }
 
-    const game_state: *anyopaque = game_api.init(engine_state);
+    const game_state: *anyopaque = switch (builtin.mode) {
+        .Debug => app_state.debug_game.game_api.init(engine_state),
+        else => Game.init(engine_state),
+    };
+
     running = true;
 
     while (running) {
@@ -182,7 +181,10 @@ pub fn main() void {
 
         running = pumpMessages(engine_state);
 
-        running &= game_api.updateAndRender(engine_state, game_state, back_buffer);
+        running &= switch (builtin.mode) {
+            .Debug => app_state.debug_game.game_api.updateAndRender(engine_state, game_state),
+            else => Game.updateAndRender(engine_state, game_state),
+        };
 
         // TODO(adi): this should be done in the renderer
         var rect: windows.RECT = undefined;
@@ -198,16 +200,34 @@ pub fn main() void {
             window_height,
             0,
             0,
-            back_buffer.width,
-            back_buffer.height,
-            back_buffer.data.ptr,
+            engine_state.back_buffer.width,
+            engine_state.back_buffer.height,
+            engine_state.back_buffer.data.ptr,
             &buffer_info,
         );
 
         transient_fixed_buffer.reset();
+
+        // TODO(adi): Reload library every X seconds instead of on every frame
+        // TODO(adi): Build in a fail-safe stub functions for when the reload fails so the game can still run
+        // without crashing and we can try to recover.
+        switch (builtin.mode) {
+            .Debug => {
+                _ = reload_library(&app_state.debug_game) catch |err| {
+                    std.log.err("Failed to reload dynamic game library: {s}", .{@errorName(err)});
+                };
+            },
+            else => {},
+        }
     }
 
-    game_api.deinit(engine_state, game_state);
+    switch (builtin.mode) {
+        .Debug => {
+            app_state.debug_game.game_api.deinit(engine_state, game_state);
+            app_state.debug_game.instance.close();
+        },
+        else => Game.deinit(engine_state, game_state),
+    }
 
     // Destroy the window
     destroyWindow(platform_state.window);
@@ -469,6 +489,7 @@ fn pumpMessages(eng: *EngineState) bool {
     }
     return true;
 }
+
 fn windowProc(
     window: windows.HWND,
     message: u32,
@@ -513,19 +534,44 @@ fn windowProc(
     return result;
 }
 
-fn reload_library(dll: *DLL, game_api: *engine.DebugGameDLLApi) bool {
-    const new_name = dll_name ++ "_tmp";
-    if (win32.CopyFileA(dll_name, new_name, 0) != 0) {
+fn reload_library(debug_game: *DebugGame) !bool {
+    const cwd = std.fs.cwd();
+    const file: std.fs.File = cwd.openFile(dll_name, .{}) catch {
+        return error.FailedToOpenFile;
+    };
+    const stats = try file.stat();
+    file.close();
+    if (debug_game.time_stamp == stats.mtime) {
         return false;
     }
 
-    dll.instance = std.DynLib.open(new_name) catch return false;
-    const init_fn = dll.instance.lookup(engine.DebugGameDLLApi.InitFn, "init") orelse return false;
-    const deinit_fn = dll.instance.lookup(engine.DebugGameDLLApi.DeinitFn, "deinit") orelse return false;
-    const update_and_render = dll.instance.lookup(engine.DebugGameDLLApi.UpdateAndRenderFn, "update_and_render") orelse return false;
+    const new_name = dll_name ++ "_tmp";
 
-    game_api.init = init_fn;
-    game_api.deinit = deinit_fn;
-    game_api.updateAndRender = update_and_render;
+    // TODO(adi): Is this better than using CopyFileA?
+    // try cwd.copyFile(dll_name, cwd, new_name, .{});
+    if (debug_game.is_loaded) {
+        debug_game.instance.close();
+    }
+
+    if (win32.CopyFileA(dll_name.ptr, new_name.ptr, 0) == 0) {
+        return error.FailedToCopyFile;
+    }
+
+    var new_instance = std.DynLib.open(new_name) catch return false;
+    errdefer new_instance.close();
+    const init_fn = new_instance.lookup(engine.DebugGameDLLApi.InitFn, "init") orelse return error.FailedToLookupInitFn;
+    const deinit_fn = new_instance.lookup(engine.DebugGameDLLApi.DeinitFn, "deinit") orelse return error.FailedToLookupDeinitFn;
+    const update_and_render = new_instance.lookup(
+        engine.DebugGameDLLApi.UpdateAndRenderFn,
+        "updateAndRender",
+    ) orelse return error.FailedToLookupUpdateAndRenderFn;
+
+    debug_game.instance = new_instance;
+    debug_game.game_api.init = init_fn;
+    debug_game.game_api.deinit = deinit_fn;
+    debug_game.game_api.updateAndRender = update_and_render;
+    debug_game.is_loaded = true;
+    debug_game.time_stamp = stats.mtime;
+
     return true;
 }
