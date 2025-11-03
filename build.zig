@@ -80,6 +80,25 @@ pub fn build(b: *std.Build) !void {
     }
 
     // ==================================== GAME DLL ==================================/
+
+    const dll_module = b.addModule("dynamic_game", .{
+        .root_source_file = b.path("testbed/debug_dll.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "fracture", .module = libfracture },
+        },
+    });
+    const game_dll = b.addLibrary(.{
+        .name = "dynamic_game",
+        .linkage = .dynamic,
+        .root_module = dll_module,
+    });
+
+    const dll_step = b.addInstallArtifact(game_dll, .{});
+
+    const game_step = b.step("game", "Build the game as a dll");
+    game_step.dependOn(&dll_step.step);
     // ==================================== CHECK STEP ==================================/
     const exe_check = b.addExecutable(.{
         .name = "check",

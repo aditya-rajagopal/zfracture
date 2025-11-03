@@ -34,8 +34,6 @@ pub fn deinit(_: *EngineState, _: *anyopaque) void {}
 pub fn updateAndRender(
     engine: *EngineState,
     game_state: *anyopaque,
-    /// TODO(adi): This is temporary until we have a proper renderer
-    back_buffer: FrameBuffer,
 ) bool {
     const state: *GameState = @ptrCast(@alignCast(game_state));
     var running: bool = true;
@@ -64,13 +62,13 @@ pub fn updateAndRender(
         _ = engine.sound.playSound(state.impact_sound.data, .{});
     }
 
-    for (0..back_buffer.height) |y| {
-        for (0..back_buffer.width) |x| {
-            const pixel_start: usize = (y * back_buffer.width + x) * FrameBuffer.bytes_per_pixel;
-            back_buffer.data[pixel_start] = @truncate(x +% state.offset_x); // blue
-            back_buffer.data[pixel_start + 1] = @truncate(y +% state.offset_y); // green
-            back_buffer.data[pixel_start + 2] = 0x00; // red
-            back_buffer.data[pixel_start + 3] = 0x00; // padding
+    for (0..engine.back_buffer.height) |y| {
+        for (0..engine.back_buffer.width) |x| {
+            const pixel_start: usize = (y * engine.back_buffer.width + x) * FrameBuffer.bytes_per_pixel;
+            engine.back_buffer.data[pixel_start] = @truncate(x +% state.offset_x); // blue
+            engine.back_buffer.data[pixel_start + 1] = @truncate(y +% state.offset_y); // green
+            engine.back_buffer.data[pixel_start + 2] = 0x00; // red
+            engine.back_buffer.data[pixel_start + 3] = 0x00; // padding
         }
     }
     return running;
