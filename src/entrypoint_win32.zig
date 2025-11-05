@@ -50,8 +50,8 @@ const game_api_default = engine.DebugGameDLLApi{
 
 const dll_name = "./zig-out/bin/dynamic_game.dll";
 
-// LEFTOFF(adi): Implement WAV file loading and decoding. Complete audio system
-// TODO(adi): We currently have 2 arenas. One is for permanent allocations which is the static lifetime arena.
+// LEFTOFF: Implement WAV file loading and decoding. Complete audio system
+// TODO: We currently have 2 arenas. One is for permanent allocations which is the static lifetime arena.
 // The ther is the transient arena which has the lifetime of a frame. We probably want more arenas with potentially
 // different lifetimes such as a scene or game level arena. It is possible the renderer will need to allocate stuff
 // when it is performing the rendering pass. We could also have fixed size arena pools for each thread/task that can be
@@ -61,19 +61,25 @@ pub fn main() void {
     var platform_state: Win32PlatformState = undefined;
     var running: bool = false;
 
-    // TODO(adi): What do we do about the back buffer? This is a renderer specific thing
+    // TODO: What do we do about the back buffer? This is a renderer specific thing
     var buffer_info: win32.BITMAPINFO = undefined;
 
-    // TODO(adi): We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
+    // TODO: We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
     const allocator = std.heap.page_allocator;
 
-    // NOTE(adi): We want to gaurantee that the game can run in a fixed amount of memory. We can bump this up
+    // NOTE: We want to gaurantee that the game can run in a fixed amount of memory. We can bump this up
     // dpeneding on if we ever see us running out of memory.
     const permanenent_memory_size = MB(128);
     const transient_memory_size = MB(128);
     const total_game_memory_size = permanenent_memory_size + transient_memory_size;
 
-    // TODO(adi): We may need more arenas depending on how the game goes.
+    // TODO: We may need more arenas depending on how the game goes.
+    // TODO: We can just use VirtualAlloc to allocate a large virtual address space and then map parts of it
+    // into the different arenas so they can potentially grow? Maybe we want this sometimes. Especially if we want
+    // to allocate new arenas when some run out.
+    // TODO: Create an arena allocator that we can use everywhere instead of passing the Allocator struct around
+    // since we only need alloc/push/pop and not free/realloc and stuff. We can create a allocator if we really need it.
+    // out of this one.
     const game_memory: []u8 = allocator.alloc(u8, total_game_memory_size) catch {
         _ = win32.MessageBoxA(null, "Failed to allocate game memory", "Error", win32.MB_ICONEXCLAMATION);
         return;
@@ -90,7 +96,7 @@ pub fn main() void {
         return;
     };
 
-    // TODO(adi): Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
+    // TODO: Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
     // making a new type AppState and then allocating it.
     const engine_state: *EngineState = &app_state.engine;
 
@@ -105,11 +111,11 @@ pub fn main() void {
     engine_state.transient_allocator = transient_allocator;
     engine_state.input = .init;
 
-    // NOTE(adi): We allocate a large enough back buffer such that we do not need to reallocate it. If the window
+    // NOTE: We allocate a large enough back buffer such that we do not need to reallocate it. If the window
     // size becomes larger than this we will just throw an error and disallow it. Especially if we are rendering to a
     // smaller back buffer and stretching it to fit the window.
-    // TODO(adi): We need to make this configurable globally by the game.
-    // TODO(adi): We might lower this if we want a smaller memory footprint
+    // TODO: We need to make this configurable globally by the game.
+    // TODO: We might lower this if we want a smaller memory footprint
     const max_window_width = 4096;
     const max_window_height = 2048;
     const window_buffer_max_size = max_window_width * max_window_height * FrameBuffer.bytes_per_pixel;
@@ -176,7 +182,12 @@ pub fn main() void {
 
     running = true;
 
+    // NOTE: This will not fail on windows >= XP/2000
+    var frame_timer = std.time.Timer.start() catch unreachable;
+    const ms_per_ns: f32 = 1.0 / @as(f32, std.time.ns_per_ms);
+
     while (running) {
+        engine_state.delta_time = @as(f32, @floatFromInt(frame_timer.lap())) * ms_per_ns;
         engine_state.input.update();
 
         running = pumpMessages(engine_state);
@@ -186,7 +197,7 @@ pub fn main() void {
             else => Game.updateAndRender(engine_state, game_state),
         };
 
-        // TODO(adi): this should be done in the renderer
+        // TODO: this should be done in the renderer
         var rect: windows.RECT = undefined;
         _ = win32.GetClientRect(platform_state.window, &rect);
         const window_width = rect.right - rect.left;
@@ -208,8 +219,14 @@ pub fn main() void {
 
         transient_fixed_buffer.reset();
 
-        // TODO(adi): Reload library every X seconds instead of on every frame
-        // TODO(adi): Build in a fail-safe stub functions for when the reload fails so the game can still run
+        if (engine_state.input.isKeyDown(.@"2")) {
+            std.log.info("Delta time: {d}", .{engine_state.delta_time});
+        }
+
+        // TODO: Frame rate limiter
+
+        // TODO: Reload library every X seconds instead of on every frame
+        // TODO: Build in a fail-safe stub functions for when the reload fails so the game can still run
         // without crashing and we can try to recover.
         switch (builtin.mode) {
             .Debug => {
@@ -232,13 +249,13 @@ pub fn main() void {
     // Destroy the window
     destroyWindow(platform_state.window);
 
-    // NOTE(adi): Destroy the sound system after the window is destroyed for some reason there seeems to be an exception thrown
+    // NOTE: Destroy the sound system after the window is destroyed for some reason there seeems to be an exception thrown
     // when destroying the window after the sound system has been deinitialized. This is probably some intercation with
     // the COM being deinitialized before the window is destroyed?
-    // TODO(adi): We need to figure out why this is happening and if this is the intended behavior.
+    // TODO: We need to figure out why this is happening and if this is the intended behavior.
     engine_state.sound.deinit();
 
-    // NOTE(adi): Technically this free is not really needed as the OS will clean up after the application exits.
+    // NOTE: Technically this free is not really needed as the OS will clean up after the application exits.
     // But it is nice to do it anyway.
     allocator.free(game_memory);
 
@@ -335,7 +352,7 @@ inline fn stretchBlitBits(
     frame_data: [*]const u8,
     frame_buffer_info: *const win32.BITMAPINFO,
 ) void {
-    // TODO(adi): We might want to blit to a zone that maintains the aspect ration of the rendered image.
+    // TODO: We might want to blit to a zone that maintains the aspect ration of the rendered image.
     const blit_result = win32.StretchDIBits(
         device_context,
         dest_x,
@@ -353,7 +370,7 @@ inline fn stretchBlitBits(
     );
 
     if (blit_result == 0) {
-        // TODO(adi): Log or return error. But we dont need to stop the program.
+        // TODO: Log or return error. But we dont need to stop the program.
     }
 }
 
@@ -374,9 +391,9 @@ fn pumpMessages(eng: *EngineState) bool {
                 // TODO: Do we want to parse the rest of the message? l_param has the mouse position
                 // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousehwheel
                 const z_delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
-                // NOTE(adi): We are compressing the delta into just 1 direction.
+                // NOTE: We are compressing the delta into just 1 direction.
                 const delta: i8 = if (z_delta < 0) -1 else 1;
-                // TODO(adi): We are only storing the last delta. Could we do better?
+                // TODO: We are only storing the last delta. Could we do better?
                 eng.input.mouse_wheel_delta = delta;
             },
             win32.WM_LBUTTONDOWN => {
@@ -432,7 +449,7 @@ fn pumpMessages(eng: *EngineState) bool {
                     .alt => key = if (is_extended) .ralt else .lalt,
                     .control => key = if (is_extended) .rcontrol else .lcontrol,
                     .shift => {
-                        // NOTE(adi): This scan code is defined by windows for left shift.
+                        // NOTE: This scan code is defined by windows for left shift.
                         // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
                         const left_shift: u8 = 0x2A;
                         const scan_code: u8 = @truncate(lparam >> 16);
@@ -443,7 +460,7 @@ fn pumpMessages(eng: *EngineState) bool {
 
                 const key_code: u8 = @intFromEnum(key);
 
-                // NOTE(adi): For (sys)KeyDown messages this bit is set to 1 if the key was down before this message and 0 if it was up.
+                // NOTE: For (sys)KeyDown messages this bit is set to 1 if the key was down before this message and 0 if it was up.
                 // this means for key down messages we need to check if this is 0 for transition count and 1 if it is sysUp message
                 const is_half_transition: u8 = @intFromBool(lparam & 0x40000000 == 0);
                 eng.input.keys_half_transition_count[key_code] += is_half_transition;
@@ -460,7 +477,7 @@ fn pumpMessages(eng: *EngineState) bool {
                     .alt => key = if (is_extended) .ralt else .lalt,
                     .control => key = if (is_extended) .rcontrol else .lcontrol,
                     .shift => {
-                        // NOTE(adi): This scan code is defined by windows for left shift.
+                        // NOTE: This scan code is defined by windows for left shift.
                         // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
                         const left_shift: u8 = 0x2A;
                         const scan_code: u8 = @truncate(lparam >> 16);
@@ -471,14 +488,14 @@ fn pumpMessages(eng: *EngineState) bool {
 
                 const key_code: u8 = @intFromEnum(key);
 
-                // NOTE(adi): The 30th bit is always 1 for (sys)KeyUp messages. Since we only get up messages from the down state.
+                // NOTE: The 30th bit is always 1 for (sys)KeyUp messages. Since we only get up messages from the down state.
                 // this message always means a transition
                 eng.input.keys_half_transition_count[key_code] += 1;
                 eng.input.keys_ended_down[key_code] = 0;
             },
             win32.WM_SIZE => {
                 // We have handled the resize event here.
-                // TODO(adi): Check if we get resize events when not parsing the message queue.
+                // TODO: Check if we get resize events when not parsing the message queue.
                 std.log.info("WM_SIZE", .{});
             },
             else => {
@@ -506,7 +523,7 @@ fn windowProc(
         win32.WM_CLOSE => {
             _ = win32.PostQuitMessage(0);
         },
-        // TODO(adi): We might not want to resize the back buffer every time the window is resized.
+        // TODO: We might not want to resize the back buffer every time the window is resized.
         // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits to scale it.
         // We could figure out a way to keep the aspect ration the same, but that might be tricky.
         // win32.WM_SIZE => {
@@ -523,7 +540,7 @@ fn windowProc(
         // app_state.back_buffer.data = app_state.allocator.realloc(app_state.back_buffer.data, new_bitmap_size) catch unreachable;
         // },
 
-        // TODO(adi): When we lose focus we should reset the input state so that the game does not react to input in anyway
+        // TODO: When we lose focus we should reset the input state so that the game does not react to input in anyway
         // win32.WM_KILLFOCUS => {},
         // win32.WM_SETFOCUS => {},
         else => {
@@ -547,7 +564,7 @@ fn reload_library(debug_game: *DebugGame) !bool {
 
     const new_name = dll_name ++ "_tmp";
 
-    // TODO(adi): Is this better than using CopyFileA?
+    // TODO: Is this better than using CopyFileA?
     // try cwd.copyFile(dll_name, cwd, new_name, .{});
     if (debug_game.is_loaded) {
         debug_game.instance.close();

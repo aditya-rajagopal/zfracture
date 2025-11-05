@@ -32,7 +32,13 @@ pub const EngineState = struct {
 
     // TODO(adi): This is till we have a proper renderer
     back_buffer: FrameBuffer,
+    delta_time: f32,
 };
+
+test "alignment" {
+    std.log.err("size of EngineState: {d}", .{@sizeOf(EngineState)});
+    std.log.err("alignment of EngineState: {d}", .{@alignOf(EngineState)});
+}
 
 // TODO(adi): Move this to some common place
 pub fn KB(value: comptime_int) comptime_int {
