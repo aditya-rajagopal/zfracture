@@ -62,15 +62,30 @@ pub fn updateAndRender(
         _ = engine.sound.playSound(state.impact_sound.data, .{});
     }
 
-    for (0..engine.back_buffer.height) |y| {
-        for (0..engine.back_buffer.width) |x| {
-            const pixel_start: usize = (y * engine.back_buffer.width + x) * FrameBuffer.bytes_per_pixel;
-            engine.back_buffer.data[pixel_start] = @truncate(x +% state.offset_x); // blue
-            engine.back_buffer.data[pixel_start + 1] = @truncate(y +% state.offset_y); // green
-            engine.back_buffer.data[pixel_start + 2] = 0x00; // red
+    // Clear the back buffer
+    const total_pixels: usize = @as(u64, @intCast(engine.back_buffer.width)) * @as(u64, @intCast(engine.back_buffer.height)) * FrameBuffer.bytes_per_pixel;
+    for (0..total_pixels) |i| {
+        engine.back_buffer.data[i] = 0x00;
+    }
+
+    // Draw a rectangle
+    // TODO: We should draw rectangle with floating point coordinates and then map that to pixles
+    const x: usize = engine.back_buffer.width / 4;
+    const y: usize = engine.back_buffer.height / 4;
+    const width: usize = engine.back_buffer.width / 2;
+    const height: usize = engine.back_buffer.height / 2;
+    // TODO: use floating point colours
+    const colour: u32 = 0x00FF0000;
+    for (0..height) |j| {
+        for (0..width) |i| {
+            const pixel_start: usize = ((y + j) * engine.back_buffer.width + x + i) * FrameBuffer.bytes_per_pixel;
+            engine.back_buffer.data[pixel_start] = 0xFF & colour; // blue
+            engine.back_buffer.data[pixel_start + 1] = 0xFF & (colour >> 8); // green
+            engine.back_buffer.data[pixel_start + 2] = 0xFF & (colour >> 16); // red
             engine.back_buffer.data[pixel_start + 3] = 0x00; // padding
         }
     }
+
     return running;
 }
 
