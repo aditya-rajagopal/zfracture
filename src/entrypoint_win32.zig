@@ -122,7 +122,8 @@ pub fn main() void {
 
     engine_state.back_buffer.width = 1280;
     engine_state.back_buffer.height = 720;
-    engine_state.back_buffer.data = permanent_allocator.alloc(u8, window_buffer_max_size) catch {
+
+    engine_state.back_buffer.data = permanent_allocator.alignedAlloc(u8, .@"4", window_buffer_max_size) catch {
         _ = win32.MessageBoxA(null, "Out of memory for back buffer allocation", "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
