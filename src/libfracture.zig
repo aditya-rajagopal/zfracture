@@ -1,11 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// TODO: Move this to a common module? So we can use platform specific code in many places
 pub const win32 = @import("windows/win32.zig");
 pub const wav = @import("wav.zig");
 pub const XAudio2 = @import("windows/xaudio2.zig");
 
-// TODO(adi): Currently this is a direct call into the platform api. We maybe can explore abstracting
+// TODO: Currently this is a direct call into the platform api. We maybe can explore abstracting
 // the loading of sounds especially when IO is going to be abstrated out into jobs.
 pub const SoundSystem = switch (builtin.os.tag) {
     .windows => @import("windows/xaudio2.zig"),
@@ -30,7 +31,7 @@ pub const EngineState = struct {
     permanent_allocator: std.mem.Allocator,
     transient_allocator: std.mem.Allocator,
 
-    // TODO(adi): This is till we have a proper renderer
+    // TODO: This is till we have a proper renderer
     back_buffer: FrameBuffer,
     delta_time: f32,
 };
@@ -40,7 +41,7 @@ test "alignment" {
     std.log.err("alignment of EngineState: {d}", .{@alignOf(EngineState)});
 }
 
-// TODO(adi): Move this to some common place
+// TODO: Move this to some common place
 pub fn KB(value: comptime_int) comptime_int {
     return value * 1024;
 }
@@ -53,11 +54,11 @@ pub fn GB(value: comptime_int) comptime_int {
     return value * 1024 * 1024 * 1024;
 }
 
-// TODO(adi): This needs to go into a renderer
+// TODO: This needs to go into a renderer
 pub const FrameBuffer = struct {
     width: u16,
     height: u16,
-    data: []u8,
+    data: []align(4) u8,
 
     pub const bytes_per_pixel: usize = 4;
 };
@@ -264,8 +265,6 @@ pub const MouseButton = enum(u8) {
     x2 = 0x04,
 };
 
-// TODO(adi): Do we want to track the half transitions?
-// We could use that to determine if the button is pressed and released within the same frame.
 const InputState = struct {
     // TODO(adi): Controller support
     // TODO(adi): Support for multiple controllers/keyboards
@@ -306,13 +305,13 @@ const InputState = struct {
     }
 
     pub inline fn keyPressedThisFrame(self: *const InputState, key: Key) bool {
-        // NOTE(adi): a key was pressed this frame if it ended down but started up i.e the transition count is odd and it ended down.
+        // NOTE: a key was pressed this frame if it ended down but started up i.e the transition count is odd and it ended down.
         // or it started down and ended down but the transition count is even.
         // This effectively means that if the key ended down and there was any transition it was pressed this frame.
-        // TODO(adi): Should we consider button was pressed this frame if any point in the frame the button was down?
+        // TODO: Should we consider button was pressed this frame if any point in the frame the button was down?
         // For example, if the button was down at the start of the frame and somewhere in the middle of the frame
         // the button was released, should we consider the button as pressed?
-        // FIX(adi): This is not correct. We need to check if the key ended down as well
+        // FIX: This is not correct. We need to check if the key ended down as well
         return self.keys_ended_down[@intFromEnum(key)] != 0 and self.keys_half_transition_count[@intFromEnum(key)] >= 1;
     }
 

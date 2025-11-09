@@ -4,16 +4,22 @@ const EngineState = fracture.EngineState;
 const FrameBuffer = fracture.FrameBuffer;
 
 pub const GameState = struct {
-    offset_x: usize,
-    offset_y: usize,
     impact_sound: fracture.wav.WavData,
     pop_sound: fracture.wav.WavData,
+
+    // FIXME: In screen space currently
+    player_x: f32,
+    player_y: f32,
 };
+
+const player_width: f32 = 20.0;
+const player_height: f32 = 40.0;
+const player_half_width: f32 = player_width / 2.0;
 
 pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
-    game_state.offset_x = 0;
-    game_state.offset_y = 0;
+    game_state.player_x = @as(f32, @floatFromInt(engine.back_buffer.width)) / 2;
+    game_state.player_y = @as(f32, @floatFromInt(engine.back_buffer.height)) / 2;
     const impact_sound = std.fs.cwd().readFileAlloc(
         "assets/sounds/impactMetal_medium_000-converted.wav",
         engine.transient_allocator,
@@ -41,117 +47,110 @@ pub fn updateAndRender(
         running = false;
     }
 
-    if (engine.input.isKeyDown(.a)) {
-        state.offset_x -%= 1;
-    }
-    if (engine.input.isKeyDown(.d)) {
-        state.offset_x +%= 1;
-    }
-    if (engine.input.isKeyDown(.w)) {
-        state.offset_y -%= 1;
-    }
-    if (engine.input.isKeyDown(.s)) {
-        state.offset_y +%= 1;
-    }
+    { // Player movement
+        var delta_x: f32 = 0.0;
+        var delta_y: f32 = 0.0;
 
-    if (engine.input.mouseButtonPressedThisFrame(.left)) {
-        _ = engine.sound.playSound(state.pop_sound.data, .{});
-    }
-
-    if (engine.input.keyPressedThisFrame(.space)) {
-        _ = engine.sound.playSound(state.impact_sound.data, .{});
-    }
-
-    // Clear the back buffer
-    const total_pixels: usize = @as(u64, @intCast(engine.back_buffer.width)) * @as(u64, @intCast(engine.back_buffer.height)) * FrameBuffer.bytes_per_pixel;
-    for (0..total_pixels) |i| {
-        engine.back_buffer.data[i] = 0x00;
-    }
-
-    // Draw a rectangle
-    // TODO: We should draw rectangle with floating point coordinates and then map that to pixles
-    const x: usize = engine.back_buffer.width / 4;
-    const y: usize = engine.back_buffer.height / 4;
-    const width: usize = engine.back_buffer.width / 2;
-    const height: usize = engine.back_buffer.height / 2;
-    // TODO: use floating point colours
-    const colour: u32 = 0x00FF0000;
-    for (0..height) |j| {
-        for (0..width) |i| {
-            const pixel_start: usize = ((y + j) * engine.back_buffer.width + x + i) * FrameBuffer.bytes_per_pixel;
-            engine.back_buffer.data[pixel_start] = 0xFF & colour; // blue
-            engine.back_buffer.data[pixel_start + 1] = 0xFF & (colour >> 8); // green
-            engine.back_buffer.data[pixel_start + 2] = 0xFF & (colour >> 16); // red
-            engine.back_buffer.data[pixel_start + 3] = 0x00; // padding
+        if (engine.input.isKeyDown(.s)) {
+            delta_x -= 1.0;
         }
+        if (engine.input.isKeyDown(.f)) {
+            delta_x += 1.0;
+        }
+        if (engine.input.isKeyDown(.e)) {
+            delta_y -= 1.0;
+        }
+        if (engine.input.isKeyDown(.d)) {
+            delta_y += 1.0;
+        }
+
+        const magnitude = std.math.sqrt(delta_x * delta_x + delta_y * delta_y);
+        if (magnitude > 0.0) {
+            delta_x = delta_x / magnitude;
+            delta_y = delta_y / magnitude;
+        }
+
+        if (engine.input.mouseButtonPressedThisFrame(.left)) {
+            _ = engine.sound.playSound(state.pop_sound.data, .{});
+        }
+
+        if (engine.input.keyPressedThisFrame(.space)) {
+            _ = engine.sound.playSound(state.impact_sound.data, .{});
+        }
+
+        clearScreen(&engine.back_buffer, 0.0, 0.0, 0.0);
+
+        var new_player_x = state.player_x + delta_x;
+        var new_player_y = state.player_y + delta_y;
+        new_player_x = std.math.clamp(
+            new_player_x,
+            player_half_width,
+            @as(f32, @floatFromInt(engine.back_buffer.width - 1)) - player_half_width,
+        );
+        new_player_y = std.math.clamp(
+            new_player_y,
+            player_height,
+            @as(f32, @floatFromInt(engine.back_buffer.height - 1)),
+        );
+
+        state.player_x = new_player_x;
+        state.player_y = new_player_y;
+    }
+
+    { // Draw player
+        // NOTE: The players anchor point is at the feet of the player
+        drawRectangle(
+            &engine.back_buffer,
+            state.player_x - player_half_width,
+            state.player_y - player_height,
+            player_width,
+            player_height,
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+        );
     }
 
     return running;
 }
 
-// DEBUG SOUDS
-// pub const a_note = blk: {
-//     @setEvalBranchQuota(500000);
-//     const sample_rate: u32 = 44100;
-//     const num_channels: u32 = 2;
-//     // const bits_per_sample: u32 = 16;
-//     const seconds_of_data: f32 = 0.2;
-//     const frequency: f32 = 440.0;
-//     const num_samples: u32 = sample_rate * seconds_of_data;
-//     var data = std.mem.zeroes([num_samples * num_channels]i16);
-//     var i: u32 = 0;
-//     while (i < num_samples) : (i += 1) {
-//         const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-//         const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-//         var j: u32 = 0;
-//         while (j < num_channels) : (j += 1) {
-//             const offset: u32 = i * num_channels + j;
-//             data[offset] = sample_value;
-//         }
-//     }
-//     break :blk data;
-// };
-//
-// pub const b_note = blk: {
-//     @setEvalBranchQuota(500000);
-//     const sample_rate: u32 = 44100;
-//     const num_channels: u32 = 2;
-//     // const bits_per_sample: u32 = 16;
-//     const seconds_of_data: f32 = 0.2;
-//     const frequency: f32 = 493.88;
-//     const num_samples: u32 = sample_rate * seconds_of_data;
-//     var data = std.mem.zeroes([num_samples * num_channels]i16);
-//     var i: u32 = 0;
-//     while (i < num_samples) : (i += 1) {
-//         const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-//         const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-//         var j: u32 = 0;
-//         while (j < num_channels) : (j += 1) {
-//             const offset: u32 = i * num_channels + j;
-//             data[offset] = sample_value;
-//         }
-//     }
-//     break :blk data;
-// };
-//
-// pub const c_note = blk: {
-//     @setEvalBranchQuota(5000000);
-//     const sample_rate: u32 = 44100;
-//     const num_channels: u32 = 2;
-//     // const bits_per_sample: u32 = 16;
-//     const seconds_of_data: f32 = 3;
-//     const frequency: f32 = 523.251;
-//     const num_samples: u32 = sample_rate * seconds_of_data;
-//     var data = std.mem.zeroes([num_samples * num_channels]i16);
-//     var i: u32 = 0;
-//     while (i < num_samples) : (i += 1) {
-//         const sample: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(num_samples));
-//         const sample_value: i16 = @intFromFloat(std.math.sin(sample * std.math.pi * 2 * frequency) * std.math.maxInt(i16));
-//         var j: u32 = 0;
-//         while (j < num_channels) : (j += 1) {
-//             const offset: u32 = i * num_channels + j;
-//             data[offset] = sample_value;
-//         }
-//     }
-//     break :blk data;
-// };
+fn clearScreen(frame_buffer: *FrameBuffer, r: f32, g: f32, b: f32) void {
+    const r_int: u8 = @truncate(@as(u32, @intFromFloat(@round(r * 255.0))));
+    const g_int: u8 = @truncate(@as(u32, @intFromFloat(@round(g * 255.0))));
+    const b_int: u8 = @truncate(@as(u32, @intFromFloat(@round(b * 255.0))));
+    const clear_colour: u32 = (@as(u32, @intCast(r_int)) << 16) | (@as(u32, @intCast(g_int)) << 8) | @as(u32, @intCast(b_int));
+    const total_pixels: usize = @as(usize, @intCast(frame_buffer.width)) * @as(usize, @intCast(frame_buffer.height));
+    const pixles_u32: []u32 = @ptrCast(frame_buffer.data[0 .. total_pixels * FrameBuffer.bytes_per_pixel]);
+    @memset(pixles_u32[0..total_pixels], clear_colour);
+}
+
+fn drawRectangle(frame_buffer: *FrameBuffer, x: f32, y: f32, width: f32, height: f32, r: f32, g: f32, b: f32, a: f32) void {
+    // TODO: Consider blending
+    _ = a;
+    // NOTE: We are rounding here to if the position of the corner covers most of a pixel in x or y we will draw it.
+    var x_int: usize = @intFromFloat(@round(x));
+    var y_int: usize = @intFromFloat(@round(y));
+    var width_int: usize = @intFromFloat(@round(width));
+    var height_int: usize = @intFromFloat(@round(height));
+
+    // NOTE: Clamping so we dont overflow the buffer
+    x_int = std.math.clamp(x_int, 0, frame_buffer.width - 1);
+    y_int = std.math.clamp(y_int, 0, frame_buffer.height - 1);
+    width_int = std.math.clamp(width_int, 0, frame_buffer.width - 1 - x_int);
+    height_int = std.math.clamp(height_int, 0, frame_buffer.height - 1 - y_int);
+
+    const r_int: u8 = @truncate(@as(u32, @intFromFloat(@round(r * 255.0))));
+    const g_int: u8 = @truncate(@as(u32, @intFromFloat(@round(g * 255.0))));
+    const b_int: u8 = @truncate(@as(u32, @intFromFloat(@round(b * 255.0))));
+    const colour: u32 = (@as(u32, @intCast(r_int)) << 16) | (@as(u32, @intCast(g_int)) << 8) | @as(u32, @intCast(b_int));
+
+    const total_pixels: usize = @as(usize, @intCast(frame_buffer.width)) * @as(usize, @intCast(frame_buffer.height));
+    const pixles_u32: []u32 = @ptrCast(frame_buffer.data[0 .. total_pixels * FrameBuffer.bytes_per_pixel]);
+
+    for (0..height_int) |j| {
+        for (0..width_int) |i| {
+            pixles_u32[(y_int + j) * frame_buffer.width + x_int + i] = colour;
+        }
+    }
+}
