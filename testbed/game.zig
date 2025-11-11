@@ -3,6 +3,8 @@ const fracture = @import("fracture");
 const EngineState = fracture.EngineState;
 const FrameBuffer = fracture.FrameBuffer;
 
+// NOTE: PoE1 and 2 do not have plyaer inertia.
+
 pub const GameState = struct {
     impact_sound: fracture.wav.WavData,
     pop_sound: fracture.wav.WavData,
@@ -10,8 +12,8 @@ pub const GameState = struct {
     // FIXME:
     tile_map: TileMap,
     // FIXME: In screen space currently
-    player_x: f32,
-    player_y: f32,
+    camera_x: f32,
+    camera_y: f32,
 };
 
 const TileType = enum(u8) {
@@ -21,39 +23,22 @@ const TileType = enum(u8) {
 };
 
 const TileMap = struct {
-    data: []const TileType,
+    data: []TileType,
     tile_width: u32,
     tile_height: u32,
 };
 
-const tile_width: f32 = 64.0;
-const tile_height: f32 = 64.0;
+const tile_width: f32 = 32.0;
+const tile_height: f32 = 32.0;
 
 const player_width: f32 = tile_width;
 const player_height: f32 = tile_height * 2.0;
 const player_half_width: f32 = player_width / 2.0;
 
-const tile_map_width: u32 = 20;
-const tile_map_height: u32 = 12;
-const tile_map_sample_data: []const TileType = &[_]TileType{
-    .wall, .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .floor, .wall,
-    .wall, .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,  .wall,
-};
-
 pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
-    game_state.player_x = @as(f32, @floatFromInt(engine.back_buffer.width)) / 2;
-    game_state.player_y = @as(f32, @floatFromInt(engine.back_buffer.height)) / 2;
+    game_state.camera_x = @as(f32, @floatFromInt(engine.back_buffer.width)) / 2;
+    game_state.camera_y = @as(f32, @floatFromInt(engine.back_buffer.height)) / 2;
     const impact_sound = std.fs.cwd().readFileAlloc(
         "assets/sounds/impactMetal_medium_000-converted.wav",
         engine.transient_allocator,
@@ -66,13 +51,39 @@ pub fn init(engine: *EngineState) *anyopaque {
         .unlimited,
     ) catch unreachable;
     game_state.pop_sound = fracture.wav.decode(engine.permanent_allocator, pop_sound) catch unreachable;
-    game_state.tile_map.data = tile_map_sample_data;
-    game_state.tile_map.tile_width = tile_map_width;
-    game_state.tile_map.tile_height = tile_map_height;
+
+    { // HACK: debug level generation
+        game_state.tile_map.tile_width = 200;
+        game_state.tile_map.tile_height = 200;
+        game_state.tile_map.data = engine.permanent_allocator.alloc(
+            TileType,
+            game_state.tile_map.tile_width * game_state.tile_map.tile_height,
+        ) catch unreachable;
+
+        @memset(game_state.tile_map.data, .floor);
+
+        // Randomly generate some walls
+        var wall_count: usize = 0;
+        var rand = std.Random.DefaultPrng.init(12345);
+        var random = rand.random();
+        while (wall_count < game_state.tile_map.tile_width * game_state.tile_map.tile_height / 10) : (wall_count += 1) {
+            const x = random.intRangeAtMost(u32, 0, game_state.tile_map.tile_width - 1);
+            const y = random.intRangeAtMost(u32, 0, game_state.tile_map.tile_height - 1);
+            game_state.tile_map.data[y * game_state.tile_map.tile_width + x] = .wall;
+        }
+        const tile_map_width = @as(f32, @floatFromInt(game_state.tile_map.tile_width)) * tile_width;
+        const tile_map_height = @as(f32, @floatFromInt(game_state.tile_map.tile_height)) * tile_height;
+        // Player starts in the middle of the map
+        game_state.camera_x = tile_map_width / 2;
+        game_state.camera_y = tile_map_height / 2;
+    }
+
     return @ptrCast(game_state);
 }
 
 pub fn deinit(_: *EngineState, _: *anyopaque) void {}
+
+const player_speed: f32 = 32.0 * 5;
 
 pub fn updateAndRender(
     engine: *EngineState,
@@ -95,6 +106,13 @@ pub fn updateAndRender(
     if (engine.input.keyPressedThisFrame(.space)) {
         _ = engine.sound.playSound(state.impact_sound.data, .{});
     }
+
+    const screen_width = @as(f32, @floatFromInt(engine.back_buffer.width));
+    const screen_height = @as(f32, @floatFromInt(engine.back_buffer.height));
+
+    // The limits in pixels for the tilemap
+    const tile_map_width = @as(f32, @floatFromInt(state.tile_map.tile_width)) * tile_width;
+    const tile_map_height = @as(f32, @floatFromInt(state.tile_map.tile_height)) * tile_height;
 
     { // Player movement
         var delta_x: f32 = 0.0;
@@ -120,21 +138,24 @@ pub fn updateAndRender(
             delta_y = delta_y * magnitude_inv;
         }
 
-        var new_player_x = state.player_x + delta_x;
-        var new_player_y = state.player_y + delta_y;
-        new_player_x = std.math.clamp(
-            new_player_x,
+        var new_camera_x = state.camera_x + delta_x * player_speed * engine.delta_time / 1000.0;
+        var new_camera_y = state.camera_y + delta_y * player_speed * engine.delta_time / 1000.0;
+
+        // Clamp player position to the tile map. The tile map top right is the 0, 0 position.
+
+        new_camera_x = std.math.clamp(
+            new_camera_x,
             player_half_width,
-            @as(f32, @floatFromInt(engine.back_buffer.width - 1)) - player_half_width,
+            tile_map_width - player_half_width,
         );
-        new_player_y = std.math.clamp(
-            new_player_y,
-            player_height,
-            @as(f32, @floatFromInt(engine.back_buffer.height - 1)),
+        new_camera_y = std.math.clamp(
+            new_camera_y,
+            0,
+            tile_map_height,
         );
 
-        state.player_x = new_player_x;
-        state.player_y = new_player_y;
+        state.camera_x = new_camera_x;
+        state.camera_y = new_camera_y;
     }
 
     { // Draw tile map
@@ -146,15 +167,30 @@ pub fn updateAndRender(
         const wall_colour_g: f32 = 0.400;
         const wall_colour_b: f32 = 0.400;
 
-        for (0..tile_map_height) |y| {
-            for (0..tile_map_width) |x| {
-                const tile_type = state.tile_map.data[y * tile_map_width + x];
+        // Player is at the center of the screen always so draw the player there and the camera moves with the player
+        // Based on the player position figure out the tiles we need to draw
+        const top_left_tile_x_int: i32 = @intFromFloat(@floor((state.camera_x - screen_width / 2) / tile_width));
+        const top_left_tile_x: usize = @intCast(std.math.clamp(top_left_tile_x_int, 0, state.tile_map.tile_width - 1));
+
+        const top_left_tile_y_int: i32 = @intFromFloat(@floor((state.camera_y - screen_height / 2) / tile_height));
+        const top_left_tile_y: usize = @intCast(std.math.clamp(top_left_tile_y_int, 0, state.tile_map.tile_height - 1));
+
+        const bottom_right_tile_x_int: i32 = @intFromFloat(@ceil((state.camera_x + screen_width / 2) / tile_width));
+        const bottom_right_tile_x: usize = @intCast(std.math.clamp(bottom_right_tile_x_int, 0, state.tile_map.tile_width - 1));
+        const bottom_right_tile_y_int: i32 = @intFromFloat(@ceil((state.camera_y + screen_height / 2) / tile_height));
+        const bottom_right_tile_y: usize = @intCast(std.math.clamp(bottom_right_tile_y_int, 0, state.tile_map.tile_height - 1));
+
+        for (top_left_tile_y..bottom_right_tile_y + 1) |y| {
+            for (top_left_tile_x..bottom_right_tile_x + 1) |x| {
+                const tile_type = state.tile_map.data[y * state.tile_map.tile_width + x];
+                const x_position = @as(f32, @floatFromInt(x)) * tile_width - state.camera_x + screen_width / 2;
+                const y_position = @as(f32, @floatFromInt(y)) * tile_height - state.camera_y + screen_height / 2;
                 switch (tile_type) {
                     .floor => {
                         drawRectangle(
                             &engine.back_buffer,
-                            @as(f32, @floatFromInt(x)) * tile_width,
-                            @as(f32, @floatFromInt(y)) * tile_height,
+                            x_position,
+                            y_position,
                             tile_width,
                             tile_height,
                             floor_colour_r,
@@ -166,8 +202,8 @@ pub fn updateAndRender(
                     .wall => {
                         drawRectangle(
                             &engine.back_buffer,
-                            @as(f32, @floatFromInt(x)) * tile_width,
-                            @as(f32, @floatFromInt(y)) * tile_height,
+                            x_position,
+                            y_position,
                             tile_width,
                             tile_height,
                             wall_colour_r,
@@ -182,12 +218,12 @@ pub fn updateAndRender(
         }
     }
 
-    { // Draw player
+    { // Draw player at the center of the screen always
         // NOTE: The players anchor point is at the feet of the player
         drawRectangle(
             &engine.back_buffer,
-            state.player_x - player_half_width,
-            state.player_y - player_height,
+            screen_width / 2 - player_half_width,
+            screen_height / 2 - player_height,
             player_width,
             player_height,
             1.0,
@@ -215,16 +251,25 @@ fn drawRectangle(frame_buffer: *FrameBuffer, x: f32, y: f32, width: f32, height:
     // TODO: Consider blending
     _ = a;
     // NOTE: We are rounding here to if the position of the corner covers most of a pixel in x or y we will draw it.
-    var x_int: usize = @intFromFloat(@round(x));
-    var y_int: usize = @intFromFloat(@round(y));
-    var width_int: usize = @intFromFloat(@round(width));
-    var height_int: usize = @intFromFloat(@round(height));
+    const x_int: i32 = @intFromFloat(@round(x));
+    const y_int: i32 = @intFromFloat(@round(y));
+    const width_int: i32 = @intFromFloat(@round(width));
+    const height_int: i32 = @intFromFloat(@round(height));
+
+    // NOTE: If the position is too far off screen to draw a rectangle we dont draw it
+    if (y_int > frame_buffer.height or
+        x_int > frame_buffer.width or
+        y_int < std.math.negateCast(frame_buffer.height) catch unreachable or
+        x_int < std.math.negateCast(frame_buffer.width) catch unreachable)
+    {
+        return;
+    }
 
     // NOTE: Clamping so we dont overflow the buffer
-    x_int = std.math.clamp(x_int, 0, frame_buffer.width - 1);
-    y_int = std.math.clamp(y_int, 0, frame_buffer.height - 1);
-    width_int = std.math.clamp(width_int, 0, frame_buffer.width - x_int);
-    height_int = std.math.clamp(height_int, 0, frame_buffer.height - y_int);
+    const x_uint: usize = @intCast(std.math.clamp(x_int, 0, frame_buffer.width - 1));
+    const y_uint: usize = @intCast(std.math.clamp(y_int, 0, frame_buffer.height - 1));
+    const width_uint: usize = @intCast(std.math.clamp(width_int, 0, frame_buffer.width - x_int));
+    const height_uint: usize = @intCast(std.math.clamp(height_int, 0, frame_buffer.height - y_int));
 
     const r_int: u8 = @truncate(@as(u32, @intFromFloat(@round(r * 255.0))));
     const g_int: u8 = @truncate(@as(u32, @intFromFloat(@round(g * 255.0))));
@@ -234,9 +279,9 @@ fn drawRectangle(frame_buffer: *FrameBuffer, x: f32, y: f32, width: f32, height:
     const total_pixels: usize = @as(usize, @intCast(frame_buffer.width)) * @as(usize, @intCast(frame_buffer.height));
     const pixles_u32: []u32 = @ptrCast(frame_buffer.data[0 .. total_pixels * FrameBuffer.bytes_per_pixel]);
 
-    for (0..height_int) |j| {
-        for (0..width_int) |i| {
-            pixles_u32[(y_int + j) * frame_buffer.width + x_int + i] = colour;
+    for (0..height_uint) |j| {
+        for (0..width_uint) |i| {
+            pixles_u32[(y_uint + j) * frame_buffer.width + x_uint + i] = colour;
         }
     }
 }
