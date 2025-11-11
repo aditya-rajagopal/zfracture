@@ -5,15 +5,28 @@ const FrameBuffer = fracture.FrameBuffer;
 
 // NOTE: PoE1 and 2 do not have plyaer inertia.
 
+// @HACK:
+const NUM_ENEMIES = 10;
+
 pub const GameState = struct {
     impact_sound: fracture.wav.WavData,
     pop_sound: fracture.wav.WavData,
 
     // FIXME:
     tile_map: TileMap,
+
     // FIXME: In screen space currently
     camera_x: f32,
     camera_y: f32,
+
+    player: Entity,
+    enemies: [NUM_ENEMIES]Entity,
+};
+
+const Entity = struct {
+    position_x: f32,
+    position_y: f32,
+    movement_speed: f32,
 };
 
 const TileType = enum(u8) {
@@ -76,15 +89,21 @@ pub fn init(engine: *EngineState) *anyopaque {
         // Player starts in the middle of the map
         game_state.camera_x = tile_map_width / 2;
         game_state.camera_y = tile_map_height / 2;
+        game_state.player.position_x = game_state.camera_x;
+        game_state.player.position_y = game_state.camera_y;
+        game_state.player.movement_speed = 32.0 * 5;
+
+        for (0..NUM_ENEMIES) |i| {
+            game_state.enemies[i].position_x = game_state.camera_x + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.back_buffer.width - 50))) / 2.0;
+            game_state.enemies[i].position_y = game_state.camera_y + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.back_buffer.height - 50))) / 2.0;
+            game_state.enemies[i].movement_speed = 32.0 * 4;
+        }
     }
 
     return @ptrCast(game_state);
 }
 
 pub fn deinit(_: *EngineState, _: *anyopaque) void {}
-
-// HACK: Move this to player stats
-const player_speed: f32 = 32.0 * 5;
 
 pub fn updateAndRender(
     engine: *EngineState,
@@ -139,8 +158,8 @@ pub fn updateAndRender(
             delta_y = delta_y * magnitude_inv;
         }
 
-        var new_camera_x = state.camera_x + delta_x * player_speed * engine.delta_time / 1000.0;
-        var new_camera_y = state.camera_y + delta_y * player_speed * engine.delta_time / 1000.0;
+        var new_camera_x = state.camera_x + delta_x * state.player.movement_speed * engine.delta_time / 1000.0;
+        var new_camera_y = state.camera_y + delta_y * state.player.movement_speed * engine.delta_time / 1000.0;
 
         // Clamp player position to the tile map. The tile map top right is the 0, 0 position.
 
@@ -160,6 +179,28 @@ pub fn updateAndRender(
 
         state.camera_x = new_camera_x;
         state.camera_y = new_camera_y;
+        state.player.position_x = new_camera_x;
+        state.player.position_y = new_camera_y;
+    }
+
+    { // Enemy movement
+        // NOTE: The enemies move towards the player always
+
+        for (0..state.enemies.len) |i| {
+            const enemy = &state.enemies[i];
+            const player = &state.player;
+            var delta_x: f32 = player.position_x - enemy.position_x;
+            var delta_y: f32 = player.position_y - enemy.position_y;
+            const magnitude = std.math.sqrt(delta_x * delta_x + delta_y * delta_y);
+            if (magnitude > 0.0) {
+                const magnitude_inv: f32 = 1.0 / magnitude;
+                delta_x = delta_x * magnitude_inv;
+                delta_y = delta_y * magnitude_inv;
+            }
+
+            enemy.position_x = enemy.position_x + delta_x * enemy.movement_speed * engine.delta_time / 1000.0;
+            enemy.position_y = enemy.position_y + delta_y * enemy.movement_speed * engine.delta_time / 1000.0;
+        }
     }
 
     { // Draw tile map
@@ -220,6 +261,24 @@ pub fn updateAndRender(
                     else => {},
                 }
             }
+        }
+    }
+
+    { // Draw enemies
+        for (0..state.enemies.len) |i| {
+            const enemey_screen_x = state.enemies[i].position_x - state.camera_x + screen_width / 2;
+            const enemey_screen_y = state.enemies[i].position_y - state.camera_y + screen_height / 2;
+            drawRectangle(
+                &engine.back_buffer,
+                enemey_screen_x - player_half_width,
+                enemey_screen_y - player_height,
+                player_width,
+                player_height,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+            );
         }
     }
 
