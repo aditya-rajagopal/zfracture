@@ -32,7 +32,7 @@ const tile_width: f32 = 32.0;
 const tile_height: f32 = 32.0;
 
 const player_width: f32 = tile_width;
-const player_height: f32 = tile_height * 2.0;
+const player_height: f32 = tile_height;
 const player_half_width: f32 = player_width / 2.0;
 
 pub fn init(engine: *EngineState) *anyopaque {
@@ -83,6 +83,7 @@ pub fn init(engine: *EngineState) *anyopaque {
 
 pub fn deinit(_: *EngineState, _: *anyopaque) void {}
 
+// HACK: Move this to player stats
 const player_speed: f32 = 32.0 * 5;
 
 pub fn updateAndRender(
@@ -154,6 +155,9 @@ pub fn updateAndRender(
             tile_map_height,
         );
 
+        // @INCOMPLETE: Collision detection against tilemap
+        // @TODO: Change coordinate system from pixels to meters
+
         state.camera_x = new_camera_x;
         state.camera_y = new_camera_y;
     }
@@ -177,6 +181,7 @@ pub fn updateAndRender(
 
         const bottom_right_tile_x_int: i32 = @intFromFloat(@ceil((state.camera_x + screen_width / 2) / tile_width));
         const bottom_right_tile_x: usize = @intCast(std.math.clamp(bottom_right_tile_x_int, 0, state.tile_map.tile_width - 1));
+
         const bottom_right_tile_y_int: i32 = @intFromFloat(@ceil((state.camera_y + screen_height / 2) / tile_height));
         const bottom_right_tile_y: usize = @intCast(std.math.clamp(bottom_right_tile_y_int, 0, state.tile_map.tile_height - 1));
 
@@ -259,8 +264,8 @@ fn drawRectangle(frame_buffer: *FrameBuffer, x: f32, y: f32, width: f32, height:
     // NOTE: If the position is too far off screen to draw a rectangle we dont draw it
     if (y_int > frame_buffer.height or
         x_int > frame_buffer.width or
-        y_int < std.math.negateCast(frame_buffer.height) catch unreachable or
-        x_int < std.math.negateCast(frame_buffer.width) catch unreachable)
+        y_int < -width_int or
+        x_int < -height_int)
     {
         return;
     }
