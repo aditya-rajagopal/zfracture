@@ -4,8 +4,16 @@ const EngineState = fracture.EngineState;
 const FrameBuffer = fracture.FrameBuffer;
 // NOTE: PoE1 and 2 do not have plyaer inertia.
 
+// @TODO: Full screen support and for debug builds only render the exact aspect ration of the screen buffer and leave
+// the rest of the screen blank.
 // @TODO: Change coordinate system from pixels to meters
+// @TODO: Collision detetion.
 // @TODO: Entity type so that we can store a contiguous array of entities
+// @TODO: Flow field for pathing?
+// @TODO: Debug wireframe rectangles, lines and points
+// @TODO: Player movement code unification so that it handles all keyboard events it needs to.
+// @TODO: Enemies have a range where they leash to the player. We can simulate their movement only when they need to start moving
+// towards or attack the player. There is also a range where they unleash from the player and stay where they are.
 // @TODO: We need to simulate entities that are outside the screen. We can divide the Map into chunks and only update
 // the entities that are in chunks the player has visited. We will not have a very large world so we will load all
 // the entities needed for the particular level at once as dormant entities and add them to the active entity list
@@ -16,20 +24,42 @@ const FrameBuffer = fracture.FrameBuffer;
 // The simulation region is a rectangle that is centered around the player.
 // We should spawn all entities that are needed for a level, even the ones that are "hidden" from the player and only
 // activate when the player does certain actions like activating a mechanic or triggering a boss fight.
+// @TODO: Arena allocator that is simpler than the one zig uses.
+// @TODO: Spawn enemies all over the map.
+// @TODO: Enemy attacks should spawn a damage box that contains the final damage calculated. The enemy attacks
+// could be at different ranges and only deal damage if the player is in the range.
 // @TODO: Level generation. Need a tool to help generate levels. This will need to also set masks for different types
 // of terrains, eg. walkable, impassable, impassable but projectiles can go through, etc. As well as providing locations
 // for specific events to be able to span as well as posssible spawn locations for enemies. I will not be doing complete
 // random generation. I will use the PoE approach of creating a template for a level and then generating variations based
 // on this template and at runtime choose one variation to load.
-// @TODO: Collision detetion.
 // @TODO: Entitiy system that allows me to spawn arbitrary entities. Maybe have a separate slot for attack hit boxes?
-// @TODO: Create vector math.
-// @TODO: Enemies have a range where they leash to the player. We can simulate their movement only when they need to start moving
-// towards or attack the player. There is also a range where they unleash from the player and stay where they are.
-// @TODO: Do we want enemy behaviour that is simulated when not interacting with the player? For example patrolling or
-// two groups of enemies that are fighing each other.
 // @TODO: We need a way to change levels. Unload the previous level into disk so that the state is saved if the player
 // wants to go back and load the new level along with all the assets and entities that are needed for it. We could
+// @TODO: Need a simple debug UI system.
+// @TODO: In game debug console
+//
+// @TODO: Create vector math.
+// LOADERS:
+//      @TODO: Load OBJ files and materials
+//      @TODO: Load BMP/PNG files
+//      @TODO: LOAD OGG files
+//      @TODO: Load FBX/GLTF files?
+//      @TODO: Load Fonts with TTF/OTF files (maybe create a bitmap for the fonts). Have default font for the engine.
+//      @TODO: Load Text databases for ingame text
+// Renderer:
+//      @TODO: Triangle rendering: We might be able to speed up rendering with simd by doing checks in a 8x8 grid at once.
+//      @TODO: Start with doing 3D geometry with software rendering. Swtich to OpenGL/Vulkan later.
+//      @TODO: Premulitplied alpha blending for sprites and other geometry. Convert from sRGB to linear space and back.
+//      @TODO: Subpixel rendering
+//      @TODO: Support normal maps
+//      @TODO: Lighting
+//      @TODO: Depth buffer and depth testing
+//      @TODO: Render command queues to allow for culling and other optimizations
+//      @TODO: Render to textures
+//
+// @TODO: Do we want enemy behaviour that is simulated when not interacting with the player? For example patrolling or
+// two groups of enemies that are fighing each other: YES
 
 // @HACK:
 const NUM_ENEMIES = 10;
@@ -59,24 +89,60 @@ const Entity = struct {
     render_colour: Color,
 };
 
-// @TODO: This needs to be a Vector(4, f32)
+test "colour size" {
+    std.log.err("sizeof(Color) = {}", .{@sizeOf(Color)});
+    std.log.err("Alignment of Color = {}", .{@alignOf(Color)});
+    const colour: Color = .init(0.0, 0.0, 0.0, 0.0);
+    std.log.err("Alignment of Color = {}", .{std.mem.isAligned(@intFromPtr(&colour), 16)});
+}
+
 const Color = struct {
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
+    data: [4]f32 align(16),
 
     const Self = @This();
 
-    pub inline fn r8b8g8(self: Self) u32 {
-        // @TODO: This can be simded
-        const r_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.r * 255.0))));
-        const g_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.g * 255.0))));
-        const b_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.b * 255.0))));
-        const colour: u32 =
-            (@as(u32, @intCast(r_int)) << 16) |
-            (@as(u32, @intCast(g_int)) << 8) |
-            @as(u32, @intCast(b_int));
+    pub inline fn init(_r: f32, _g: f32, _b: f32, _a: f32) Self {
+        return .{ .data = .{ _r, _g, _b, _a } };
+    }
+
+    pub inline fn r(self: Self) f32 {
+        return self.data[0];
+    }
+
+    pub inline fn g(self: Self) f32 {
+        return self.data[1];
+    }
+
+    pub inline fn b(self: Self) f32 {
+        return self.data[2];
+    }
+
+    pub inline fn a(self: Self) f32 {
+        return self.data[3];
+    }
+
+    const shifts: @Vector(4, u32) = .{ std.math.pow(u32, 2, 16), std.math.pow(u32, 2, 8), 1, std.math.pow(u32, 2, 24) };
+    const scale: @Vector(4, f32) = @splat(255.0);
+    const lower_8bits_mask: @Vector(4, u32) = .{ 0xFF, 0xFF, 0xFF, 0xFF };
+
+    // @TODO: inline?
+    pub fn a8r8g8b8(self: Self) u32 {
+        // @TODO: Should this can be simded?
+        var vec4: @Vector(4, f32) = @bitCast(self.data);
+        vec4 = vec4 * scale;
+        const vec4_ints: @Vector(4, u32) = @intFromFloat(vec4);
+        const vec4_shifted = (vec4_ints & lower_8bits_mask) * shifts;
+        const colour: u32 = @reduce(.Or, vec4_shifted);
+
+        // const r_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.r * 255.0))));
+        // const g_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.g * 255.0))));
+        // const b_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.b * 255.0))));
+        // const a_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.a * 255.0))));
+        // const colour: u32 =
+        //     (@as(u32, @intCast(a_int)) << 24) |
+        //     (@as(u32, @intCast(r_int)) << 16) |
+        //     (@as(u32, @intCast(g_int)) << 8) |
+        //     @as(u32, @intCast(b_int));
         return colour;
     }
 };
@@ -158,7 +224,7 @@ pub fn init(engine: *EngineState) *anyopaque {
         game_state.player.stats.movement_speed = 32.0 * 5;
         game_state.player.stats.current_health = 100;
         game_state.player.stats.max_health = 100;
-        game_state.player.render_colour = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+        game_state.player.render_colour = .init(1.0, 0.0, 0.0, 1.0);
 
         for (0..NUM_ENEMIES) |i| {
             game_state.enemies[i].position_x = game_state.camera_x + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.back_buffer.width - 50))) / 2.0;
@@ -166,7 +232,7 @@ pub fn init(engine: *EngineState) *anyopaque {
             game_state.enemies[i].stats.movement_speed = 32.0 * 4.5;
             game_state.enemies[i].stats.current_health = 100;
             game_state.enemies[i].stats.max_health = 100;
-            game_state.enemies[i].render_colour = .{ .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
+            game_state.enemies[i].render_colour = .init(0.0, 0.0, 1.0, 1.0);
         }
     }
 
@@ -258,8 +324,6 @@ pub fn updateAndRender(
         // NOTE: The enemies move towards the player always
         // @TODO: Enemey collision detection
         // @TODO: Spacial partitioning for enemies to reduce the number of collision checks
-        // @TODO: Enemy attacks should spawn a damage box that contains the final damage calculated. The enemy attacks
-        // could be at different ranges and only deal damage if the player is in the range.
         // @TODO: Maybe a flow field for path finding?
 
         for (0..state.enemies.len) |i| {
@@ -280,8 +344,8 @@ pub fn updateAndRender(
     }
 
     { // Draw tile map
-        const floor_colour: Color = .{ .r = 0.043, .g = 0.635, .b = 0.000, .a = 1.0 };
-        const wall_colour: Color = .{ .r = 0.400, .g = 0.400, .b = 0.400, .a = 1.0 };
+        const floor_colour: Color = .init(0.043, 0.635, 0.00, 1.0);
+        const wall_colour: Color = .init(0.400, 0.400, 0.400, 1.0);
 
         // Player is at the center of the screen always so draw the player there and the camera moves with the player
         // Based on the player position figure out the tiles we need to draw
@@ -371,6 +435,7 @@ fn clearScreen(frame_buffer: *FrameBuffer, r: f32, g: f32, b: f32) void {
 }
 
 fn drawRectangle(frame_buffer: *FrameBuffer, x: f32, y: f32, width: f32, height: f32, colour: Color) void {
+    @setFloatMode(.optimized);
     // TODO: Consider blending
     // NOTE: We are rounding here to if the position of the corner covers most of a pixel in x or y we will draw it.
     const x_int: i32 = @intFromFloat(@round(x));
@@ -394,7 +459,7 @@ fn drawRectangle(frame_buffer: *FrameBuffer, x: f32, y: f32, width: f32, height:
     const width_uint: usize = @intCast(std.math.clamp(width_int, 0, frame_buffer.width - x_int));
     const height_uint: usize = @intCast(std.math.clamp(height_int, 0, frame_buffer.height - y_int));
 
-    const colour_u32: u32 = colour.r8b8g8();
+    const colour_u32: u32 = colour.a8r8g8b8();
 
     const total_pixels: usize = @as(usize, @intCast(frame_buffer.width)) * @as(usize, @intCast(frame_buffer.height));
     const pixles_u32: []u32 = @ptrCast(frame_buffer.data[0 .. total_pixels * FrameBuffer.bytes_per_pixel]);
