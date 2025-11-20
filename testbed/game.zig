@@ -2,11 +2,13 @@ const std = @import("std");
 const fracture = @import("fracture");
 const EngineState = fracture.EngineState;
 const FrameBuffer = fracture.FrameBuffer;
+const Renderer = fracture.Renderer;
+const Color = fracture.Color;
 // NOTE: PoE1 and 2 do not have plyaer inertia.
 
+// @TODO: Change coordinate system from pixels to meters
 // @TODO: Full screen support and for debug builds only render the exact aspect ration of the screen buffer and leave
 // the rest of the screen blank.
-// @TODO: Change coordinate system from pixels to meters
 // @TODO: Collision detetion.
 // @TODO: Entity type so that we can store a contiguous array of entities
 // @TODO: Flow field for pathing?
@@ -47,6 +49,7 @@ const FrameBuffer = fracture.FrameBuffer;
 //      @TODO: Load FBX/GLTF files?
 //      @TODO: Load Fonts with TTF/OTF files (maybe create a bitmap for the fonts). Have default font for the engine.
 //      @TODO: Load Text databases for ingame text
+//      @TODO: Custom asset pipeline for loading assets
 // Renderer:
 //      @TODO: Triangle rendering: We might be able to speed up rendering with simd by doing checks in a 8x8 grid at once.
 //      @TODO: Start with doing 3D geometry with software rendering. Swtich to OpenGL/Vulkan later.
@@ -89,64 +92,6 @@ const Entity = struct {
     render_colour: Color,
 };
 
-test "colour size" {
-    std.log.err("sizeof(Color) = {}", .{@sizeOf(Color)});
-    std.log.err("Alignment of Color = {}", .{@alignOf(Color)});
-    const colour: Color = .init(0.0, 0.0, 0.0, 0.0);
-    std.log.err("Alignment of Color = {}", .{std.mem.isAligned(@intFromPtr(&colour), 16)});
-}
-
-const Color = struct {
-    data: [4]f32 align(16),
-
-    const Self = @This();
-
-    pub inline fn init(_r: f32, _g: f32, _b: f32, _a: f32) Self {
-        return .{ .data = .{ _r, _g, _b, _a } };
-    }
-
-    pub inline fn r(self: Self) f32 {
-        return self.data[0];
-    }
-
-    pub inline fn g(self: Self) f32 {
-        return self.data[1];
-    }
-
-    pub inline fn b(self: Self) f32 {
-        return self.data[2];
-    }
-
-    pub inline fn a(self: Self) f32 {
-        return self.data[3];
-    }
-
-    const shifts: @Vector(4, u32) = .{ std.math.pow(u32, 2, 16), std.math.pow(u32, 2, 8), 1, std.math.pow(u32, 2, 24) };
-    const scale: @Vector(4, f32) = @splat(255.0);
-    const lower_8bits_mask: @Vector(4, u32) = .{ 0xFF, 0xFF, 0xFF, 0xFF };
-
-    // @TODO: inline?
-    pub fn a8r8g8b8(self: Self) u32 {
-        // @TODO: Should this can be simded?
-        var vec4: @Vector(4, f32) = @bitCast(self.data);
-        vec4 = vec4 * scale;
-        const vec4_ints: @Vector(4, u32) = @intFromFloat(vec4);
-        const vec4_shifted = (vec4_ints & lower_8bits_mask) * shifts;
-        const colour: u32 = @reduce(.Or, vec4_shifted);
-
-        // const r_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.r * 255.0))));
-        // const g_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.g * 255.0))));
-        // const b_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.b * 255.0))));
-        // const a_int: u8 = @truncate(@as(u32, @intFromFloat(@round(self.a * 255.0))));
-        // const colour: u32 =
-        //     (@as(u32, @intCast(a_int)) << 24) |
-        //     (@as(u32, @intCast(r_int)) << 16) |
-        //     (@as(u32, @intCast(g_int)) << 8) |
-        //     @as(u32, @intCast(b_int));
-        return colour;
-    }
-};
-
 const EntityType = enum(u8) {
     player,
     skeleton,
@@ -179,8 +124,8 @@ const player_half_width: f32 = player_width / 2.0;
 
 pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
-    game_state.camera_x = @as(f32, @floatFromInt(engine.back_buffer.width)) / 2;
-    game_state.camera_y = @as(f32, @floatFromInt(engine.back_buffer.height)) / 2;
+    game_state.camera_x = @as(f32, @floatFromInt(engine.renderer.back_buffer.width)) / 2;
+    game_state.camera_y = @as(f32, @floatFromInt(engine.renderer.back_buffer.height)) / 2;
     const impact_sound = std.fs.cwd().readFileAlloc(
         "assets/sounds/impactMetal_medium_000-converted.wav",
         engine.transient_allocator,
@@ -224,15 +169,15 @@ pub fn init(engine: *EngineState) *anyopaque {
         game_state.player.stats.movement_speed = 32.0 * 5;
         game_state.player.stats.current_health = 100;
         game_state.player.stats.max_health = 100;
-        game_state.player.render_colour = .init(1.0, 0.0, 0.0, 1.0);
+        game_state.player.render_colour = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
         for (0..NUM_ENEMIES) |i| {
-            game_state.enemies[i].position_x = game_state.camera_x + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.back_buffer.width - 50))) / 2.0;
-            game_state.enemies[i].position_y = game_state.camera_y + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.back_buffer.height - 50))) / 2.0;
+            game_state.enemies[i].position_x = game_state.camera_x + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.renderer.back_buffer.width - 50))) / 2.0;
+            game_state.enemies[i].position_y = game_state.camera_y + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.renderer.back_buffer.height - 50))) / 2.0;
             game_state.enemies[i].stats.movement_speed = 32.0 * 4.5;
             game_state.enemies[i].stats.current_health = 100;
             game_state.enemies[i].stats.max_health = 100;
-            game_state.enemies[i].render_colour = .init(0.0, 0.0, 1.0, 1.0);
+            game_state.enemies[i].render_colour = .{ .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
         }
     }
 
@@ -245,11 +190,12 @@ pub fn updateAndRender(
     engine: *EngineState,
     game_state: *anyopaque,
 ) bool {
+    const renderer: *Renderer = &engine.renderer;
     const state: *GameState = @ptrCast(@alignCast(game_state));
     var running: bool = true;
 
     // NOTE: Clear to magenta
-    clearScreen(&engine.back_buffer, 1.0, 0.0, 1.0);
+    renderer.clearScreen(1.0, 0.0, 1.0);
 
     if (engine.input.isKeyDown(.escape)) {
         running = false;
@@ -263,8 +209,8 @@ pub fn updateAndRender(
         _ = engine.sound.playSound(state.impact_sound.data, .{});
     }
 
-    const screen_width = @as(f32, @floatFromInt(engine.back_buffer.width));
-    const screen_height = @as(f32, @floatFromInt(engine.back_buffer.height));
+    const screen_width = @as(f32, @floatFromInt(engine.renderer.back_buffer.width));
+    const screen_height = @as(f32, @floatFromInt(engine.renderer.back_buffer.height));
 
     // The limits in pixels for the tilemap
     const tile_map_width = @as(f32, @floatFromInt(state.tile_map.tile_width)) * tile_width;
@@ -344,8 +290,8 @@ pub fn updateAndRender(
     }
 
     { // Draw tile map
-        const floor_colour: Color = .init(0.043, 0.635, 0.00, 1.0);
-        const wall_colour: Color = .init(0.400, 0.400, 0.400, 1.0);
+        const floor_colour: Color = .{ .r = 0.043, .g = 0.635, .b = 0.00, .a = 1.0 };
+        const wall_colour: Color = .{ .r = 0.400, .g = 0.400, .b = 0.400, .a = 1.0 };
 
         // Player is at the center of the screen always so draw the player there and the camera moves with the player
         // Based on the player position figure out the tiles we need to draw
@@ -368,8 +314,7 @@ pub fn updateAndRender(
                 const y_position = @as(f32, @floatFromInt(y)) * tile_height - state.camera_y + screen_height / 2;
                 switch (tile_type) {
                     .floor => {
-                        drawRectangle(
-                            &engine.back_buffer,
+                        renderer.drawRectangle(
                             x_position,
                             y_position,
                             tile_width,
@@ -378,8 +323,7 @@ pub fn updateAndRender(
                         );
                     },
                     .wall => {
-                        drawRectangle(
-                            &engine.back_buffer,
+                        renderer.drawRectangle(
                             x_position,
                             y_position,
                             tile_width,
@@ -397,8 +341,7 @@ pub fn updateAndRender(
         for (0..state.enemies.len) |i| {
             const enemey_screen_x = state.enemies[i].position_x - state.camera_x + screen_width / 2;
             const enemey_screen_y = state.enemies[i].position_y - state.camera_y + screen_height / 2;
-            drawRectangle(
-                &engine.back_buffer,
+            renderer.drawRectangle(
                 enemey_screen_x - player_half_width,
                 enemey_screen_y - player_height,
                 player_width,
@@ -410,8 +353,7 @@ pub fn updateAndRender(
 
     { // Draw player at the center of the screen always
         // NOTE: The players anchor point is at the feet of the player
-        drawRectangle(
-            &engine.back_buffer,
+        renderer.drawRectangle(
             screen_width / 2 - player_half_width,
             screen_height / 2 - player_height,
             player_width,
@@ -421,52 +363,4 @@ pub fn updateAndRender(
     }
 
     return running;
-}
-
-fn clearScreen(frame_buffer: *FrameBuffer, r: f32, g: f32, b: f32) void {
-    const r_int: u8 = @truncate(@as(u32, @intFromFloat(@round(r * 255.0))));
-    const g_int: u8 = @truncate(@as(u32, @intFromFloat(@round(g * 255.0))));
-    const b_int: u8 = @truncate(@as(u32, @intFromFloat(@round(b * 255.0))));
-    const clear_colour: u32 = (@as(u32, @intCast(r_int)) << 16) | (@as(u32, @intCast(g_int)) << 8) | @as(u32, @intCast(b_int));
-
-    const total_pixels: usize = @as(usize, @intCast(frame_buffer.width)) * @as(usize, @intCast(frame_buffer.height));
-    const pixles_u32: []u32 = @ptrCast(frame_buffer.data[0 .. total_pixels * FrameBuffer.bytes_per_pixel]);
-    @memset(pixles_u32[0..total_pixels], clear_colour);
-}
-
-fn drawRectangle(frame_buffer: *FrameBuffer, x: f32, y: f32, width: f32, height: f32, colour: Color) void {
-    @setFloatMode(.optimized);
-    // TODO: Consider blending
-    // NOTE: We are rounding here to if the position of the corner covers most of a pixel in x or y we will draw it.
-    const x_int: i32 = @intFromFloat(@round(x));
-    const y_int: i32 = @intFromFloat(@round(y));
-    // @TODO: Should we do x + width and then round it?
-    const width_int: i32 = @intFromFloat(@round(width));
-    const height_int: i32 = @intFromFloat(@round(height));
-
-    // NOTE: If the position is too far off screen to draw a rectangle we dont draw it
-    if (y_int > frame_buffer.height or
-        x_int > frame_buffer.width or
-        y_int < -width_int or
-        x_int < -height_int)
-    {
-        return;
-    }
-
-    // NOTE: Clamping so we dont overflow the buffer and only draw the visible part of the rectangle
-    const x_uint: usize = @intCast(std.math.clamp(x_int, 0, frame_buffer.width - 1));
-    const y_uint: usize = @intCast(std.math.clamp(y_int, 0, frame_buffer.height - 1));
-    const width_uint: usize = @intCast(std.math.clamp(width_int, 0, frame_buffer.width - x_int));
-    const height_uint: usize = @intCast(std.math.clamp(height_int, 0, frame_buffer.height - y_int));
-
-    const colour_u32: u32 = colour.a8r8g8b8();
-
-    const total_pixels: usize = @as(usize, @intCast(frame_buffer.width)) * @as(usize, @intCast(frame_buffer.height));
-    const pixles_u32: []u32 = @ptrCast(frame_buffer.data[0 .. total_pixels * FrameBuffer.bytes_per_pixel]);
-
-    for (0..height_uint) |j| {
-        for (0..width_uint) |i| {
-            pixles_u32[(y_uint + j) * frame_buffer.width + x_uint + i] = colour_u32;
-        }
-    }
 }
