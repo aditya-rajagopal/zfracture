@@ -5,11 +5,12 @@ const windows = std.os.windows;
 const engine = @import("fracture");
 const EngineState = engine.EngineState;
 const MouseButton = engine.MouseButton;
+const Renderer = engine.Renderer;
+
 const Key = engine.Key;
 const KB = engine.KB;
 const MB = engine.MB;
 const GB = engine.GB;
-const FrameBuffer = engine.FrameBuffer;
 
 const win32 = engine.win32;
 
@@ -118,12 +119,12 @@ pub fn main() void {
     // TODO: We might lower this if we want a smaller memory footprint
     const max_window_width = 4096;
     const max_window_height = 2048;
-    const window_buffer_max_size = max_window_width * max_window_height * FrameBuffer.bytes_per_pixel;
+    const window_buffer_max_size = max_window_width * max_window_height * Renderer.bytes_per_pixel;
 
-    engine_state.back_buffer.width = 1280;
-    engine_state.back_buffer.height = 720;
-
-    engine_state.back_buffer.data = permanent_allocator.alignedAlloc(u8, .@"4", window_buffer_max_size) catch {
+    // TODO: Move to the renderer
+    engine_state.renderer.back_buffer.width = 1280;
+    engine_state.renderer.back_buffer.height = 720;
+    engine_state.renderer.back_buffer.data = permanent_allocator.alignedAlloc(u8, .@"4", window_buffer_max_size) catch {
         _ = win32.MessageBoxA(null, "Out of memory for back buffer allocation", "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
@@ -131,8 +132,8 @@ pub fn main() void {
     buffer_info = .{
         .bmiHeader = .{
             .biSize = @sizeOf(win32.BITMAPINFOHEADER),
-            .biWidth = @intCast(engine_state.back_buffer.width),
-            .biHeight = -@as(i32, @intCast(engine_state.back_buffer.height)),
+            .biWidth = @intCast(engine_state.renderer.back_buffer.width),
+            .biHeight = -@as(i32, @intCast(engine_state.renderer.back_buffer.height)),
             .biPlanes = 1,
             .biBitCount = 32,
             .biCompression = win32.BI_RGB,
@@ -148,8 +149,8 @@ pub fn main() void {
     };
     platform_state = createWindow(
         "Testbed",
-        engine_state.back_buffer.width,
-        engine_state.back_buffer.height,
+        engine_state.renderer.back_buffer.width,
+        engine_state.renderer.back_buffer.height,
     ) catch |err| {
         var buffer: [1024]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buffer, "Failed to initialize window: {s}", .{@errorName(err)}) catch unreachable;
@@ -212,9 +213,9 @@ pub fn main() void {
             window_height,
             0,
             0,
-            engine_state.back_buffer.width,
-            engine_state.back_buffer.height,
-            engine_state.back_buffer.data.ptr,
+            engine_state.renderer.back_buffer.width,
+            engine_state.renderer.back_buffer.height,
+            engine_state.renderer.back_buffer.data.ptr,
             &buffer_info,
         );
 

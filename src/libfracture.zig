@@ -6,6 +6,12 @@ pub const win32 = @import("windows/win32.zig");
 pub const wav = @import("wav.zig");
 pub const XAudio2 = @import("windows/xaudio2.zig");
 
+pub const Types = @import("types.zig");
+pub const Color = Types.Color;
+
+// TODO: Make a switch for which type of renderer we want to use
+pub const Renderer = @import("software_renderer.zig");
+
 // TODO: Currently this is a direct call into the platform api. We maybe can explore abstracting
 // the loading of sounds especially when IO is going to be abstrated out into jobs.
 pub const SoundSystem = switch (builtin.os.tag) {
@@ -30,9 +36,8 @@ pub const EngineState = struct {
     sound: SoundSystem,
     permanent_allocator: std.mem.Allocator,
     transient_allocator: std.mem.Allocator,
+    renderer: Renderer,
 
-    // TODO: This is till we have a proper renderer
-    back_buffer: FrameBuffer,
     delta_time: f32,
 };
 
@@ -55,13 +60,6 @@ pub fn GB(value: comptime_int) comptime_int {
 }
 
 // TODO: This needs to go into a renderer
-pub const FrameBuffer = struct {
-    width: u16,
-    height: u16,
-    data: []align(4) u8,
-
-    pub const bytes_per_pixel: usize = 4;
-};
 
 /// Enumeration of the keyboard keys and mouse buttons. The values are the same as the values in the windows API
 ///
