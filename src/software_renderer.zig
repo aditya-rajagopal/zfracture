@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 const types = @import("types.zig");
 const Color = types.Color;
@@ -6,7 +7,7 @@ const Color = types.Color;
 const Renderer = @This();
 
 back_buffer: FrameBuffer,
-meters_per_pixel: f32,
+pixels_per_meter: f32,
 camera_position: struct { x: f32, y: f32 },
 
 pub const FrameBuffer = struct {
@@ -19,7 +20,8 @@ pub const bytes_per_pixel: usize = 4;
 
 // TODO: This is basically setting the viewmatrix
 pub fn setMetersPerPixel(renderer: *Renderer, meters_per_pixel: f32) void {
-    renderer.meters_per_pixel = meters_per_pixel;
+    assert(meters_per_pixel != 0);
+    renderer.pixels_per_meter = 1.0 / meters_per_pixel;
 }
 
 pub fn clearScreen(renderer: *Renderer, r: f32, g: f32, b: f32) void {
@@ -39,11 +41,11 @@ pub fn drawRectangle(renderer: *Renderer, x: f32, y: f32, width: f32, height: f3
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
     // TODO: Consider blending
     // NOTE: We are rounding here to if the position of the corner covers most of a pixel in x or y we will draw it.
-    const x_int: i32 = @intFromFloat(@round(x));
-    const y_int: i32 = @intFromFloat(@round(y));
+    const x_int: i32 = @intFromFloat(@round(x * renderer.pixels_per_meter));
+    const y_int: i32 = @intFromFloat(@round(y * renderer.pixels_per_meter));
     // @TODO: Should we do x + width and then round it?
-    const width_int: i32 = @intFromFloat(@round(width));
-    const height_int: i32 = @intFromFloat(@round(height));
+    const width_int: i32 = @intFromFloat(@round(width * renderer.pixels_per_meter));
+    const height_int: i32 = @intFromFloat(@round(height * renderer.pixels_per_meter));
 
     // NOTE: If the position is too far off screen to draw a rectangle we dont draw it
     if (y_int > back_buffer.height or

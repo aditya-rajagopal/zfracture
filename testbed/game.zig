@@ -63,6 +63,7 @@ const Color = fracture.Color;
 //
 // @TODO: Do we want enemy behaviour that is simulated when not interacting with the player? For example patrolling or
 // two groups of enemies that are fighing each other: YES
+// @TODO: Deal with window resize.
 
 // @HACK:
 const NUM_ENEMIES = 10;
@@ -77,6 +78,8 @@ pub const GameState = struct {
     // FIXME: In screen space currently
     camera_x: f32,
     camera_y: f32,
+    view_half_width: f32,
+    view_half_height: f32,
 
     player: Entity,
     enemies: [NUM_ENEMIES]Entity,
@@ -115,8 +118,10 @@ const TileMap = struct {
     tile_height: u32,
 };
 
-const tile_width: f32 = 32.0;
-const tile_height: f32 = 32.0;
+const tile_width: f32 = 1.0;
+const tile_height: f32 = 1.0;
+
+const meters_per_pixel: f32 = 1.0 / 32.0;
 
 const player_width: f32 = tile_width;
 const player_height: f32 = tile_height;
@@ -126,6 +131,7 @@ pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
     game_state.camera_x = @as(f32, @floatFromInt(engine.renderer.back_buffer.width)) / 2;
     game_state.camera_y = @as(f32, @floatFromInt(engine.renderer.back_buffer.height)) / 2;
+
     const impact_sound = std.fs.cwd().readFileAlloc(
         "assets/sounds/impactMetal_medium_000-converted.wav",
         engine.transient_allocator,
@@ -149,6 +155,10 @@ pub fn init(engine: *EngineState) *anyopaque {
 
         @memset(game_state.tile_map.data, .floor);
 
+        // TODO: Make this something like a view matrix
+        game_state.view_half_width = @as(f32, @floatFromInt(engine.renderer.back_buffer.width)) * meters_per_pixel / 2.0;
+        game_state.view_half_height = @as(f32, @floatFromInt(engine.renderer.back_buffer.height)) * meters_per_pixel / 2.0;
+
         // Randomly generate some walls
         var wall_count: usize = 0;
         var rand = std.Random.DefaultPrng.init(12345);
@@ -158,28 +168,30 @@ pub fn init(engine: *EngineState) *anyopaque {
             const y = random.intRangeAtMost(u32, 0, game_state.tile_map.tile_height - 1);
             game_state.tile_map.data[y * game_state.tile_map.tile_width + x] = .wall;
         }
-        const tile_map_width = @as(f32, @floatFromInt(game_state.tile_map.tile_width)) * tile_width;
-        const tile_map_height = @as(f32, @floatFromInt(game_state.tile_map.tile_height)) * tile_height;
+        const tile_map_width = @as(f32, @floatFromInt(game_state.tile_map.tile_width));
+        const tile_map_height = @as(f32, @floatFromInt(game_state.tile_map.tile_height));
         // Player starts in the middle of the map
         game_state.camera_x = tile_map_width / 2;
         game_state.camera_y = tile_map_height / 2;
 
         game_state.player.position_x = game_state.camera_x;
         game_state.player.position_y = game_state.camera_y;
-        game_state.player.stats.movement_speed = 32.0 * 5;
+        game_state.player.stats.movement_speed = 5;
         game_state.player.stats.current_health = 100;
         game_state.player.stats.max_health = 100;
         game_state.player.render_colour = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
         for (0..NUM_ENEMIES) |i| {
-            game_state.enemies[i].position_x = game_state.camera_x + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.renderer.back_buffer.width - 50))) / 2.0;
-            game_state.enemies[i].position_y = game_state.camera_y + ((random.float(f32) * 2 - 1) * @as(f32, @floatFromInt(engine.renderer.back_buffer.height - 50))) / 2.0;
-            game_state.enemies[i].stats.movement_speed = 32.0 * 4.5;
+            game_state.enemies[i].position_x = game_state.camera_x + ((random.float(f32) * 2 - 1) * game_state.view_half_width);
+            game_state.enemies[i].position_y = game_state.camera_y + ((random.float(f32) * 2 - 1) * game_state.view_half_height);
+            game_state.enemies[i].stats.movement_speed = 4.5;
             game_state.enemies[i].stats.current_health = 100;
             game_state.enemies[i].stats.max_health = 100;
             game_state.enemies[i].render_colour = .{ .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
         }
     }
+
+    engine.renderer.setMetersPerPixel(meters_per_pixel);
 
     return @ptrCast(game_state);
 }
@@ -208,9 +220,6 @@ pub fn updateAndRender(
     if (engine.input.keyPressedThisFrame(.space)) {
         _ = engine.sound.playSound(state.impact_sound.data, .{});
     }
-
-    const screen_width = @as(f32, @floatFromInt(engine.renderer.back_buffer.width));
-    const screen_height = @as(f32, @floatFromInt(engine.renderer.back_buffer.height));
 
     // The limits in pixels for the tilemap
     const tile_map_width = @as(f32, @floatFromInt(state.tile_map.tile_width)) * tile_width;
@@ -247,8 +256,8 @@ pub fn updateAndRender(
 
         new_camera_x = std.math.clamp(
             new_camera_x,
-            player_half_width,
-            tile_map_width - player_half_width,
+            0,
+            tile_map_width,
         );
         new_camera_y = std.math.clamp(
             new_camera_y,
@@ -295,23 +304,24 @@ pub fn updateAndRender(
 
         // Player is at the center of the screen always so draw the player there and the camera moves with the player
         // Based on the player position figure out the tiles we need to draw
-        const top_left_tile_x_int: i32 = @intFromFloat(@floor((state.camera_x - screen_width / 2) / tile_width));
+        // NOTE: Culling what needs to be drawn. THis becomes frusturm culling when we move to 3D
+        const top_left_tile_x_int: i32 = @intFromFloat(@floor(state.camera_x - state.view_half_width));
         const top_left_tile_x: usize = @intCast(std.math.clamp(top_left_tile_x_int, 0, state.tile_map.tile_width - 1));
 
-        const top_left_tile_y_int: i32 = @intFromFloat(@floor((state.camera_y - screen_height / 2) / tile_height));
+        const top_left_tile_y_int: i32 = @intFromFloat(@floor(state.camera_y - state.view_half_height));
         const top_left_tile_y: usize = @intCast(std.math.clamp(top_left_tile_y_int, 0, state.tile_map.tile_height - 1));
 
-        const bottom_right_tile_x_int: i32 = @intFromFloat(@ceil((state.camera_x + screen_width / 2) / tile_width));
+        const bottom_right_tile_x_int: i32 = @intFromFloat(@ceil(state.camera_x + state.view_half_width));
         const bottom_right_tile_x: usize = @intCast(std.math.clamp(bottom_right_tile_x_int, 0, state.tile_map.tile_width - 1));
 
-        const bottom_right_tile_y_int: i32 = @intFromFloat(@ceil((state.camera_y + screen_height / 2) / tile_height));
+        const bottom_right_tile_y_int: i32 = @intFromFloat(@ceil(state.camera_y + state.view_half_height));
         const bottom_right_tile_y: usize = @intCast(std.math.clamp(bottom_right_tile_y_int, 0, state.tile_map.tile_height - 1));
 
         for (top_left_tile_y..bottom_right_tile_y + 1) |y| {
             for (top_left_tile_x..bottom_right_tile_x + 1) |x| {
                 const tile_type = state.tile_map.data[y * state.tile_map.tile_width + x];
-                const x_position = @as(f32, @floatFromInt(x)) * tile_width - state.camera_x + screen_width / 2;
-                const y_position = @as(f32, @floatFromInt(y)) * tile_height - state.camera_y + screen_height / 2;
+                const x_position = @as(f32, @floatFromInt(x)) - state.camera_x + state.view_half_width;
+                const y_position = @as(f32, @floatFromInt(y)) - state.camera_y + state.view_half_height;
                 switch (tile_type) {
                     .floor => {
                         renderer.drawRectangle(
@@ -339,8 +349,8 @@ pub fn updateAndRender(
 
     { // Draw enemies
         for (0..state.enemies.len) |i| {
-            const enemey_screen_x = state.enemies[i].position_x - state.camera_x + screen_width / 2;
-            const enemey_screen_y = state.enemies[i].position_y - state.camera_y + screen_height / 2;
+            const enemey_screen_x = state.enemies[i].position_x - state.camera_x + state.view_half_width;
+            const enemey_screen_y = state.enemies[i].position_y - state.camera_y + state.view_half_height;
             renderer.drawRectangle(
                 enemey_screen_x - player_half_width,
                 enemey_screen_y - player_height,
@@ -354,8 +364,8 @@ pub fn updateAndRender(
     { // Draw player at the center of the screen always
         // NOTE: The players anchor point is at the feet of the player
         renderer.drawRectangle(
-            screen_width / 2 - player_half_width,
-            screen_height / 2 - player_height,
+            state.view_half_width - player_half_width,
+            state.view_half_height - player_height / 2,
             player_width,
             player_height,
             state.player.render_colour,
