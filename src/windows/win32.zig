@@ -3,6 +3,8 @@ const testing = std.testing;
 const windows = std.os.windows;
 const Guid = std.os.windows.GUID;
 
+pub const HMONITOR = *opaque {};
+
 pub const DIB_USAGE = enum(u32) {
     RGB_COLORS = 0,
     PAL_COLORS = 1,
@@ -475,6 +477,14 @@ pub const MB_ICONEXCLAMATION = MESSAGEBOX_STYLE{
 };
 
 pub const WS_OVERLAPPED: u32 = @bitCast(WINDOW_STYLE{});
+pub const WS_OVERLAPPEDWINDOW = WINDOW_STYLE{
+    .TABSTOP = 1,
+    .GROUP = 1,
+    .THICKFRAME = 1,
+    .SYSMENU = 1,
+    .DLGFRAME = 1,
+    .BORDER = 1,
+};
 pub const WS_SYSMENU: u32 = @bitCast(WINDOW_STYLE{ .SYSMENU = 1 });
 pub const WS_CAPTION: u32 = @bitCast(WINDOW_STYLE{
     .DLGFRAME = 1,
@@ -988,6 +998,195 @@ pub const IUnknown = extern union {
         return self.vtable.Release(self);
     }
 };
+
+pub const WINDOW_LONG_PTR_INDEX = enum(i32) {
+    _EXSTYLE = -20,
+    P_HINSTANCE = -6,
+    P_HWNDPARENT = -8,
+    P_ID = -12,
+    _STYLE = -16,
+    P_USERDATA = -21,
+    P_WNDPROC = -4,
+    _,
+    pub const _HINSTANCE = .P_HINSTANCE;
+    pub const _ID = .P_ID;
+    pub const _USERDATA = .P_USERDATA;
+    pub const _WNDPROC = .P_WNDPROC;
+    pub const _HWNDPARENT = .P_HWNDPARENT;
+};
+pub const GWL_EXSTYLE = WINDOW_LONG_PTR_INDEX._EXSTYLE;
+pub const GWLP_HINSTANCE = WINDOW_LONG_PTR_INDEX.P_HINSTANCE;
+pub const GWLP_HWNDPARENT = WINDOW_LONG_PTR_INDEX.P_HWNDPARENT;
+pub const GWLP_ID = WINDOW_LONG_PTR_INDEX.P_ID;
+pub const GWL_STYLE = WINDOW_LONG_PTR_INDEX._STYLE;
+pub const GWLP_USERDATA = WINDOW_LONG_PTR_INDEX.P_USERDATA;
+pub const GWLP_WNDPROC = WINDOW_LONG_PTR_INDEX.P_WNDPROC;
+pub const GWL_HINSTANCE = WINDOW_LONG_PTR_INDEX.P_HINSTANCE;
+pub const GWL_ID = WINDOW_LONG_PTR_INDEX.P_ID;
+pub const GWL_USERDATA = WINDOW_LONG_PTR_INDEX.P_USERDATA;
+pub const GWL_WNDPROC = WINDOW_LONG_PTR_INDEX.P_WNDPROC;
+pub const GWL_HWNDPARENT = WINDOW_LONG_PTR_INDEX.P_HWNDPARENT;
+
+pub const WINDOWPLACEMENT_FLAGS = packed struct(u32) {
+    SETMINPOSITION: u1 = 0,
+    RESTORETOMAXIMIZED: u1 = 0,
+    ASYNCWINDOWPLACEMENT: u1 = 0,
+    _3: u1 = 0,
+    _4: u1 = 0,
+    _5: u1 = 0,
+    _6: u1 = 0,
+    _7: u1 = 0,
+    _8: u1 = 0,
+    _9: u1 = 0,
+    _10: u1 = 0,
+    _11: u1 = 0,
+    _12: u1 = 0,
+    _13: u1 = 0,
+    _14: u1 = 0,
+    _15: u1 = 0,
+    _16: u1 = 0,
+    _17: u1 = 0,
+    _18: u1 = 0,
+    _19: u1 = 0,
+    _20: u1 = 0,
+    _21: u1 = 0,
+    _22: u1 = 0,
+    _23: u1 = 0,
+    _24: u1 = 0,
+    _25: u1 = 0,
+    _26: u1 = 0,
+    _27: u1 = 0,
+    _28: u1 = 0,
+    _29: u1 = 0,
+    _30: u1 = 0,
+    _31: u1 = 0,
+};
+pub const WPF_ASYNCWINDOWPLACEMENT = WINDOWPLACEMENT_FLAGS{ .ASYNCWINDOWPLACEMENT = 1 };
+pub const WPF_RESTORETOMAXIMIZED = WINDOWPLACEMENT_FLAGS{ .RESTORETOMAXIMIZED = 1 };
+pub const WPF_SETMINPOSITION = WINDOWPLACEMENT_FLAGS{ .SETMINPOSITION = 1 };
+
+pub const SET_WINDOW_POS_FLAGS = packed struct(u32) {
+    NOSIZE: u1 = 0,
+    NOMOVE: u1 = 0,
+    NOZORDER: u1 = 0,
+    NOREDRAW: u1 = 0,
+    NOACTIVATE: u1 = 0,
+    DRAWFRAME: u1 = 0,
+    SHOWWINDOW: u1 = 0,
+    HIDEWINDOW: u1 = 0,
+    NOCOPYBITS: u1 = 0,
+    NOOWNERZORDER: u1 = 0,
+    NOSENDCHANGING: u1 = 0,
+    _11: u1 = 0,
+    _12: u1 = 0,
+    DEFERERASE: u1 = 0,
+    ASYNCWINDOWPOS: u1 = 0,
+    _15: u1 = 0,
+    _16: u1 = 0,
+    _17: u1 = 0,
+    _18: u1 = 0,
+    _19: u1 = 0,
+    _20: u1 = 0,
+    _21: u1 = 0,
+    _22: u1 = 0,
+    _23: u1 = 0,
+    _24: u1 = 0,
+    _25: u1 = 0,
+    _26: u1 = 0,
+    _27: u1 = 0,
+    _28: u1 = 0,
+    _29: u1 = 0,
+    _30: u1 = 0,
+    _31: u1 = 0,
+    // FRAMECHANGED (bit index 5) conflicts with DRAWFRAME
+    // NOREPOSITION (bit index 9) conflicts with NOOWNERZORDER
+};
+pub const SWP_ASYNCWINDOWPOS: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .ASYNCWINDOWPOS = 1 });
+pub const SWP_DEFERERASE: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .DEFERERASE = 1 });
+pub const SWP_DRAWFRAME: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .DRAWFRAME = 1 });
+pub const SWP_FRAMECHANGED: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .DRAWFRAME = 1 });
+pub const SWP_HIDEWINDOW: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .HIDEWINDOW = 1 });
+pub const SWP_NOACTIVATE: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOACTIVATE = 1 });
+pub const SWP_NOCOPYBITS: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOCOPYBITS = 1 });
+pub const SWP_NOMOVE: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOMOVE = 1 });
+pub const SWP_NOOWNERZORDER: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOOWNERZORDER = 1 });
+pub const SWP_NOREDRAW: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOREDRAW = 1 });
+pub const SWP_NOREPOSITION: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOOWNERZORDER = 1 });
+pub const SWP_NOSENDCHANGING: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOSENDCHANGING = 1 });
+pub const SWP_NOSIZE: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOSIZE = 1 });
+pub const SWP_NOZORDER: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .NOZORDER = 1 });
+pub const SWP_SHOWWINDOW: u32 = @bitCast(SET_WINDOW_POS_FLAGS{ .SHOWWINDOW = 1 });
+
+pub const WINDOWPLACEMENT = extern struct {
+    length: u32,
+    flags: WINDOWPLACEMENT_FLAGS,
+    showCmd: SHOW_WINDOW_CMD,
+    ptMinPosition: windows.POINT,
+    ptMaxPosition: windows.POINT,
+    rcNormalPosition: windows.RECT,
+};
+
+pub extern "user32" fn GetWindowLongA(
+    hWnd: ?windows.HWND,
+    nIndex: WINDOW_LONG_PTR_INDEX,
+) callconv(.winapi) i32;
+
+pub extern "user32" fn SetWindowLongA(
+    hWnd: ?windows.HWND,
+    nIndex: WINDOW_LONG_PTR_INDEX,
+    dwNewLong: i32,
+) callconv(.winapi) i32;
+
+pub extern "user32" fn GetWindowPlacement(
+    hWnd: ?windows.HWND,
+    lpwndpl: ?*WINDOWPLACEMENT,
+) callconv(.winapi) windows.BOOL;
+
+pub extern "user32" fn SetWindowPlacement(
+    hWnd: ?windows.HWND,
+    lpwndpl: ?*const WINDOWPLACEMENT,
+) callconv(.winapi) windows.BOOL;
+
+pub const HWND_TOPMOST: windows.HWND = typedConst(windows.HWND, -1);
+// pub const HWND_TOP: windows.HWND = typedConst(windows.HWND, 0);
+pub const HWND_BOTTOM: windows.HWND = typedConst(windows.HWND, 1);
+pub const HWND_NOTOPMOST: windows.HWND = typedConst(windows.HWND, -2);
+
+pub extern "user32" fn SetWindowPos(
+    hWnd: ?windows.HWND,
+    hWndInsertAfter: ?windows.HWND,
+    X: i32,
+    Y: i32,
+    cx: i32,
+    cy: i32,
+    uFlags: SET_WINDOW_POS_FLAGS,
+) callconv(.winapi) windows.BOOL;
+
+pub const MONITORINFO = extern struct {
+    cbSize: u32,
+    rcMonitor: windows.RECT,
+    rcWork: windows.RECT,
+    dwFlags: u32,
+};
+
+pub extern "user32" fn GetMonitorInfoA(
+    hMonitor: ?HMONITOR,
+    lpmi: ?*MONITORINFO,
+) callconv(.winapi) windows.BOOL;
+
+pub const MONITOR_FROM_FLAGS = enum(u32) {
+    NEAREST = 2,
+    NULL = 0,
+    PRIMARY = 1,
+};
+pub const MONITOR_DEFAULTTONEAREST = MONITOR_FROM_FLAGS.NEAREST;
+pub const MONITOR_DEFAULTTONULL = MONITOR_FROM_FLAGS.NULL;
+pub const MONITOR_DEFAULTTOPRIMARY = MONITOR_FROM_FLAGS.PRIMARY;
+
+pub extern "user32" fn MonitorFromWindow(
+    hwnd: ?windows.HWND,
+    dwFlags: MONITOR_FROM_FLAGS,
+) callconv(.winapi) ?HMONITOR;
 
 pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);

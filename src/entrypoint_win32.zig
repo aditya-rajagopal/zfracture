@@ -1,20 +1,18 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const windows = std.os.windows;
+const builtin = @import("builtin");
 
 const engine = @import("fracture");
 const EngineState = engine.EngineState;
 const MouseButton = engine.MouseButton;
 const Renderer = engine.Renderer;
-
 const Key = engine.Key;
 const KB = engine.KB;
 const MB = engine.MB;
 const GB = engine.GB;
-
 const win32 = engine.win32;
-
 const Game = @import("game");
+
 const DebugGame = switch (builtin.mode) {
     .Debug => struct {
         instance: std.DynLib,
@@ -29,6 +27,49 @@ const Win32PlatformState = struct {
     instance: windows.HINSTANCE,
     window: windows.HWND,
     device_context: windows.HDC,
+    window_placement: win32.WINDOWPLACEMENT,
+    fullscreen: bool = false,
+
+    const Self = @This();
+
+    fn toggleFullscreen(self: *Self) void {
+        const window_style = win32.GetWindowLongA(self.window, win32.GWL_STYLE);
+        const WS_OVERLAPPEDWINDOW = @as(i32, @bitCast(win32.WS_OVERLAPPEDWINDOW));
+
+        if ((window_style & WS_OVERLAPPEDWINDOW) != 0) {
+            var monitor_info: win32.MONITORINFO = .{
+                .cbSize = @sizeOf(win32.MONITORINFO),
+                .rcMonitor = undefined,
+                .rcWork = undefined,
+                .dwFlags = 0,
+            };
+            const result = win32.GetWindowPlacement(self.window, &self.window_placement);
+            const result2 = win32.GetMonitorInfoA(win32.MonitorFromWindow(self.window, win32.MONITOR_DEFAULTTOPRIMARY), &monitor_info);
+            if (result != 0 and result2 != 0) {
+                _ = win32.SetWindowLongA(self.window, win32.GWL_STYLE, window_style & ~WS_OVERLAPPEDWINDOW);
+                _ = win32.SetWindowPos(
+                    self.window,
+                    win32.HWND_TOPMOST,
+                    monitor_info.rcMonitor.left,
+                    monitor_info.rcMonitor.top,
+                    monitor_info.rcMonitor.right - monitor_info.rcMonitor.left,
+                    monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+                    @bitCast(win32.SWP_NOOWNERZORDER | win32.SWP_FRAMECHANGED),
+                );
+            }
+        } else {
+            _ = win32.SetWindowLongA(self.window, win32.GWL_STYLE, window_style | WS_OVERLAPPEDWINDOW);
+            _ = win32.SetWindowPos(
+                self.window,
+                null,
+                0,
+                0,
+                0,
+                0,
+                @bitCast(win32.SWP_NOMOVE | win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOOWNERZORDER | win32.SWP_FRAMECHANGED),
+            );
+        }
+    }
 };
 
 const WindowCreateError = error{
@@ -60,6 +101,8 @@ const dll_name = "./zig-out/bin/dynamic_game.dll";
 pub fn main() void {
     // Platform specific state
     var platform_state: Win32PlatformState = undefined;
+    platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
+
     var running: bool = false;
 
     // TODO: What do we do about the back buffer? This is a renderer specific thing
@@ -187,9 +230,12 @@ pub fn main() void {
     // NOTE: This will not fail on windows >= XP/2000
     var frame_timer = std.time.Timer.start() catch unreachable;
     const ms_per_ns: f32 = 1.0 / @as(f32, std.time.ns_per_ms);
+    _ = ms_per_ns;
+    const s_per_ns: f32 = 1.0 / @as(f32, std.time.ns_per_s);
 
     while (running) {
-        engine_state.delta_time = @as(f32, @floatFromInt(frame_timer.lap())) * ms_per_ns;
+        // @TODO: Should this be just stored as the raw ns in int
+        engine_state.delta_time = @as(f32, @floatFromInt(frame_timer.lap())) * s_per_ns;
         engine_state.input.update();
 
         running = pumpMessages(engine_state);
@@ -223,6 +269,13 @@ pub fn main() void {
 
         if (engine_state.input.isKeyDown(.@"2")) {
             std.log.info("Delta time: {d}", .{engine_state.delta_time});
+        }
+
+        // @HACK:
+        // @TODO: We need allow the game to decide when it wants to toggle full screen
+        if (engine_state.input.isKeyDown(.lalt) and engine_state.input.keyPressedThisFrame(.enter)) {
+            std.log.info("Toggle fullscreen", .{});
+            platform_state.toggleFullscreen();
         }
 
         // TODO: Frame rate limiter

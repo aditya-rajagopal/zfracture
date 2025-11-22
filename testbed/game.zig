@@ -1,13 +1,13 @@
 const std = @import("std");
+
 const fracture = @import("fracture");
 const EngineState = fracture.EngineState;
-const FrameBuffer = fracture.FrameBuffer;
 const Renderer = fracture.Renderer;
 const Color = fracture.Color;
+
 // NOTE: PoE1 and 2 do not have plyaer inertia.
 
-// @TODO: Change coordinate system from pixels to meters
-// @TODO: Full screen support and for debug builds only render the exact aspect ration of the screen buffer and leave
+// @TODO: for debug builds only render the exact aspect ration of the screen buffer and leave
 // the rest of the screen blank.
 // @TODO: Collision detetion.
 // @TODO: Entity type so that we can store a contiguous array of entities
@@ -40,6 +40,7 @@ const Color = fracture.Color;
 // wants to go back and load the new level along with all the assets and entities that are needed for it. We could
 // @TODO: Need a simple debug UI system.
 // @TODO: In game debug console
+// @TODO: Move sound to WASAPI and do the mixing by hand.
 //
 // @TODO: Create vector math.
 // LOADERS:
@@ -249,8 +250,8 @@ pub fn updateAndRender(
             delta_y = delta_y * magnitude_inv;
         }
 
-        var new_camera_x = state.camera_x + delta_x * state.player.stats.movement_speed * engine.delta_time / 1000.0;
-        var new_camera_y = state.camera_y + delta_y * state.player.stats.movement_speed * engine.delta_time / 1000.0;
+        var new_camera_x = state.camera_x + delta_x * state.player.stats.movement_speed * engine.delta_time;
+        var new_camera_y = state.camera_y + delta_y * state.player.stats.movement_speed * engine.delta_time;
 
         // Clamp player position to the tile map. The tile map top right is the 0, 0 position.
 
@@ -293,8 +294,8 @@ pub fn updateAndRender(
                 delta_y = delta_y * magnitude_inv;
             }
 
-            enemy.position_x = enemy.position_x + delta_x * enemy.stats.movement_speed * engine.delta_time / 1000.0;
-            enemy.position_y = enemy.position_y + delta_y * enemy.stats.movement_speed * engine.delta_time / 1000.0;
+            enemy.position_x = enemy.position_x + delta_x * enemy.stats.movement_speed * engine.delta_time;
+            enemy.position_y = enemy.position_y + delta_y * enemy.stats.movement_speed * engine.delta_time;
         }
     }
 

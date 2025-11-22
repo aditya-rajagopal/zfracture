@@ -73,3 +73,33 @@ pub fn drawRectangle(renderer: *Renderer, x: f32, y: f32, width: f32, height: f3
         }
     }
 }
+
+// INCOMPLETE
+pub const CommandType = enum(u8) {
+    set_view,
+    clear_screen,
+    draw_rectangle,
+};
+
+pub const SetViewCommand = struct {
+    meters_per_pixel: f32,
+};
+
+pub const ClearCommand = struct {
+    clear_color: Color,
+};
+
+pub const DrawRectangleCommand = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: Color,
+};
+
+pub const RenderQueue = struct {
+    commands: std.ArrayList(CommandType),
+    data: std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+};
+// INCOMPLETE

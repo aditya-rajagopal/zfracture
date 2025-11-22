@@ -266,6 +266,7 @@ pub const MouseButton = enum(u8) {
 const InputState = struct {
     // TODO(adi): Controller support
     // TODO(adi): Support for multiple controllers/keyboards
+    // @TODO: We need to make sure that alt is synonymous with lalt and ralt
     keys_ended_down: [NumKeys]u8,
     keys_half_transition_count: [NumKeys]u8,
     mouse_buttons_ended_down: [NumMouseButtons]u8,
