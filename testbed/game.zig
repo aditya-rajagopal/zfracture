@@ -7,10 +7,15 @@ const Color = fracture.Color;
 
 // NOTE: PoE1 and 2 do not have plyaer inertia.
 
-// @TODO: for debug builds only render the exact aspect ration of the screen buffer and leave
-// the rest of the screen blank.
+// @TODO: Textured rectangles
+//        1. Load textures from file: BMP and PNG
+//        2. accept UV coordinates for the rectangle from the textures
+//        3. Premultiply alpha for the textures
+//        4. Blit textures to the framebuffer
 // @TODO: Collision detetion.
 // @TODO: Entity type so that we can store a contiguous array of entities
+// @TODO: for debug builds only render the exact aspect ration of the screen buffer and leave
+// the rest of the screen blank.
 // @TODO: Flow field for pathing?
 // @TODO: Debug wireframe rectangles, lines and points
 // @TODO: Player movement code unification so that it handles all keyboard events it needs to.
@@ -354,7 +359,7 @@ pub fn updateAndRender(
             const enemey_screen_y = state.enemies[i].position_y - state.camera_y + state.view_half_height;
             renderer.drawRectangle(
                 enemey_screen_x - player_half_width,
-                enemey_screen_y - player_height,
+                enemey_screen_y - player_height / 2,
                 player_width,
                 player_height,
                 state.enemies[i].render_colour,

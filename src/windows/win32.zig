@@ -1188,6 +1188,8 @@ pub extern "user32" fn MonitorFromWindow(
     dwFlags: MONITOR_FROM_FLAGS,
 ) callconv(.winapi) ?HMONITOR;
 
+pub extern "user32" fn SetCursor(hCursor: ?windows.HCURSOR) callconv(.winapi) windows.HCURSOR;
+
 pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);
 }
