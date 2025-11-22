@@ -43,9 +43,17 @@ const Win32PlatformState = struct {
                 .rcWork = undefined,
                 .dwFlags = 0,
             };
+            // NOTE: Save the current window placement so we can restore it later.
             const result = win32.GetWindowPlacement(self.window, &self.window_placement);
-            const result2 = win32.GetMonitorInfoA(win32.MonitorFromWindow(self.window, win32.MONITOR_DEFAULTTOPRIMARY), &monitor_info);
+
+            const result2 = win32.GetMonitorInfoA(
+                // NOTE: In case windows cannot find which is the closest monitor we default to getting the primary monitor
+                win32.MonitorFromWindow(self.window, win32.MONITOR_DEFAULTTOPRIMARY),
+                &monitor_info,
+            );
             if (result != 0 and result2 != 0) {
+                // NOTE: We are changing the window style so that it has no borders or title bar and then
+                // setting the window position and size to be the top left corner of the monitor and the size of the monitor
                 _ = win32.SetWindowLongA(self.window, win32.GWL_STYLE, window_style & ~WS_OVERLAPPEDWINDOW);
                 _ = win32.SetWindowPos(
                     self.window,
@@ -59,6 +67,7 @@ const Win32PlatformState = struct {
             }
         } else {
             _ = win32.SetWindowLongA(self.window, win32.GWL_STYLE, window_style | WS_OVERLAPPEDWINDOW);
+            _ = win32.SetWindowPlacement(self.window, &self.window_placement);
             _ = win32.SetWindowPos(
                 self.window,
                 null,
@@ -77,6 +86,7 @@ const WindowCreateError = error{
     FailedToGetModuleHandle,
     FailedToRegisterWindowClass,
     FailedToGetDeviceContext,
+    FailedToLoadCursor,
 } || std.mem.Allocator.Error;
 
 pub const AppState = struct {
@@ -92,6 +102,10 @@ const game_api_default = engine.DebugGameDLLApi{
 
 const dll_name = "./zig-out/bin/dynamic_game.dll";
 
+// TODO: Only have these in internal builds
+var DBG_cursor: ?windows.HCURSOR = null;
+var DBG_show_cursor: bool = false;
+
 // LEFTOFF: Implement WAV file loading and decoding. Complete audio system
 // TODO: We currently have 2 arenas. One is for permanent allocations which is the static lifetime arena.
 // The ther is the transient arena which has the lifetime of a frame. We probably want more arenas with potentially
@@ -102,6 +116,10 @@ pub fn main() void {
     // Platform specific state
     var platform_state: Win32PlatformState = undefined;
     platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
+    DBG_cursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse {
+        _ = win32.MessageBoxA(null, "Failed to load cursor", "Error", win32.MB_ICONEXCLAMATION);
+        return;
+    };
 
     var running: bool = false;
 
@@ -271,6 +289,10 @@ pub fn main() void {
             std.log.info("Delta time: {d}", .{engine_state.delta_time});
         }
 
+        if (engine_state.input.keyPressedThisFrame(.@"3")) {
+            DBG_show_cursor = !DBG_show_cursor;
+        }
+
         // @HACK:
         // @TODO: We need allow the game to decide when it wants to toggle full screen
         if (engine_state.input.isKeyDown(.lalt) and engine_state.input.keyPressedThisFrame(.enter)) {
@@ -333,6 +355,7 @@ fn createWindow(
     window_class.lpfnWndProc = windowProc;
     window_class.hInstance = platform_state.instance;
     window_class.lpszClassName = engine_name;
+    // window_class.hCursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse return error.FailedToLoadCursor;
 
     const result = win32.RegisterClassA(&window_class);
     if (result == 0) {
@@ -394,6 +417,7 @@ fn showWindow(window: windows.HWND) void {
     _ = win32.ShowWindow(window, @bitCast(show_window_command_flags));
 }
 
+// @TODO: Thsis needs to be moved to the renderer
 inline fn stretchBlitBits(
     device_context: windows.HDC,
     dest_x: i32,
@@ -408,6 +432,9 @@ inline fn stretchBlitBits(
     frame_buffer_info: *const win32.BITMAPINFO,
 ) void {
     // TODO: We might want to blit to a zone that maintains the aspect ration of the rendered image.
+    // NOTE: When we are in full screen mode we want to blit to the entire screen. But
+    // when we are in windowed mode we only want to blit to the exact size of the frame buffer.
+
     const blit_result = win32.StretchDIBits(
         device_context,
         dest_x,
@@ -577,6 +604,13 @@ fn windowProc(
         },
         win32.WM_CLOSE => {
             _ = win32.PostQuitMessage(0);
+        },
+        win32.WM_SETCURSOR => {
+            if (DBG_show_cursor) {
+                _ = win32.SetCursor(DBG_cursor);
+            } else {
+                _ = win32.SetCursor(null);
+            }
         },
         // TODO: We might not want to resize the back buffer every time the window is resized.
         // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits to scale it.
