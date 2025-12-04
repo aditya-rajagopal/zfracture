@@ -2,12 +2,16 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 // TODO: Move this to a common module? So we can use platform specific code in many places
+// TODO: Seperate the win32 code into seperate files that has similar structure to the zig windows module
 pub const win32 = @import("windows/win32.zig");
-pub const wav = @import("wav.zig");
 pub const XAudio2 = @import("windows/xaudio2.zig");
 
-pub const Types = @import("types.zig");
+// pub const Platform = switch (builtin.os.tag) {
+// };
+
+const Types = @import("types.zig");
 pub const Color = Types.Color;
+pub const wav = @import("wav.zig");
 pub const input = @import("input.zig");
 
 // TODO: Make a switch for which type of renderer we want to use
