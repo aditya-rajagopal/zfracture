@@ -1,65 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
-
-// TODO: Move this to a common module? So we can use platform specific code in many places
-pub const win32 = @import("windows/win32.zig");
-pub const wav = @import("wav.zig");
-pub const XAudio2 = @import("windows/xaudio2.zig");
-
-pub const Types = @import("types.zig");
-pub const Color = Types.Color;
-
-// TODO: Make a switch for which type of renderer we want to use
-pub const Renderer = @import("software_renderer.zig");
-
-// TODO: Currently this is a direct call into the platform api. We maybe can explore abstracting
-// the loading of sounds especially when IO is going to be abstrated out into jobs.
-pub const SoundSystem = switch (builtin.os.tag) {
-    .windows => @import("windows/xaudio2.zig"),
-    else => @compileError("Unsupported OS"),
-};
-
-/// This struct will be used when the game is running in debug mode and/or we enable hot reoloading.
-/// So instead of importing the game as a module we will replace them with function pointers.
-pub const DebugGameDLLApi = struct {
-    pub const InitFn = *const fn (engine: *EngineState) callconv(.c) *anyopaque;
-    pub const DeinitFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) void;
-    pub const UpdateAndRenderFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) bool;
-
-    init: InitFn,
-    deinit: DeinitFn,
-    updateAndRender: UpdateAndRenderFn,
-};
-
-pub const EngineState = struct {
-    input: InputState,
-    sound: SoundSystem,
-    permanent_allocator: std.mem.Allocator,
-    transient_allocator: std.mem.Allocator,
-    renderer: Renderer,
-
-    delta_time: f32,
-};
-
-test "alignment" {
-    std.log.err("size of EngineState: {d}", .{@sizeOf(EngineState)});
-    std.log.err("alignment of EngineState: {d}", .{@alignOf(EngineState)});
-}
-
-// TODO: Move this to some common place
-pub fn KB(value: comptime_int) comptime_int {
-    return value * 1024;
-}
-
-pub fn MB(value: comptime_int) comptime_int {
-    return value * 1024 * 1024;
-}
-
-pub fn GB(value: comptime_int) comptime_int {
-    return value * 1024 * 1024 * 1024;
-}
-
-// TODO: This needs to go into a renderer
 
 /// Enumeration of the keyboard keys and mouse buttons. The values are the same as the values in the windows API
 ///
@@ -263,7 +202,7 @@ pub const MouseButton = enum(u8) {
     x2 = 0x04,
 };
 
-const InputState = struct {
+pub const InputState = struct {
     // TODO(adi): Controller support
     // TODO(adi): Support for multiple controllers/keyboards
     // @TODO: We need to make sure that alt is synonymous with lalt and ralt
