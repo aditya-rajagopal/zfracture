@@ -186,7 +186,7 @@ pub fn init(engine: *EngineState) *anyopaque {
         game_state.player.stats.movement_speed = 5;
         game_state.player.stats.current_health = 100;
         game_state.player.stats.max_health = 100;
-        game_state.player.render_colour = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+        game_state.player.render_colour = .red;
 
         for (0..NUM_ENEMIES) |i| {
             game_state.enemies[i].position_x = game_state.camera_x + ((random.float(f32) * 2 - 1) * game_state.view_half_width);
@@ -194,7 +194,7 @@ pub fn init(engine: *EngineState) *anyopaque {
             game_state.enemies[i].stats.movement_speed = 4.5;
             game_state.enemies[i].stats.current_health = 100;
             game_state.enemies[i].stats.max_health = 100;
-            game_state.enemies[i].render_colour = .{ .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
+            game_state.enemies[i].render_colour = .blue;
         }
     }
 
@@ -306,8 +306,8 @@ pub fn updateAndRender(
     }
 
     { // Draw tile map
-        const floor_colour: Color = .{ .r = 0.043, .g = 0.635, .b = 0.00, .a = 1.0 };
-        const wall_colour: Color = .{ .r = 0.400, .g = 0.400, .b = 0.400, .a = 1.0 };
+        const floor_colour: Color = .green;
+        const wall_colour: Color = .brown;
 
         // Player is at the center of the screen always so draw the player there and the camera moves with the player
         // Based on the player position figure out the tiles we need to draw
