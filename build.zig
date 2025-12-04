@@ -23,30 +23,30 @@ pub fn build(b: *std.Build) !void {
     // }).artifact("shader_compiler");
 
     // ================================== MODULES ==================================/
-    const libfracture = b.createModule(.{
-        .root_source_file = b.path("src/libfracture.zig"),
+    const fracture = b.createModule(.{
+        .root_source_file = b.path("src/fracture.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // TODO(adi): Import the module from a build file within the game folder
-    const game = b.createModule(.{
-        .root_source_file = b.path("testbed/game.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "fracture", .module = libfracture },
-        },
-    });
+    // const game = b.createModule(.{
+    //     .root_source_file = b.path("testbed/game.zig"),
+    //     .target = target,
+    //     .optimize = optimize,
+    //     .imports = &.{
+    //         .{ .name = "fracture", .module = fracture },
+    //     },
+    // });
 
     // ==================================== GAME ==================================/
     const entrypoint = b.createModule(.{
-        .root_source_file = b.path("src/entrypoint_win32.zig"),
+        .root_source_file = b.path("testbed/entrypoint_win32.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "fracture", .module = libfracture },
-            .{ .name = "game", .module = game },
+            .{ .name = "fracture", .module = fracture },
+            // .{ .name = "game", .module = game },
         },
     });
 
@@ -86,7 +86,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "fracture", .module = libfracture },
+            .{ .name = "fracture", .module = fracture },
         },
     });
     const game_dll = b.addLibrary(.{

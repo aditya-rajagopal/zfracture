@@ -1,29 +1,21 @@
+// @TODO: Move most things into fracture.
 const std = @import("std");
 const windows = std.os.windows;
 const builtin = @import("builtin");
 
-const engine = @import("fracture");
-const EngineState = engine.EngineState;
-const MouseButton = engine.MouseButton;
-const Renderer = engine.Renderer;
-const Key = engine.Key;
-const KB = engine.KB;
-const MB = engine.MB;
-const GB = engine.GB;
-const win32 = engine.win32;
-const Game = @import("game");
+const fr = @import("fracture");
+const MouseButton = fr.input.MouseButton;
+const Renderer = fr.Renderer;
+const Key = fr.input.Key;
+const KB = fr.KB;
+const MB = fr.MB;
+const GB = fr.GB;
+const win32 = fr.win32;
+const game = @import("game.zig");
+const common = @import("common.zig");
+const EngineState = common.EngineState;
 
-const DebugGame = switch (builtin.mode) {
-    .Debug => struct {
-        instance: std.DynLib,
-        is_loaded: bool = false,
-        time_stamp: i128 align(8),
-        game_api: engine.DebugGameDLLApi,
-    },
-    else => void,
-};
-
-const Win32PlatformState = struct {
+const Win32Platform = struct {
     instance: windows.HINSTANCE,
     window: windows.HWND,
     device_context: windows.HDC,
@@ -31,6 +23,83 @@ const Win32PlatformState = struct {
     fullscreen: bool = false,
 
     const Self = @This();
+
+    fn createWindow(
+        window_title: [*:0]const u8,
+        window_width: i32,
+        window_height: i32,
+    ) WindowCreateError!Win32Platform {
+        const engine_name: [*:0]const u8 = "zfracture";
+        var platform_state: Win32Platform = undefined;
+
+        platform_state.instance = win32.GetModuleHandleA(null) orelse return error.FailedToGetModuleHandle;
+
+        var window_class: win32.WNDCLASSA = .zero;
+        window_class.style = .{ .OWNDC = 1 };
+        window_class.lpfnWndProc = windowProc;
+        window_class.hInstance = platform_state.instance;
+        window_class.lpszClassName = engine_name;
+        // window_class.hCursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse return error.FailedToLoadCursor;
+
+        const result = win32.RegisterClassA(&window_class);
+        if (result == 0) {
+            _ = win32.MessageBoxA(null, "Windows Registration Failed", "Error", win32.MB_ICONEXCLAMATION);
+            return error.FailedToRegisterWindowClass;
+        }
+
+        var window_x: i32 = 0;
+        var window_y: i32 = 0;
+        var window_final_width: i32 = window_width;
+        var window_final_height: i32 = window_height;
+
+        var window_style: u32 = win32.WS_SYSMENU | win32.WS_CAPTION | win32.WS_OVERLAPPED;
+        const window_style_ex: u32 = win32.WS_EX_APPWINDOW;
+
+        window_style |= win32.WS_MINIMIZEBOX;
+        window_style |= win32.WS_MAXIMIZEBOX;
+        window_style |= win32.WS_THICKFRAME;
+
+        var border_rect: windows.RECT = std.mem.zeroes(windows.RECT);
+        _ = win32.AdjustWindowRectEx(&border_rect, @bitCast(window_style), 0, @bitCast(window_style_ex));
+
+        window_x += border_rect.left;
+        window_y += border_rect.right;
+
+        window_final_width += border_rect.right - border_rect.left;
+        window_final_height += border_rect.bottom - border_rect.top;
+
+        platform_state.window = win32.CreateWindowExA(
+            @bitCast(window_style_ex),
+            engine_name,
+            window_title,
+            @bitCast(window_style),
+            window_x,
+            window_y,
+            window_final_width,
+            window_final_height,
+            null,
+            null,
+            platform_state.instance,
+            null,
+        ) orelse {
+            _ = win32.MessageBoxA(null, "Windows Creation Failed", "Error", win32.MB_ICONEXCLAMATION);
+            return error.FailedToCreateWindow;
+        };
+        errdefer _ = win32.DestroyWindow(platform_state.window);
+
+        platform_state.device_context = win32.GetDC(platform_state.window) orelse return error.FailedToGetDeviceContext;
+        platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
+        return platform_state;
+    }
+
+    fn destroyWindow(self: *Win32Platform) void {
+        _ = win32.DestroyWindow(self.window);
+    }
+
+    fn showWindow(self: *Win32Platform) void {
+        const show_window_command_flags: u32 = win32.SW_SHOW;
+        _ = win32.ShowWindow(self.window, @bitCast(show_window_command_flags));
+    }
 
     fn toggleFullscreen(self: *Self) void {
         const window_style = win32.GetWindowLongA(self.window, win32.GWL_STYLE);
@@ -89,15 +158,37 @@ const WindowCreateError = error{
     FailedToLoadCursor,
 } || std.mem.Allocator.Error;
 
+/// This struct will be used when the game is running in debug mode and/or we enable hot reoloading.
+/// So instead of importing the game as a module we will replace them with function pointers.
+pub const DebugGameDLLApi = struct {
+    pub const InitFn = *const fn (engine: *EngineState) callconv(.c) *anyopaque;
+    pub const DeinitFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) void;
+    pub const UpdateAndRenderFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) bool;
+
+    init: InitFn,
+    deinit: DeinitFn,
+    updateAndRender: UpdateAndRenderFn,
+};
+
+const DebugGame = switch (builtin.mode) {
+    .Debug => struct {
+        instance: std.DynLib,
+        is_loaded: bool = false,
+        time_stamp: i128 align(8),
+        game_api: DebugGameDLLApi,
+    },
+    else => void,
+};
+
 pub const AppState = struct {
     engine: EngineState,
     debug_game: DebugGame,
 };
 
-const game_api_default = engine.DebugGameDLLApi{
-    .init = Game.init,
-    .deinit = Game.deinit,
-    .updateAndRender = Game.updateAndRender,
+const game_api_default = DebugGameDLLApi{
+    .init = game.init,
+    .deinit = game.deinit,
+    .updateAndRender = game.updateAndRender,
 };
 
 const dll_name = "./zig-out/bin/dynamic_game.dll";
@@ -114,8 +205,6 @@ var DBG_show_cursor: bool = false;
 // requested when one is run out.
 pub fn main() void {
     // Platform specific state
-    var platform_state: Win32PlatformState = undefined;
-    platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
     DBG_cursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse {
         _ = win32.MessageBoxA(null, "Failed to load cursor", "Error", win32.MB_ICONEXCLAMATION);
         return;
@@ -208,7 +297,7 @@ pub fn main() void {
             .{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 },
         },
     };
-    platform_state = createWindow(
+    var platform_state = Win32Platform.createWindow(
         "Testbed",
         engine_state.renderer.back_buffer.width,
         engine_state.renderer.back_buffer.height,
@@ -219,7 +308,7 @@ pub fn main() void {
         return;
     };
 
-    showWindow(platform_state.window);
+    platform_state.showWindow();
 
     switch (builtin.mode) {
         .Debug => {
@@ -240,7 +329,7 @@ pub fn main() void {
 
     const game_state: *anyopaque = switch (builtin.mode) {
         .Debug => app_state.debug_game.game_api.init(engine_state),
-        else => Game.init(engine_state),
+        else => game.init(engine_state),
     };
 
     running = true;
@@ -251,6 +340,8 @@ pub fn main() void {
     _ = ms_per_ns;
     const s_per_ns: f32 = 1.0 / @as(f32, std.time.ns_per_s);
 
+    var dll_timer = std.time.Timer.start() catch unreachable;
+
     while (running) {
         // @TODO: Should this be just stored as the raw ns in int
         engine_state.delta_time = @as(f32, @floatFromInt(frame_timer.lap())) * s_per_ns;
@@ -260,7 +351,7 @@ pub fn main() void {
 
         running &= switch (builtin.mode) {
             .Debug => app_state.debug_game.game_api.updateAndRender(engine_state, game_state),
-            else => Game.updateAndRender(engine_state, game_state),
+            else => game.updateAndRender(engine_state, game_state),
         };
 
         // TODO: this should be done in the renderer
@@ -307,9 +398,13 @@ pub fn main() void {
         // without crashing and we can try to recover.
         switch (builtin.mode) {
             .Debug => {
-                _ = reload_library(&app_state.debug_game) catch |err| {
-                    std.log.err("Failed to reload dynamic game library: {s}", .{@errorName(err)});
-                };
+                // Replace this with rdtsc maybe? Since this is for internal builds only
+                if (dll_timer.read() > std.time.ns_per_s / 30) {
+                    dll_timer.reset();
+                    _ = reload_library(&app_state.debug_game) catch |err| {
+                        std.log.err("Failed to reload dynamic game library: {s}", .{@errorName(err)});
+                    };
+                }
             },
             else => {},
         }
@@ -320,11 +415,11 @@ pub fn main() void {
             app_state.debug_game.game_api.deinit(engine_state, game_state);
             app_state.debug_game.instance.close();
         },
-        else => Game.deinit(engine_state, game_state),
+        else => game.deinit(engine_state, game_state),
     }
 
     // Destroy the window
-    destroyWindow(platform_state.window);
+    platform_state.destroyWindow();
 
     // NOTE: Destroy the sound system after the window is destroyed for some reason there seeems to be an exception thrown
     // when destroying the window after the sound system has been deinitialized. This is probably some intercation with
@@ -338,83 +433,6 @@ pub fn main() void {
 
     // const alloc_result = debug_allocator.deinit();
     // if (alloc_result != .ok) return error.MemoryLeak;
-}
-
-fn createWindow(
-    window_title: [*:0]const u8,
-    window_width: i32,
-    window_height: i32,
-) WindowCreateError!Win32PlatformState {
-    const engine_name: [*:0]const u8 = "zfracture";
-    var platform_state: Win32PlatformState = undefined;
-
-    platform_state.instance = win32.GetModuleHandleA(null) orelse return error.FailedToGetModuleHandle;
-
-    var window_class: win32.WNDCLASSA = .zero;
-    window_class.style = .{ .OWNDC = 1 };
-    window_class.lpfnWndProc = windowProc;
-    window_class.hInstance = platform_state.instance;
-    window_class.lpszClassName = engine_name;
-    // window_class.hCursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse return error.FailedToLoadCursor;
-
-    const result = win32.RegisterClassA(&window_class);
-    if (result == 0) {
-        _ = win32.MessageBoxA(null, "Windows Registration Failed", "Error", win32.MB_ICONEXCLAMATION);
-        return error.FailedToRegisterWindowClass;
-    }
-
-    var window_x: i32 = 0;
-    var window_y: i32 = 0;
-    var window_final_width: i32 = window_width;
-    var window_final_height: i32 = window_height;
-
-    var window_style: u32 = win32.WS_SYSMENU | win32.WS_CAPTION | win32.WS_OVERLAPPED;
-    const window_style_ex: u32 = win32.WS_EX_APPWINDOW;
-
-    window_style |= win32.WS_MINIMIZEBOX;
-    window_style |= win32.WS_MAXIMIZEBOX;
-    window_style |= win32.WS_THICKFRAME;
-
-    var border_rect: windows.RECT = std.mem.zeroes(windows.RECT);
-    _ = win32.AdjustWindowRectEx(&border_rect, @bitCast(window_style), 0, @bitCast(window_style_ex));
-
-    window_x += border_rect.left;
-    window_y += border_rect.right;
-
-    window_final_width += border_rect.right - border_rect.left;
-    window_final_height += border_rect.bottom - border_rect.top;
-
-    platform_state.window = win32.CreateWindowExA(
-        @bitCast(window_style_ex),
-        engine_name,
-        window_title,
-        @bitCast(window_style),
-        window_x,
-        window_y,
-        window_final_width,
-        window_final_height,
-        null,
-        null,
-        platform_state.instance,
-        null,
-    ) orelse {
-        _ = win32.MessageBoxA(null, "Windows Creation Failed", "Error", win32.MB_ICONEXCLAMATION);
-        return error.FailedToCreateWindow;
-    };
-    errdefer _ = win32.DestroyWindow(platform_state.window);
-
-    platform_state.device_context = win32.GetDC(platform_state.window) orelse return error.FailedToGetDeviceContext;
-
-    return platform_state;
-}
-
-fn destroyWindow(window: windows.HWND) void {
-    _ = win32.DestroyWindow(window);
-}
-
-fn showWindow(window: windows.HWND) void {
-    const show_window_command_flags: u32 = win32.SW_SHOW;
-    _ = win32.ShowWindow(window, @bitCast(show_window_command_flags));
 }
 
 // @TODO: Thsis needs to be moved to the renderer
@@ -665,10 +683,10 @@ fn reload_library(debug_game: *DebugGame) !bool {
 
     var new_instance = std.DynLib.open(new_name) catch return false;
     errdefer new_instance.close();
-    const init_fn = new_instance.lookup(engine.DebugGameDLLApi.InitFn, "init") orelse return error.FailedToLookupInitFn;
-    const deinit_fn = new_instance.lookup(engine.DebugGameDLLApi.DeinitFn, "deinit") orelse return error.FailedToLookupDeinitFn;
+    const init_fn = new_instance.lookup(DebugGameDLLApi.InitFn, "init") orelse return error.FailedToLookupInitFn;
+    const deinit_fn = new_instance.lookup(DebugGameDLLApi.DeinitFn, "deinit") orelse return error.FailedToLookupDeinitFn;
     const update_and_render = new_instance.lookup(
-        engine.DebugGameDLLApi.UpdateAndRenderFn,
+        DebugGameDLLApi.UpdateAndRenderFn,
         "updateAndRender",
     ) orelse return error.FailedToLookupUpdateAndRenderFn;
 

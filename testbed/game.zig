@@ -1,9 +1,10 @@
 const std = @import("std");
 
-const fracture = @import("fracture");
-const EngineState = fracture.EngineState;
-const Renderer = fracture.Renderer;
-const Color = fracture.Color;
+const fr = @import("fracture");
+const Renderer = fr.Renderer;
+const Color = fr.Color;
+const common = @import("common.zig");
+const EngineState = common.EngineState;
 
 // NOTE: PoE1 and 2 do not have plyaer inertia.
 
@@ -75,8 +76,8 @@ const Color = fracture.Color;
 const NUM_ENEMIES = 10;
 
 pub const GameState = struct {
-    impact_sound: fracture.wav.WavData,
-    pop_sound: fracture.wav.WavData,
+    impact_sound: fr.wav.WavData,
+    pop_sound: fr.wav.WavData,
 
     // FIXME:
     tile_map: TileMap,
@@ -143,13 +144,13 @@ pub fn init(engine: *EngineState) *anyopaque {
         engine.transient_allocator,
         .unlimited,
     ) catch unreachable;
-    game_state.impact_sound = fracture.wav.decode(engine.permanent_allocator, impact_sound) catch unreachable;
+    game_state.impact_sound = fr.wav.decode(engine.permanent_allocator, impact_sound) catch unreachable;
     const pop_sound = std.fs.cwd().readFileAlloc(
         "assets/sounds/pop.wav",
         engine.transient_allocator,
         .unlimited,
     ) catch unreachable;
-    game_state.pop_sound = fracture.wav.decode(engine.permanent_allocator, pop_sound) catch unreachable;
+    game_state.pop_sound = fr.wav.decode(engine.permanent_allocator, pop_sound) catch unreachable;
 
     { // HACK: debug level generation
         game_state.tile_map.tile_width = 200;
