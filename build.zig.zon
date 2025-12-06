@@ -3,31 +3,21 @@
     .name = .fracture,
     .version = "0.0.1",
     .minimum_zig_version = "0.16.0-dev",
-
-    // This field is optional.
-    // Each dependency must either provide a `url` and `hash`, or a `path`.
-    // `zig build --fetch` can be used to fetch all dependencies of a package, recursively.
-    // Once all dependencies are fetched, `zig build` no longer requires
-    // internet connectivity.
     .dependencies = .{
-        .vulkan = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/4b7b9a8.tar.gz",
-            .hash = "vulkan-0.0.0-r7Ytx5BBAwCay_2JFZPIdfMhfu28r5znPs1-DXRmuMIk",
-        },
-        .vulkan_headers = .{
-            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
-            .hash = "1220a7e73d72a0d56bc2a65f9d8999a7c019e42260a0744c408d1cded111bc205e10",
-        },
-        .shader_compiler = .{
-            .url = "https://github.com/Games-by-Mason/shader_compiler/archive/c24b915.tar.gz",
-            .hash = "shader_compiler-1.0.0-bOVsamu9AABT50Nb8bzMJ35nNkcW7u9DTEjtx9Zvfamr",
-        },
+        // .vulkan = .{
+        //     .url = "https://github.com/Snektron/vulkan-zig/archive/4b7b9a8.tar.gz",
+        //     .hash = "vulkan-0.0.0-r7Ytx5BBAwCay_2JFZPIdfMhfu28r5znPs1-DXRmuMIk",
+        // },
+        // .vulkan_headers = .{
+        //     .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
+        //     .hash = "1220a7e73d72a0d56bc2a65f9d8999a7c019e42260a0744c408d1cded111bc205e10",
+        // },
+        // .shader_compiler = .{
+        //     .url = "https://github.com/Games-by-Mason/shader_compiler/archive/c24b915.tar.gz",
+        //     .hash = "shader_compiler-1.0.0-bOVsamu9AABT50Nb8bzMJ35nNkcW7u9DTEjtx9Zvfamr",
+        // },
     },
     .paths = .{
-        // This makes *all* files, recursively, included in this package. It is generally
-        // better to explicitly list the files and directories instead, to insure that
-        // fetching from tarballs, file system paths, and version control all result
-        // in the same contents hash.
         "build.zig",
         "build.zig.zon",
         "src",

@@ -4,8 +4,11 @@ build_debug:
 build_game:
 	zig build game
 
-run: build_debug build_game
+debug: build_debug build_game
 	raddbg --project:.\testbed_.rdbg --auto_run --quit_after_success
+
+run: build_debug build_game
+	./zig-out/bin/game.exe
 
 build_docs:
 	zig build docs
