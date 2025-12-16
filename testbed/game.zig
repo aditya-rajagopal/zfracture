@@ -8,55 +8,9 @@ const EngineState = common.EngineState;
 
 // NOTE: PoE1 and 2 do not have plyaer inertia.
 
-// @TODO: Textured rectangles
-//        1. Load textures from file: BMP and PNG
-//        2. accept UV coordinates for the rectangle from the textures
-//        3. Premultiply alpha for the textures
-//        4. Blit textures to the framebuffer
-// @TODO: Collision detetion.
-// @TODO: Entity type so that we can store a contiguous array of entities
-// @TODO: for debug builds only render the exact aspect ration of the screen buffer and leave
-// the rest of the screen blank.
 // @TODO: Flow field for pathing?
-// @TODO: Debug wireframe rectangles, lines and points
-// @TODO: Player movement code unification so that it handles all keyboard events it needs to.
-// @TODO: Enemies have a range where they leash to the player. We can simulate their movement only when they need to start moving
-// towards or attack the player. There is also a range where they unleash from the player and stay where they are.
-// @TODO: We need to simulate entities that are outside the screen. We can divide the Map into chunks and only update
-// the entities that are in chunks the player has visited. We will not have a very large world so we will load all
-// the entities needed for the particular level at once as dormant entities and add them to the active entity list
-// When a particular chunk enters the simlulation region. We will update all entities that are active.
-// We currently dont need the active entities to interact with dormant ones? Maybe there is a scenario where that might be
-// needed? Excample if an enemy in the simulation region is the type that will go alert a bigger group of enemies when
-// attacked it is possible that the entity that is to be activated is not in the active entity list.
-// The simulation region is a rectangle that is centered around the player.
-// We should spawn all entities that are needed for a level, even the ones that are "hidden" from the player and only
-// activate when the player does certain actions like activating a mechanic or triggering a boss fight.
-// @TODO: Arena allocator that is simpler than the one zig uses.
-// @TODO: Spawn enemies all over the map.
-// @TODO: Enemy attacks should spawn a damage box that contains the final damage calculated. The enemy attacks
-// could be at different ranges and only deal damage if the player is in the range.
-// @TODO: Level generation. Need a tool to help generate levels. This will need to also set masks for different types
-// of terrains, eg. walkable, impassable, impassable but projectiles can go through, etc. As well as providing locations
-// for specific events to be able to span as well as posssible spawn locations for enemies. I will not be doing complete
-// random generation. I will use the PoE approach of creating a template for a level and then generating variations based
-// on this template and at runtime choose one variation to load.
 // @TODO: Entitiy system that allows me to spawn arbitrary entities. Maybe have a separate slot for attack hit boxes?
-// @TODO: We need a way to change levels. Unload the previous level into disk so that the state is saved if the player
-// wants to go back and load the new level along with all the assets and entities that are needed for it. We could
-// @TODO: Need a simple debug UI system.
-// @TODO: In game debug console
-// @TODO: Move sound to WASAPI and do the mixing by hand.
 //
-// @TODO: Create vector math.
-// LOADERS:
-//      @TODO: Load OBJ files and materials
-//      @TODO: Load BMP/PNG files
-//      @TODO: LOAD OGG files
-//      @TODO: Load FBX/GLTF files?
-//      @TODO: Load Fonts with TTF/OTF files (maybe create a bitmap for the fonts). Have default font for the engine.
-//      @TODO: Load Text databases for ingame text
-//      @TODO: Custom asset pipeline for loading assets
 // Renderer:
 //      @TODO: Triangle rendering: We might be able to speed up rendering with simd by doing checks in a 8x8 grid at once.
 //      @TODO: Start with doing 3D geometry with software rendering. Swtich to OpenGL/Vulkan later.
@@ -67,7 +21,6 @@ const EngineState = common.EngineState;
 //      @TODO: Depth buffer and depth testing
 //      @TODO: Render command queues to allow for culling and other optimizations
 //      @TODO: Render to textures
-//
 // @TODO: Do we want enemy behaviour that is simulated when not interacting with the player? For example patrolling or
 // two groups of enemies that are fighing each other: YES
 // @TODO: Deal with window resize.
