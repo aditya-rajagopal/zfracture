@@ -1,0 +1,24 @@
+views:
+  - type: table
+    name: Table
+    filters:
+      and:
+        - file.hasProperty("title")
+    order:
+      - file.name
+      - title
+      - priority
+      - priority_value
+      - tags
+      - created
+    sort:
+      - property: priority
+        direction: ASC
+      - property: priority_value
+        direction: DESC
+    columnSize:
+      file.name: 196
+      note.title: 372
+      note.priority_value: 199
+      note.tags: 329
+      note.created: 395

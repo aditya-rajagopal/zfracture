@@ -10,7 +10,6 @@ const EngineState = common.EngineState;
 
 // @TODO: Flow field for pathing?
 // @TODO: Entitiy system that allows me to spawn arbitrary entities. Maybe have a separate slot for attack hit boxes?
-//
 // Renderer:
 //      @TODO: Triangle rendering: We might be able to speed up rendering with simd by doing checks in a 8x8 grid at once.
 //      @TODO: Start with doing 3D geometry with software rendering. Swtich to OpenGL/Vulkan later.
