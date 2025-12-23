@@ -174,7 +174,7 @@ const DebugGame = switch (builtin.mode) {
     .Debug => struct {
         instance: std.DynLib,
         is_loaded: bool = false,
-        time_stamp: i128 align(8),
+        time_stamp: i96 align(8),
         game_api: DebugGameDLLApi,
     },
     else => void,
@@ -665,7 +665,7 @@ fn reload_library(debug_game: *DebugGame) !bool {
     };
     const stats = try file.stat();
     file.close();
-    if (debug_game.time_stamp == stats.mtime) {
+    if (debug_game.time_stamp == stats.mtime.nanoseconds) {
         return false;
     }
 
@@ -695,7 +695,7 @@ fn reload_library(debug_game: *DebugGame) !bool {
     debug_game.game_api.deinit = deinit_fn;
     debug_game.game_api.updateAndRender = update_and_render;
     debug_game.is_loaded = true;
-    debug_game.time_stamp = stats.mtime;
+    debug_game.time_stamp = stats.mtime.nanoseconds;
 
     return true;
 }

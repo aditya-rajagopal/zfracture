@@ -1202,7 +1202,7 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
         .int => |target_type_info| {
             if (value >= std.math.maxInt(SwitchType)) {
                 if (target_type_info.signedness == .signed) {
-                    const UnsignedT = @Type(std.builtin.Type{ .int = .{ .signedness = .unsigned, .bits = target_type_info.bits } });
+                    const UnsignedT = @Int(.unsigned, target_type_info.bits);
                     return @as(SwitchType, @bitCast(@as(UnsignedT, value)));
                 }
             }
