@@ -4,6 +4,7 @@ views:
     filters:
       and:
         - file.hasProperty("title")
+        - status != "done"
     order:
       - file.name
       - title
@@ -23,3 +24,9 @@ views:
       note.priority_value: 55
       note.tags: 180
       note.created: 395
+  - type: table
+    name: DONE
+    filters:
+      and:
+        - file.hasProperty("status")
+        - status == "done"

@@ -1190,6 +1190,15 @@ pub extern "user32" fn MonitorFromWindow(
 
 pub extern "user32" fn SetCursor(hCursor: ?windows.HCURSOR) callconv(.winapi) windows.HCURSOR;
 
+pub extern "gdi32" fn PatBlt(
+    hdc: ?windows.HDC,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    rop: ROP_CODE,
+) callconv(.winapi) windows.BOOL;
+
 pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);
 }

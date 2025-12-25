@@ -89,6 +89,7 @@ const Win32Platform = struct {
 
         platform_state.device_context = win32.GetDC(platform_state.window) orelse return error.FailedToGetDeviceContext;
         platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
+        platform_state.fullscreen = false;
         return platform_state;
     }
 
@@ -106,6 +107,7 @@ const Win32Platform = struct {
         const WS_OVERLAPPEDWINDOW = @as(i32, @bitCast(win32.WS_OVERLAPPEDWINDOW));
 
         if ((window_style & WS_OVERLAPPEDWINDOW) != 0) {
+            self.fullscreen = true;
             var monitor_info: win32.MONITORINFO = .{
                 .cbSize = @sizeOf(win32.MONITORINFO),
                 .rcMonitor = undefined,
@@ -135,6 +137,7 @@ const Win32Platform = struct {
                 );
             }
         } else {
+            self.fullscreen = false;
             _ = win32.SetWindowLongA(self.window, win32.GWL_STYLE, window_style | WS_OVERLAPPEDWINDOW);
             _ = win32.SetWindowPlacement(self.window, &self.window_placement);
             _ = win32.SetWindowPos(
@@ -372,6 +375,7 @@ pub fn main() void {
             engine_state.renderer.back_buffer.height,
             engine_state.renderer.back_buffer.data.ptr,
             &buffer_info,
+            platform_state.fullscreen,
         );
 
         transient_fixed_buffer.reset();
@@ -448,26 +452,67 @@ inline fn stretchBlitBits(
     src_height: i32,
     frame_data: [*]const u8,
     frame_buffer_info: *const win32.BITMAPINFO,
+    fullscreen: bool,
 ) void {
     // TODO: We might want to blit to a zone that maintains the aspect ration of the rendered image.
     // NOTE: When we are in full screen mode we want to blit to the entire screen. But
     // when we are in windowed mode we only want to blit to the exact size of the frame buffer.
 
-    const blit_result = win32.StretchDIBits(
-        device_context,
-        dest_x,
-        dest_y,
-        dest_width,
-        dest_height,
-        src_x,
-        src_y,
-        src_width,
-        src_height,
-        @ptrCast(frame_data),
-        frame_buffer_info,
-        @intFromEnum(win32.DIB_RGB_COLORS),
-        @bitCast(win32.SRCCOPY),
-    );
+    const blit_result = if (fullscreen) blk: {
+        break :blk win32.StretchDIBits(
+            device_context,
+            dest_x,
+            dest_y,
+            dest_width,
+            dest_height,
+            src_x,
+            src_y,
+            src_width,
+            src_height,
+            @ptrCast(frame_data),
+            frame_buffer_info,
+            @intFromEnum(win32.DIB_RGB_COLORS),
+            @bitCast(win32.SRCCOPY),
+        );
+    } else blk: {
+        const top: i32 = 10;
+        const left: i32 = 10;
+
+        _ = win32.PatBlt(device_context, 0, 0, dest_width, top, @bitCast(win32.BLACKNESS));
+        _ = win32.PatBlt(device_context, 0, top, left, src_height, @bitCast(win32.BLACKNESS));
+        _ = win32.PatBlt(
+            device_context,
+            0,
+            top + src_height,
+            dest_width,
+            dest_height - top - src_height,
+            @bitCast(win32.BLACKNESS),
+        );
+        _ = win32.PatBlt(
+            device_context,
+            left + src_width,
+            top,
+            dest_width - left - src_width,
+            src_height,
+            @bitCast(win32.BLACKNESS),
+        );
+
+        break :blk win32.StretchDIBits(
+            device_context,
+            top,
+            left,
+            src_width,
+            src_height,
+            0,
+            0,
+            src_width,
+            src_height,
+            @ptrCast(frame_data),
+            frame_buffer_info,
+            @intFromEnum(win32.DIB_RGB_COLORS),
+            @bitCast(win32.SRCCOPY),
+        );
+    };
 
     if (blit_result == 0) {
         // TODO: Log or return error. But we dont need to stop the program.
