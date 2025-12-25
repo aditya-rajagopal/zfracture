@@ -25,7 +25,7 @@ const EngineState = common.EngineState;
 // @TODO: Deal with window resize.
 
 // @HACK:
-const NUM_ENEMIES = 10;
+const NUM_ENEMIES = 200;
 
 pub const GameState = struct {
     impact_sound: fr.wav.WavData,
@@ -86,6 +86,8 @@ const player_width: f32 = tile_width;
 const player_height: f32 = tile_height;
 const player_half_width: f32 = player_width / 2.0;
 
+const secret_seed: [std.Random.ChaCha.secret_seed_length]u8 = "This is a 32 byte secret seed.!.".*;
+
 pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
     game_state.camera_x = @as(f32, @floatFromInt(engine.renderer.back_buffer.width)) / 2;
@@ -120,7 +122,7 @@ pub fn init(engine: *EngineState) *anyopaque {
 
         // Randomly generate some walls
         var wall_count: usize = 0;
-        var rand = std.Random.DefaultPrng.init(12345);
+        var rand = std.Random.ChaCha.init(secret_seed);
         var random = rand.random();
         while (wall_count < game_state.tile_map.tile_width * game_state.tile_map.tile_height / 10) : (wall_count += 1) {
             const x = random.intRangeAtMost(u32, 0, game_state.tile_map.tile_width - 1);
@@ -141,8 +143,10 @@ pub fn init(engine: *EngineState) *anyopaque {
         game_state.player.render_colour = .red;
 
         for (0..NUM_ENEMIES) |i| {
-            game_state.enemies[i].position_x = game_state.camera_x + ((random.float(f32) * 2 - 1) * game_state.view_half_width);
-            game_state.enemies[i].position_y = game_state.camera_y + ((random.float(f32) * 2 - 1) * game_state.view_half_height);
+            const x = random.float(f32) * tile_map_width;
+            const y = random.float(f32) * tile_map_height;
+            game_state.enemies[i].position_x = x;
+            game_state.enemies[i].position_y = y;
             game_state.enemies[i].stats.movement_speed = 4.5;
             game_state.enemies[i].stats.current_health = 100;
             game_state.enemies[i].stats.max_health = 100;
