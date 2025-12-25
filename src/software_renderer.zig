@@ -13,7 +13,7 @@ camera_position: struct { x: f32, y: f32 },
 pub const FrameBuffer = struct {
     width: u16,
     height: u16,
-    data: []align(4) u8,
+    data: []align(4096) u8,
 };
 
 pub const bytes_per_pixel: usize = 4;
@@ -41,11 +41,11 @@ pub fn drawRectangle(renderer: *Renderer, x: f32, y: f32, width: f32, height: f3
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
     // TODO: Consider blending
     // NOTE: We are rounding here to if the position of the corner covers most of a pixel in x or y we will draw it.
-    const x_int: i32 = @intFromFloat(@round(x * renderer.pixels_per_meter));
-    const y_int: i32 = @intFromFloat(@round(y * renderer.pixels_per_meter));
+    var x_int: i32 = @intFromFloat(@round(x * renderer.pixels_per_meter));
+    var y_int: i32 = @intFromFloat(@round(y * renderer.pixels_per_meter));
     // @TODO: Should we do x + width and then round it?
-    const width_int: i32 = @intFromFloat(@round(width * renderer.pixels_per_meter));
-    const height_int: i32 = @intFromFloat(@round(height * renderer.pixels_per_meter));
+    var width_int: i32 = @intFromFloat(@round(width * renderer.pixels_per_meter));
+    var height_int: i32 = @intFromFloat(@round(height * renderer.pixels_per_meter));
 
     // NOTE: If the position is too far off screen to draw a rectangle we dont draw it
     if (y_int > back_buffer.height or
@@ -57,10 +57,23 @@ pub fn drawRectangle(renderer: *Renderer, x: f32, y: f32, width: f32, height: f3
     }
 
     // NOTE: Clamping so we dont overflow the buffer and only draw the visible part of the rectangle
-    const x_uint: usize = @intCast(std.math.clamp(x_int, 0, back_buffer.width - 1));
-    const y_uint: usize = @intCast(std.math.clamp(y_int, 0, back_buffer.height - 1));
-    const width_uint: usize = @intCast(std.math.clamp(width_int, 0, back_buffer.width - x_int));
-    const height_uint: usize = @intCast(std.math.clamp(height_int, 0, back_buffer.height - y_int));
+    if (x_int < 0) {
+        width_int += x_int;
+        x_int = 0;
+    } else if (x_int + width_int > back_buffer.width) {
+        width_int = back_buffer.width - x_int;
+    }
+    if (y_int < 0) {
+        height_int += y_int;
+        y_int = 0;
+    } else if (y_int + height_int > back_buffer.height) {
+        height_int = back_buffer.height - y_int;
+    }
+
+    const x_uint: u32 = @intCast(x_int);
+    const y_uint: u32 = @intCast(y_int);
+    const width_uint: u32 = @intCast(width_int);
+    const height_uint: u32 = @intCast(height_int);
 
     const colour_u32: u32 = colour.a8r8g8b8();
 

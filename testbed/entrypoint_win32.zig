@@ -277,7 +277,7 @@ pub fn main() void {
     // TODO: Move to the renderer
     engine_state.renderer.back_buffer.width = 1280;
     engine_state.renderer.back_buffer.height = 720;
-    engine_state.renderer.back_buffer.data = permanent_allocator.alignedAlloc(u8, .@"4", window_buffer_max_size) catch {
+    engine_state.renderer.back_buffer.data = permanent_allocator.alignedAlloc(u8, .fromByteUnits(4096), window_buffer_max_size) catch {
         _ = win32.MessageBoxA(null, "Out of memory for back buffer allocation", "Error", win32.MB_ICONEXCLAMATION);
         return;
     };

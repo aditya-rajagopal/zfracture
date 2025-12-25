@@ -21,9 +21,11 @@ views:
     columnSize:
       file.name: 196
       note.title: 372
-      note.priority_value: 55
+      note.status: 73
+      note.priority: 77
       note.tags: 180
-      note.created: 395
+      note.created: 195
+      note.priority_value: 149
   - type: table
     name: DONE
     filters:

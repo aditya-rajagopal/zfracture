@@ -105,8 +105,8 @@ pub fn init(engine: *EngineState) *anyopaque {
     game_state.pop_sound = fr.wav.decode(engine.permanent_allocator, pop_sound) catch unreachable;
 
     { // HACK: debug level generation
-        game_state.tile_map.tile_width = 200;
-        game_state.tile_map.tile_height = 200;
+        game_state.tile_map.tile_width = 50;
+        game_state.tile_map.tile_height = 50;
         game_state.tile_map.data = engine.permanent_allocator.alloc(
             TileType,
             game_state.tile_map.tile_width * game_state.tile_map.tile_height,
@@ -240,21 +240,21 @@ pub fn updateAndRender(
         // @TODO: Spacial partitioning for enemies to reduce the number of collision checks
         // @TODO: Maybe a flow field for path finding?
 
-        for (0..state.enemies.len) |i| {
-            const enemy = &state.enemies[i];
-            const player = &state.player;
-            var delta_x: f32 = player.position_x - enemy.position_x;
-            var delta_y: f32 = player.position_y - enemy.position_y;
-            const magnitude = std.math.sqrt(delta_x * delta_x + delta_y * delta_y);
-            if (magnitude > 0.0) {
-                const magnitude_inv: f32 = 1.0 / magnitude;
-                delta_x = delta_x * magnitude_inv;
-                delta_y = delta_y * magnitude_inv;
-            }
-
-            enemy.position_x = enemy.position_x + delta_x * enemy.stats.movement_speed * engine.delta_time;
-            enemy.position_y = enemy.position_y + delta_y * enemy.stats.movement_speed * engine.delta_time;
-        }
+        // for (0..state.enemies.len) |i| {
+        //     const enemy = &state.enemies[i];
+        //     const player = &state.player;
+        //     var delta_x: f32 = player.position_x - enemy.position_x;
+        //     var delta_y: f32 = player.position_y - enemy.position_y;
+        //     const magnitude = std.math.sqrt(delta_x * delta_x + delta_y * delta_y);
+        //     if (magnitude > 0.0) {
+        //         const magnitude_inv: f32 = 1.0 / magnitude;
+        //         delta_x = delta_x * magnitude_inv;
+        //         delta_y = delta_y * magnitude_inv;
+        //     }
+        //
+        //     enemy.position_x = enemy.position_x + delta_x * enemy.stats.movement_speed * engine.delta_time;
+        //     enemy.position_y = enemy.position_y + delta_y * enemy.stats.movement_speed * engine.delta_time;
+        // }
     }
 
     { // Draw tile map
