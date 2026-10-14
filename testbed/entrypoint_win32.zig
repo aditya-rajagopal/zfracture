@@ -4,9 +4,7 @@ const windows = std.os.windows;
 const builtin = @import("builtin");
 
 const fr = @import("fracture");
-const MouseButton = fr.input.MouseButton;
 const Renderer = fr.Renderer;
-const Key = fr.input.Key;
 const KB = fr.KB;
 const MB = fr.MB;
 const GB = fr.GB;
@@ -14,23 +12,33 @@ const win32 = fr.win32;
 const game = @import("game.zig");
 const common = @import("common.zig");
 const EngineState = common.EngineState;
+const Key = fr.input.Key;
+const MouseButton = fr.input.MouseButton;
 
 const Win32Platform = struct {
     instance: windows.HINSTANCE,
-    window: windows.HWND,
+    window: ?windows.HWND,
     device_context: windows.HDC,
     window_placement: win32.WINDOWPLACEMENT,
     fullscreen: bool = false,
+    input: *fr.input.InputState,
+    focused: bool = false,
+    quit_requested: bool = false,
+    input_suspended: bool = false,
+    reset_frame_clock: bool = false,
+    discard_input_before: ?u32 = null,
 
     const Self = @This();
 
+    // Initialize in place: GWLP_USERDATA retains this address until destruction.
     fn createWindow(
+        platform_state: *Win32Platform,
         window_title: [*:0]const u8,
         window_width: i32,
         window_height: i32,
-    ) WindowCreateError!Win32Platform {
+        input: *fr.input.InputState,
+    ) WindowCreateError!void {
         const engine_name: [*:0]const u8 = "zfracture";
-        var platform_state: Win32Platform = undefined;
 
         platform_state.instance = win32.GetModuleHandleA(null) orelse return error.FailedToGetModuleHandle;
 
@@ -90,11 +98,26 @@ const Win32Platform = struct {
         platform_state.device_context = win32.GetDC(platform_state.window) orelse return error.FailedToGetDeviceContext;
         platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
         platform_state.fullscreen = false;
-        return platform_state;
+        platform_state.input = input;
+        platform_state.focused = false;
+        platform_state.quit_requested = false;
+        platform_state.input_suspended = false;
+        platform_state.reset_frame_clock = false;
+        platform_state.discard_input_before = null;
+        // Creation callbacks see null user data until the platform is ready.
+        const user_data: isize = @bitCast(@intFromPtr(platform_state));
+        _ = win32.SetWindowLongPtrA(platform_state.window.?, win32.GWLP_USERDATA, user_data);
+        // A zero return can mean success or failure; verify the stored pointer.
+        if (win32.GetWindowLongPtrA(platform_state.window.?, win32.GWLP_USERDATA) != user_data) {
+            return error.FailedToSetWindowUserData;
+        }
     }
 
     fn destroyWindow(self: *Win32Platform) void {
-        _ = win32.DestroyWindow(self.window);
+        const window = self.window orelse return;
+        _ = win32.SetWindowLongPtrA(window, win32.GWLP_USERDATA, 0);
+        self.window = null;
+        _ = win32.DestroyWindow(window);
     }
 
     fn showWindow(self: *Win32Platform) void {
@@ -159,12 +182,13 @@ const WindowCreateError = error{
     FailedToRegisterWindowClass,
     FailedToGetDeviceContext,
     FailedToLoadCursor,
+    FailedToSetWindowUserData,
 } || std.mem.Allocator.Error;
 
 /// This struct will be used when the game is running in debug mode and/or we enable hot reoloading.
 /// So instead of importing the game as a module we will replace them with function pointers.
 pub const DebugGameDLLApi = struct {
-    pub const InitFn = *const fn (engine: *EngineState) callconv(.c) *anyopaque;
+    pub const InitFn = *const fn (engine: *EngineState) callconv(.c) ?*anyopaque;
     pub const DeinitFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) void;
     pub const UpdateAndRenderFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) bool;
 
@@ -304,10 +328,12 @@ pub fn main(init: std.process.Init) void {
             .{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 },
         },
     };
-    var platform_state = Win32Platform.createWindow(
+    var platform_state: Win32Platform = undefined;
+    platform_state.createWindow(
         "Testbed",
         engine_state.renderer.back_buffer.width,
         engine_state.renderer.back_buffer.height,
+        &engine_state.input,
     ) catch |err| {
         var buffer: [1024]u8 = undefined;
         const msg = std.mem.printSentinel(&buffer, "Failed to initialize window: {s}", .{@errorName(err)}, 0) catch unreachable;
@@ -315,6 +341,7 @@ pub fn main(init: std.process.Init) void {
         return;
     };
 
+    defer platform_state.destroyWindow();
     platform_state.showWindow();
 
     switch (builtin.mode) {
@@ -336,7 +363,10 @@ pub fn main(init: std.process.Init) void {
     }
 
     const game_state: *anyopaque = switch (builtin.mode) {
-        .debug => app_state.debug_game.game_api.init(engine_state),
+        .debug => app_state.debug_game.game_api.init(engine_state) orelse {
+            _ = win32.MessageBoxA(null, "Failed to initialize game", "Error", win32.MB_ICONEXCLAMATION);
+            return;
+        },
         else => game.init(engine_state),
     };
 
@@ -348,15 +378,20 @@ pub fn main(init: std.process.Init) void {
     var dll_timestamp = frame_timestamp;
 
     while (running) {
-        // @TODO: Should this be just stored as the raw ns in int
-        const now = std.Io.Clock.awake.now(io);
-        engine_state.delta_time = @as(f32, @floatFromInt(frame_timestamp.durationTo(now).toNanoseconds())) * s_per_ns;
-        frame_timestamp = now;
         engine_state.input.update();
+        if (!pumpMessages(&platform_state)) break;
 
-        running = pumpMessages(engine_state);
+        // The pump can spend an arbitrary amount of time in native window tracking.
+        const now = std.Io.Clock.awake.now(io);
+        if (platform_state.input_suspended) {
+            frame_timestamp = now;
+            continue;
+        }
+        engine_state.delta_time = if (platform_state.reset_frame_clock) 0 else @as(f32, @floatFromInt(frame_timestamp.durationTo(now).toNanoseconds())) * s_per_ns;
+        platform_state.reset_frame_clock = false;
+        frame_timestamp = now;
 
-        running &= switch (builtin.mode) {
+        running = switch (builtin.mode) {
             .debug => app_state.debug_game.game_api.updateAndRender(engine_state, game_state),
             else => game.updateAndRender(engine_state, game_state),
         };
@@ -523,137 +558,104 @@ inline fn stretchBlitBits(
     }
 }
 
-fn pumpMessages(eng: *EngineState) bool {
+fn pumpMessages(platform: *Win32Platform) bool {
+    if (platform.quit_requested) return false;
     var msg: win32.MSG = undefined;
-    while (win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE).toBool()) {
-        const lparam: usize = @bitCast(msg.lParam);
-        const wparam: usize = @bitCast(msg.wParam);
+    for (0..fr.input.InputState.max_events_per_frame) |_| {
+        if (!win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE).toBool()) {
+            platform.discard_input_before = null;
+            break;
+        }
+        if (platform.quit_requested or msg.message == win32.WM_QUIT) return false;
+        // Ignore input left queued by a native move/resize loop. MSG.time and
+        // GetTickCount share a wrapping millisecond clock; compare the difference.
+        const stale = if (platform.discard_input_before) |cutoff|
+            @as(i32, @bitCast(msg.time -% cutoff)) <= 0
+        else
+            false;
+        const accept_input = msg.hwnd == platform.window and platform.focused and !platform.input_suspended and !stale;
         switch (msg.message) {
-            win32.WM_QUIT => {
-                return false;
-            },
-            win32.WM_MOUSEMOVE => {
-                eng.input.mouse_position_current.x = @truncate(msg.lParam & 0xffff);
-                eng.input.mouse_position_current.y = @truncate(msg.lParam >> 16);
-            },
-            win32.WM_MOUSEWHEEL => {
-                // TODO: Do we want to parse the rest of the message? l_param has the mouse position
-                // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousehwheel
-                const z_delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
-                // NOTE: We are compressing the delta into just 1 direction.
-                const delta: i8 = if (z_delta < 0) -1 else 1;
-                // TODO: We are only storing the last delta. Could we do better?
-                eng.input.mouse_wheel_delta = delta;
-            },
-            win32.WM_LBUTTONDOWN => {
-                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.left)] = 1;
-                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.left)] += 1;
-            },
-            win32.WM_LBUTTONUP => {
-                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.left)] = 0;
-                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.left)] += 1;
-            },
-            win32.WM_RBUTTONDOWN => {
-                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.right)] = 1;
-                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.right)] += 1;
-            },
-            win32.WM_RBUTTONUP => {
-                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.right)] = 0;
-                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.right)] += 1;
-            },
-            win32.WM_MBUTTONDOWN => {
-                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.middle)] = 1;
-                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.middle)] += 1;
-            },
-            win32.WM_MBUTTONUP => {
-                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.middle)] = 0;
-                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.middle)] += 1;
-            },
-            win32.WM_XBUTTONDOWN => {
-                if (wparam & 0x00010000 != 0) {
-                    eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x1)] = 1;
-                    eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x1)] += 1;
-                } else {
-                    eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x2)] = 1;
-                    eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x2)] += 1;
-                }
-            },
-            win32.WM_XBUTTONUP => {
-                if (wparam & 0x00010000 != 0) {
-                    eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x1)] = 0;
-                    eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x1)] += 1;
-                } else {
-                    eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x2)] = 0;
-                    eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x2)] += 1;
-                }
-            },
             win32.WM_KEYDOWN,
             win32.WM_SYSKEYDOWN,
-            => {
-                var key: Key = @fromBackingInt(@intCast(wparam));
-
-                const is_extended: bool = lparam & 0x01000000 != 0;
-
-                switch (key) {
-                    .alt => key = if (is_extended) .ralt else .lalt,
-                    .control => key = if (is_extended) .rcontrol else .lcontrol,
-                    .shift => {
-                        // NOTE: This scan code is defined by windows for left shift.
-                        // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
-                        const left_shift: u8 = 0x2A;
-                        const scan_code: u8 = @truncate(lparam >> 16);
-                        key = if (scan_code == left_shift) .lshift else .rshift;
-                    },
-                    else => {},
-                }
-
-                const key_code: u8 = @backingInt(key);
-
-                // NOTE: For (sys)KeyDown messages this bit is set to 1 if the key was down before this message and 0 if it was up.
-                // this means for key down messages we need to check if this is 0 for transition count and 1 if it is sysUp message
-                const is_half_transition: u8 = @intFromBool(lparam & 0x40000000 == 0);
-                eng.input.keys_half_transition_count[key_code] += is_half_transition;
-                eng.input.keys_ended_down[key_code] = 1;
-            },
             win32.WM_KEYUP,
             win32.WM_SYSKEYUP,
             => {
-                var key: Key = @fromBackingInt(@intCast(wparam));
-
-                const is_extended: bool = lparam & 0x01000000 != 0;
-
-                switch (key) {
-                    .alt => key = if (is_extended) .ralt else .lalt,
-                    .control => key = if (is_extended) .rcontrol else .lcontrol,
-                    .shift => {
-                        // NOTE: This scan code is defined by windows for left shift.
-                        // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
-                        const left_shift: u8 = 0x2A;
-                        const scan_code: u8 = @truncate(lparam >> 16);
-                        key = if (scan_code == left_shift) .lshift else .rshift;
-                    },
-                    else => {},
+                if (accept_input) {
+                    const key_code: usize = @bitCast(msg.wParam);
+                    if (key_code > std.math.maxInt(u8)) continue;
+                    var key: Key = @fromBackingInt(@as(u8, @intCast(key_code)));
+                    const key_info: win32.KeyMessageLParam = @bitCast(msg.lParam);
+                    key = switch (key) {
+                        .alt => if (key_info.is_extended) .ralt else .lalt,
+                        .control => if (key_info.is_extended) .rcontrol else .lcontrol,
+                        .shift => if (key_info.scan_code == .left_shift) .lshift else .rshift,
+                        else => key,
+                    };
+                    const down = msg.message == win32.WM_KEYDOWN or msg.message == win32.WM_SYSKEYDOWN;
+                    platform.input.keyEvent(key, down, down and key_info.was_down);
+                    continue;
                 }
-
-                const key_code: u8 = @backingInt(key);
-
-                // NOTE: The 30th bit is always 1 for (sys)KeyUp messages. Since we only get up messages from the down state.
-                // this message always means a transition
-                eng.input.keys_half_transition_count[key_code] += 1;
-                eng.input.keys_ended_down[key_code] = 0;
             },
-            win32.WM_SIZE => {
-                // We have handled the resize event here.
-                // TODO: Check if we get resize events when not parsing the message queue.
-                std.log.info("WM_SIZE", .{});
+            win32.WM_MOUSEMOVE => {
+                if (accept_input) {
+                    const position: win32.MousePositionLParam = @bitCast(msg.lParam);
+                    platform.input.mouse_position_current = .{ .x = position.x, .y = position.y };
+                    continue;
+                }
             },
-            else => {
-                _ = win32.TranslateMessage(&msg);
-                _ = win32.DispatchMessageA(&msg);
+            win32.WM_MOUSEWHEEL => {
+                if (accept_input) {
+                    const wheel: win32.MouseWheelWParam = @bitCast(msg.wParam);
+                    platform.input.wheelEvent(@floatFromInt(wheel.delta));
+                    continue;
+                }
             },
+            win32.WM_LBUTTONDOWN,
+            win32.WM_LBUTTONUP,
+            win32.WM_RBUTTONDOWN,
+            win32.WM_RBUTTONUP,
+            win32.WM_MBUTTONDOWN,
+            win32.WM_MBUTTONUP,
+            win32.WM_XBUTTONDOWN,
+            win32.WM_XBUTTONUP,
+            => {
+                if (accept_input) {
+                    const button: ?MouseButton = switch (msg.message) {
+                        win32.WM_LBUTTONDOWN, win32.WM_LBUTTONUP => .left,
+                        win32.WM_RBUTTONDOWN, win32.WM_RBUTTONUP => .right,
+                        win32.WM_MBUTTONDOWN, win32.WM_MBUTTONUP => .middle,
+                        else => extra: {
+                            const extra_button: win32.XButtonWParam = @bitCast(msg.wParam);
+                            break :extra switch (extra_button.button) {
+                                .x1 => .x1,
+                                .x2 => .x2,
+                                else => null,
+                            };
+                        },
+                    };
+                    if (button) |mapped| {
+                        const down = msg.message == win32.WM_LBUTTONDOWN or msg.message == win32.WM_RBUTTONDOWN or
+                            msg.message == win32.WM_MBUTTONDOWN or msg.message == win32.WM_XBUTTONDOWN;
+                        platform.input.mouseButtonEvent(mapped, down);
+                    }
+                    // Match AppKit's delivery of drag/release events outside the view.
+                    const any_button_down = std.mem.indexOfScalar(u8, &platform.input.mouse_buttons_ended_down, 1) != null;
+                    if (any_button_down) {
+                        if (win32.GetCapture() != platform.window) _ = win32.SetCapture(platform.window.?);
+                    } else if (win32.GetCapture() == platform.window) {
+                        _ = win32.ReleaseCapture();
+                    }
+                    continue;
+                }
+            },
+            else => {},
         }
+        // Native window management remains in windowProc. Game input is only
+        // recorded by this pump, never by Windows-owned modal loops.
+        _ = win32.DispatchMessageA(&msg);
+        if (platform.quit_requested) return false;
     }
-    return true;
+    return !platform.quit_requested;
 }
 
 fn windowProc(
@@ -662,15 +664,45 @@ fn windowProc(
     w_param: win32.WPARAM,
     l_param: windows.LPARAM,
 ) callconv(.winapi) win32.LRESULT {
-    var result: win32.LRESULT = 0;
+    const user_data: usize = @bitCast(win32.GetWindowLongPtrA(window, win32.GWLP_USERDATA));
+    // Creation/teardown callbacks can arrive without an attached platform.
+    const platform: *Win32Platform = @as(?*Win32Platform, @ptrFromInt(user_data)) orelse
+        return win32.DefWindowProcA(window, message, w_param, l_param);
 
     switch (message) {
-        win32.WM_ERASEBKGND => result = 1,
-        win32.WM_DESTROY => {
-            _ = win32.PostQuitMessage(0);
+        win32.WM_ENTERSIZEMOVE => {
+            platform.input_suspended = true;
+            platform.input.releaseAll();
+            platform.input.update();
+            // Windows owns mouse capture while tracking the window border/title bar.
+            return 0;
         },
-        win32.WM_CLOSE => {
-            _ = win32.PostQuitMessage(0);
+        win32.WM_EXITSIZEMOVE => {
+            platform.input.releaseAll();
+            platform.input.update();
+            platform.input_suspended = false;
+            platform.discard_input_before = win32.GetTickCount();
+            platform.reset_frame_clock = true;
+            return 0;
+        },
+        win32.WM_SETFOCUS => platform.focused = true,
+        win32.WM_KILLFOCUS, win32.WM_ACTIVATEAPP => {
+            if (message == win32.WM_KILLFOCUS or w_param == 0) {
+                platform.focused = false;
+                platform.input.releaseAll();
+                if (win32.GetCapture() == window) _ = win32.ReleaseCapture();
+            }
+        },
+        win32.WM_CAPTURECHANGED => platform.input.releaseMouseButtons(),
+        win32.WM_ERASEBKGND => return 1,
+        win32.WM_DESTROY, win32.WM_CLOSE => {
+            platform.quit_requested = true;
+            win32.PostQuitMessage(0);
+            return 0;
+        },
+        win32.WM_NCDESTROY => {
+            _ = win32.SetWindowLongPtrA(window, win32.GWLP_USERDATA, 0);
+            platform.window = null;
         },
         win32.WM_SETCURSOR => {
             if (DBG_show_cursor) {
@@ -678,6 +710,7 @@ fn windowProc(
             } else {
                 _ = win32.SetCursor(null);
             }
+            return 0;
         },
         // TODO: We might not want to resize the back buffer every time the window is resized.
         // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits to scale it.
@@ -696,15 +729,10 @@ fn windowProc(
         // app_state.back_buffer.data = app_state.allocator.realloc(app_state.back_buffer.data, new_bitmap_size) catch unreachable;
         // },
 
-        // TODO: When we lose focus we should reset the input state so that the game does not react to input in anyway
-        // win32.WM_KILLFOCUS => {},
-        // win32.WM_SETFOCUS => {},
-        else => {
-            result = win32.DefWindowProcA(window, message, w_param, l_param);
-        },
+        else => {},
     }
 
-    return result;
+    return win32.DefWindowProcA(window, message, w_param, l_param);
 }
 
 fn reloadLibrary(io: std.Io, debug_game: *DebugGame) !bool {

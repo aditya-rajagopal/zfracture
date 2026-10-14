@@ -220,8 +220,39 @@ pub const InputState = struct {
     pub const MousePosition = struct { x: i16, y: i16 };
     pub const NumKeys = 256;
     pub const NumMouseButtons = 5;
+    pub const max_events_per_frame = 4096;
 
     pub const init = std.mem.zeroes(InputState);
+
+    pub fn keyEvent(self: *InputState, key: Key, down: bool, repeat: bool) void {
+        const index = @backingInt(key);
+        self.keys_ended_down[index] = @intFromBool(down);
+        if (!down or !repeat) self.keys_half_transition_count[index] +|= 1;
+    }
+
+    pub fn mouseButtonEvent(self: *InputState, button: MouseButton, down: bool) void {
+        const index = @backingInt(button);
+        self.mouse_buttons_ended_down[index] = @intFromBool(down);
+        self.mouse_buttons_half_transition_count[index] +|= 1;
+    }
+
+    pub fn wheelEvent(self: *InputState, delta: f64) void {
+        if (delta != 0) self.mouse_wheel_delta = if (delta < 0) -1 else 1;
+    }
+
+    pub fn releaseMouseButtons(self: *InputState) void {
+        for (self.mouse_buttons_ended_down, 0..) |down, index| {
+            if (down != 0) self.mouseButtonEvent(@fromBackingInt(@as(u8, @intCast(index))), false);
+        }
+    }
+
+    pub fn releaseAll(self: *InputState) void {
+        for (self.keys_ended_down, 0..) |down, index| {
+            if (down != 0) self.keyEvent(@fromBackingInt(@as(u8, @intCast(index))), false, false);
+        }
+        self.releaseMouseButtons();
+        self.mouse_wheel_delta = 0;
+    }
 
     pub inline fn update(self: *InputState) void {
         self.mouse_position_previous = self.mouse_position_current;
@@ -270,3 +301,42 @@ pub const InputState = struct {
         return self.mouse_buttons_ended_down[@backingInt(button)] == 0 and self.mouse_buttons_half_transition_count[@backingInt(button)] >= 1;
     }
 };
+
+test "key repeats do not add press transitions" {
+    var input: InputState = .init;
+    input.keyEvent(.e, true, false);
+    input.keyEvent(.e, true, true);
+    try std.testing.expectEqual(@as(u8, 1), input.keys_half_transition_count[@backingInt(Key.e)]);
+    try std.testing.expect(input.keyPressedThisFrame(.e));
+
+    input.update();
+    input.keyEvent(.e, true, true);
+    try std.testing.expectEqual(@as(u8, 0), input.keys_half_transition_count[@backingInt(Key.e)]);
+    try std.testing.expect(input.isKeyDown(.e));
+    try std.testing.expect(!input.keyPressedThisFrame(.e));
+
+    input.keyEvent(.e, false, false);
+    try std.testing.expectEqual(@as(u8, 1), input.keys_half_transition_count[@backingInt(Key.e)]);
+    try std.testing.expect(input.keyReleasedThisFrame(.e));
+}
+
+test "key press release and repress in one frame retain all transitions" {
+    var input: InputState = .init;
+    input.keyEvent(.a, true, false);
+    input.keyEvent(.a, false, false);
+    input.keyEvent(.a, true, false);
+    try std.testing.expectEqual(@as(u8, 3), input.keys_half_transition_count[@backingInt(Key.a)]);
+    try std.testing.expect(input.isKeyDown(.a));
+}
+
+test "focus loss releases each held mouse button only once" {
+    var input: InputState = .init;
+    for (0..InputState.NumMouseButtons) |index| {
+        input.mouseButtonEvent(@fromBackingInt(@as(u8, @intCast(index))), true);
+    }
+    input.update();
+    input.releaseAll();
+    input.releaseAll();
+    for (input.mouse_buttons_half_transition_count) |count| try std.testing.expectEqual(@as(u8, 1), count);
+    for (input.mouse_buttons_ended_down) |down| try std.testing.expectEqual(@as(u8, 0), down);
+}

@@ -8,6 +8,11 @@
             .url = "git+https://github.com/aditya-rajagopal/stdx.git#df2b1f4d99164a61706cd25a4e6b09725651e3cc",
             .hash = "stdx-0.0.0-JEHEYeErAgBDqPKnwCZB3CVVXC6xC94hNN0DtEpfd1je",
         },
+        .zig_objc = .{
+            .url = "git+https://github.com/aditya-rajagopal/zig-objc.git#7471b14f56ecf525cd8eea47422b6ad558f73e30",
+            .hash = "zig_objc-0.0.0-Ir_SpwEuAQBRlWE-NF40iff_CtdDmD-rsMyGLPM3JsfQ",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

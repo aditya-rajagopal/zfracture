@@ -482,6 +482,69 @@ pub const MSG = extern struct {
     pt: POINT,
 };
 
+// Input messages use the low 32 bits of pointer-sized WPARAM/LPARAM values.
+// Preserve the remaining bits so callers can @bitCast the native word directly.
+const MessageParamUpperBits = @Int(.unsigned, @bitSizeOf(usize) - 32);
+
+pub const KeyScanCode = enum(u8) {
+    left_shift = 0x2a,
+    right_shift = 0x36,
+    _,
+};
+
+// WM_KEYDOWN/UP and WM_SYSKEYDOWN/UP share this layout.
+// https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-keydown
+pub const KeyMessageLParam = packed struct(usize) {
+    repeat_count: u16 = 1,
+    scan_code: KeyScanCode = @fromBackingInt(0),
+    is_extended: bool = false,
+    _reserved: u4 = 0,
+    alt_down: bool = false,
+    was_down: bool = false,
+    is_release: bool = false,
+    _upper: MessageParamUpperBits = 0,
+};
+
+// Coordinates are signed client coordinates for mouse movement/button messages.
+// https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousemove
+pub const MousePositionLParam = packed struct(usize) {
+    x: i16 = 0,
+    y: i16 = 0,
+    _upper: MessageParamUpperBits = 0,
+};
+
+// MK_* key/button flags in the low word of mouse-message WPARAM values.
+pub const MouseKeyState = packed struct(u16) {
+    left_button: bool = false,
+    right_button: bool = false,
+    shift: bool = false,
+    control: bool = false,
+    middle_button: bool = false,
+    x1_button: bool = false,
+    x2_button: bool = false,
+    _reserved: u9 = 0,
+};
+
+// https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel
+pub const MouseWheelWParam = packed struct(usize) {
+    keys: MouseKeyState = .{},
+    delta: i16 = 0,
+    _upper: MessageParamUpperBits = 0,
+};
+
+pub const XButton = enum(u16) {
+    x1 = 1,
+    x2 = 2,
+    _,
+};
+
+// https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-xbuttondown
+pub const XButtonWParam = packed struct(usize) {
+    keys: MouseKeyState = .{},
+    button: XButton,
+    _upper: MessageParamUpperBits = 0,
+};
+
 // ----------------------------------------- CONSTANTS ---------------------------------------------/
 
 pub const IDI_APPLICATION = typedConst([*:0]align(1) const u8, @as(u32, 32512));
@@ -889,6 +952,11 @@ pub extern "user32" fn GetClientRect(
     lpRect: ?*RECT,
 ) callconv(.winapi) windows.BOOL;
 
+pub extern "user32" fn SetCapture(window: windows.HWND) callconv(.winapi) ?windows.HWND;
+pub extern "user32" fn GetCapture() callconv(.winapi) ?windows.HWND;
+pub extern "kernel32" fn GetTickCount() callconv(.winapi) u32;
+pub extern "user32" fn ReleaseCapture() callconv(.winapi) windows.BOOL;
+
 pub extern "user32" fn DefWindowProcA(
     hWnd: ?windows.HWND,
     Msg: u32,
@@ -1151,6 +1219,17 @@ pub extern "user32" fn SetWindowLongA(
     nIndex: WINDOW_LONG_PTR_INDEX,
     dwNewLong: i32,
 ) callconv(.winapi) i32;
+
+pub extern "user32" fn GetWindowLongPtrA(
+    hWnd: windows.HWND,
+    nIndex: WINDOW_LONG_PTR_INDEX,
+) callconv(.winapi) isize;
+
+pub extern "user32" fn SetWindowLongPtrA(
+    hWnd: windows.HWND,
+    nIndex: WINDOW_LONG_PTR_INDEX,
+    dwNewLong: isize,
+) callconv(.winapi) isize;
 
 pub extern "user32" fn GetWindowPlacement(
     hWnd: ?windows.HWND,

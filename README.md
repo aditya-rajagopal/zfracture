@@ -27,24 +27,17 @@
 
 A 3D Game engine in Zig for learning and also for making my own game focused on performance, control, and data-oriented architecture.
 
-Currently only supports windows as a platform.
+Supports Windows x86_64 and macOS Apple Silicon.
 
-The project requires atleast [Zig 0.17.0](https://ziglang.org/download/0.17.0/release-notes.html).
+Developed with Zig `0.18.0-dev.1+a6c6412a8`. On macOS, install Xcode Command Line Tools so the Apple SDK is available (`xcode-select --install`).
 
-The default target is `x86_64-windows`. To check the Windows executable and game DLL from any host, including macOS, without emitting or running binaries:
+Debug builds load the game dynamically. In another terminal, run `zig build game` to rebuild it while the window stays open. Restart after changing the layout of engine/game state or the exported ABI.
 
-```sh
-zig build check
-zig build check -Doptimize=fast
-```
+Use `zig build run -Doptimize=fast` for a statically linked game without hot reload.
 
-To start the testbed on Windows:
+The macOS-only `zig-objc` dependency is pinned to [our fork's Zig compatibility commit](https://github.com/aditya-rajagopal/zig-objc/commit/7471b14f56ecf525cd8eea47422b6ad558f73e30). The branch is based on upstream `c8de82f` with [PR #36](https://github.com/mitchellh/zig-objc/pull/36) and a test compatibility fix. Windows builds do not import it.
 
-```
-make run
-```
-
-If you have the Raddebugger you can use
+On Windows, if you have Raddebugger installed:
 
 ```
 make debug

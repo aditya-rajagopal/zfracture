@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 // TODO: Move this to a common module? So we can use platform specific code in many places
 // TODO: Seperate the win32 code into seperate files that has similar structure to the zig windows module
 pub const win32 = @import("windows/win32.zig");
+pub const appkit = @import("macos/appkit.zig");
 pub const XAudio2 = @import("windows/xaudio2.zig");
 
 // pub const Platform = switch (builtin.target.os.tag) {
@@ -21,6 +22,7 @@ pub const Renderer = @import("software_renderer.zig");
 // the loading of sounds especially when IO is going to be abstrated out into jobs.
 pub const SoundSystem = switch (builtin.target.os.tag) {
     .windows => @import("windows/xaudio2.zig"),
+    .macos => @import("macos/sound.zig"),
     else => @compileError("Unsupported OS"),
 };
 
