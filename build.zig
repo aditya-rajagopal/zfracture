@@ -1,8 +1,10 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
+    // The testbed is Windows-only, including when checking it from another host OS.
     const query = try std.Target.Query.parse(.{
-        .cpu_features = "x86_64-avx512f",
+        .arch_os_abi = "x86_64-windows",
+        // .cpu_features = "x86_64-avx512f",
     });
     const target = b.standardTargetOptions(.{
         .default_target = query,
@@ -19,7 +21,7 @@ pub fn build(b: *std.Build) !void {
 
     // const shader_compiler = b.dependency("shader_compiler", .{
     //     .target = b.graph.host,
-    //     .optimize = .ReleaseFast,
+    //     .optimize = .fast,
     // }).artifact("shader_compiler");
 
     // ================================== MODULES ==================================/
@@ -57,9 +59,9 @@ pub fn build(b: *std.Build) !void {
         },
     );
 
-    if (optimize == .ReleaseFast and target.query.os_tag == .windows) {
+    if (optimize == .fast and target.result.os.tag == .windows) {
         // NOTE(adi): Disables debug console on windows
-        exe.subsystem = .Windows;
+        exe.subsystem = .windows;
     }
 
     b.installArtifact(exe);
@@ -73,11 +75,7 @@ pub fn build(b: *std.Build) !void {
     // installation directory rather than directly from within the cache directory.
     run_cmd.step.dependOn(b.getInstallStep());
 
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     // ==================================== GAME DLL ==================================/
 
@@ -104,15 +102,22 @@ pub fn build(b: *std.Build) !void {
         .name = "check",
         .root_module = entrypoint,
     });
-    const check = b.step("check", "Check if the app compiles");
+    exe_check.subsystem = exe.subsystem;
+    const dll_check = b.addLibrary(.{
+        .name = "check_dynamic_game",
+        .linkage = .dynamic,
+        .root_module = dll_module,
+    });
+    const check = b.step("check", "Check the Windows app and game DLL without emitting binaries");
     check.dependOn(&exe_check.step);
+    check.dependOn(&dll_check.step);
 
     // ==================================== TESTS ==================================/
 }
 
 // fn compile_shader(
 //     b: *std.Build,
-//     optimize: std.builtin.OptimizeMode,
+//     optimize: std.lang.Optimize,
 //     shader_compiler: *std.Build.Step.Compile,
 //     src: std.Build.LazyPath,
 //     out_name: []const u8,
@@ -120,10 +125,10 @@ pub fn build(b: *std.Build) !void {
 //     const artifact = b.addRunArtifact(shader_compiler);
 //     artifact.addArgs(&.{ "--target", "Vulkan-1.3" });
 //     switch (optimize) {
-//         .Debug => artifact.addArgs(&.{"--robust-access"}),
-//         .ReleaseSafe => artifact.addArgs(&.{ "--optimize-perf", "--robust-access" }),
-//         .ReleaseFast => artifact.addArgs(&.{"--optimize-perf"}),
-//         .ReleaseSmall => artifact.addArgs(&.{ "--optimize-perf", "--optimize-small" }),
+//         .debug => artifact.addArgs(&.{"--robust-access"}),
+//         .safe => artifact.addArgs(&.{ "--optimize-perf", "--robust-access" }),
+//         .fast => artifact.addArgs(&.{"--optimize-perf"}),
+//         .small => artifact.addArgs(&.{ "--optimize-perf", "--optimize-small" }),
 //     }
 //     artifact.addFileArg(src);
 //     return artifact.addOutputFileArg(out_name);

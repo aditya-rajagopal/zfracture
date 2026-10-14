@@ -93,13 +93,15 @@ pub fn init(engine: *EngineState) *anyopaque {
     game_state.camera_x = @as(f32, @floatFromInt(engine.renderer.back_buffer.width)) / 2;
     game_state.camera_y = @as(f32, @floatFromInt(engine.renderer.back_buffer.height)) / 2;
 
-    const impact_sound = std.fs.cwd().readFileAlloc(
+    const impact_sound = std.Io.Dir.cwd().readFileAlloc(
+        engine.io,
         "assets/sounds/impactMetal_medium_000-converted.wav",
         engine.transient_allocator,
         .unlimited,
     ) catch unreachable;
     game_state.impact_sound = fr.wav.decode(engine.permanent_allocator, impact_sound) catch unreachable;
-    const pop_sound = std.fs.cwd().readFileAlloc(
+    const pop_sound = std.Io.Dir.cwd().readFileAlloc(
+        engine.io,
         "assets/sounds/pop.wav",
         engine.transient_allocator,
         .unlimited,

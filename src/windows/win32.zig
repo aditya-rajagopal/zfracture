@@ -4,6 +4,21 @@ const windows = std.os.windows;
 const Guid = std.os.windows.GUID;
 
 pub const HMONITOR = *opaque {};
+pub const HRESULT = i32;
+pub const WPARAM = usize;
+pub const LRESULT = isize;
+
+pub const RECT = extern struct {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+};
+
+pub const POINT = extern struct {
+    x: i32,
+    y: i32,
+};
 
 pub const DIB_USAGE = enum(u32) {
     RGB_COLORS = 0,
@@ -428,9 +443,9 @@ pub const CS_DBLCLKS = WNDCLASS_STYLES{ .DBLCLKS = 1 };
 pub const WNDPROC = *const fn (
     param0: windows.HWND,
     param1: u32,
-    param2: windows.WPARAM,
+    param2: WPARAM,
     param3: windows.LPARAM,
-) callconv(.winapi) windows.LRESULT;
+) callconv(.winapi) LRESULT;
 
 pub const WNDCLASSA = extern struct {
     style: WNDCLASS_STYLES,
@@ -461,10 +476,10 @@ pub const WNDCLASSA = extern struct {
 pub const MSG = extern struct {
     hwnd: ?windows.HWND,
     message: u32,
-    wParam: windows.WPARAM,
+    wParam: WPARAM,
     lParam: windows.LPARAM,
     time: u32,
-    pt: windows.POINT,
+    pt: POINT,
 };
 
 // ----------------------------------------- CONSTANTS ---------------------------------------------/
@@ -819,7 +834,7 @@ pub extern "user32" fn MessageBoxA(
 ) callconv(.winapi) MESSAGEBOX_RESULT;
 
 pub extern "user32" fn AdjustWindowRectEx(
-    lpRect: ?*windows.RECT,
+    lpRect: ?*RECT,
     dwStyle: WINDOW_STYLE,
     bMenu: windows.BOOL,
     dwExStyle: WINDOW_EX_STYLE,
@@ -863,7 +878,7 @@ pub extern "user32" fn TranslateMessage(
 
 pub extern "user32" fn DispatchMessageA(
     lpMsg: ?*const MSG,
-) callconv(.winapi) windows.LRESULT;
+) callconv(.winapi) LRESULT;
 
 pub extern "user32" fn PostQuitMessage(
     nExitCode: i32,
@@ -871,15 +886,15 @@ pub extern "user32" fn PostQuitMessage(
 
 pub extern "user32" fn GetClientRect(
     hWnd: ?windows.HWND,
-    lpRect: ?*windows.RECT,
+    lpRect: ?*RECT,
 ) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn DefWindowProcA(
     hWnd: ?windows.HWND,
     Msg: u32,
-    wParam: windows.WPARAM,
+    wParam: WPARAM,
     lParam: windows.LPARAM,
-) callconv(.winapi) windows.LRESULT;
+) callconv(.winapi) LRESULT;
 
 pub extern "kernel32" fn CopyFileA(
     lpExistingFileName: ?[*:0]const u8,
@@ -966,10 +981,10 @@ pub const COINIT_MULTITHREADED: windows.DWORD = 0x0;
 pub const COINIT_DISABLE_OLE1DDE: windows.DWORD = 0x4;
 pub const COINIT_SPEED_OVER_MEMORY: windows.DWORD = 0x8;
 
-pub const S_OK: windows.HRESULT = std.os.windows.S_OK;
-pub const S_FALSE: windows.HRESULT = std.os.windows.S_FALSE;
+pub const S_OK: HRESULT = 0;
+pub const S_FALSE: HRESULT = 1;
 
-pub extern "ole32" fn CoInitializeEx(pvReserved: ?windows.LPVOID, dwCoInit: windows.DWORD) callconv(.winapi) windows.HRESULT;
+pub extern "ole32" fn CoInitializeEx(pvReserved: ?windows.LPVOID, dwCoInit: windows.DWORD) callconv(.winapi) HRESULT;
 pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
 
 pub const IID_IUnknown = Guid.parse("00000000-0000-0000-c000-000000000046");
@@ -979,7 +994,7 @@ pub const IUnknown = extern union {
             self: *const IUnknown,
             riid: *const Guid,
             ppvObject: **anyopaque,
-        ) callconv(.winapi) windows.HRESULT,
+        ) callconv(.winapi) HRESULT,
         AddRef: *const fn (
             self: *const IUnknown,
         ) callconv(.winapi) u32,
@@ -988,7 +1003,7 @@ pub const IUnknown = extern union {
         ) callconv(.winapi) u32,
     };
     vtable: *const VTable,
-    pub inline fn QueryInterface(self: *const IUnknown, riid: *const Guid, ppvObject: **anyopaque) windows.HRESULT {
+    pub inline fn QueryInterface(self: *const IUnknown, riid: *const Guid, ppvObject: **anyopaque) HRESULT {
         return self.vtable.QueryInterface(self, riid, ppvObject);
     }
     pub inline fn AddRef(self: *const IUnknown) u32 {
@@ -1121,9 +1136,9 @@ pub const WINDOWPLACEMENT = extern struct {
     length: u32,
     flags: WINDOWPLACEMENT_FLAGS,
     showCmd: SHOW_WINDOW_CMD,
-    ptMinPosition: windows.POINT,
-    ptMaxPosition: windows.POINT,
-    rcNormalPosition: windows.RECT,
+    ptMinPosition: POINT,
+    ptMaxPosition: POINT,
+    rcNormalPosition: RECT,
 };
 
 pub extern "user32" fn GetWindowLongA(
@@ -1164,8 +1179,8 @@ pub extern "user32" fn SetWindowPos(
 
 pub const MONITORINFO = extern struct {
     cbSize: u32,
-    rcMonitor: windows.RECT,
-    rcWork: windows.RECT,
+    rcMonitor: RECT,
+    rcWork: RECT,
     dwFlags: u32,
 };
 
@@ -1233,8 +1248,8 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
             .pointer => return typedConst2(ReturnType, target_type_info.child, value),
             else => target_type_error,
         },
-        .@"enum" => |_| switch (@typeInfo(@TypeOf(value))) {
-            .int => return @as(ReturnType, @enumFromInt(value)),
+        .@"enum" => switch (@typeInfo(@TypeOf(value))) {
+            .int => return @as(ReturnType, @fromBackingInt(@intCast(value))),
             else => target_type_error,
         },
         else => @compileError(target_type_error),

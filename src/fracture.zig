@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 pub const win32 = @import("windows/win32.zig");
 pub const XAudio2 = @import("windows/xaudio2.zig");
 
-// pub const Platform = switch (builtin.os.tag) {
+// pub const Platform = switch (builtin.target.os.tag) {
 // };
 
 const Types = @import("types.zig");
@@ -19,7 +19,7 @@ pub const Renderer = @import("software_renderer.zig");
 
 // TODO: Currently this is a direct call into the platform api. We maybe can explore abstracting
 // the loading of sounds especially when IO is going to be abstrated out into jobs.
-pub const SoundSystem = switch (builtin.os.tag) {
+pub const SoundSystem = switch (builtin.target.os.tag) {
     .windows => @import("windows/xaudio2.zig"),
     else => @compileError("Unsupported OS"),
 };

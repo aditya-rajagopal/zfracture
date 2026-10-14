@@ -2,7 +2,7 @@
     .fingerprint = 0x83dd75e65d5ab678,
     .name = .fracture,
     .version = "0.0.1",
-    .minimum_zig_version = "0.16.0-dev",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .stdx = .{
             .url = "git+https://github.com/aditya-rajagopal/stdx.git#df2b1f4d99164a61706cd25a4e6b09725651e3cc",

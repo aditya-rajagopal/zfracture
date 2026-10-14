@@ -59,8 +59,8 @@ const Win32Platform = struct {
         window_style |= win32.WS_MAXIMIZEBOX;
         window_style |= win32.WS_THICKFRAME;
 
-        var border_rect: windows.RECT = std.mem.zeroes(windows.RECT);
-        _ = win32.AdjustWindowRectEx(&border_rect, @bitCast(window_style), 0, @bitCast(window_style_ex));
+        var border_rect: win32.RECT = std.mem.zeroes(win32.RECT);
+        _ = win32.AdjustWindowRectEx(&border_rect, @bitCast(window_style), .FALSE, @bitCast(window_style_ex));
 
         window_x += border_rect.left;
         window_y += border_rect.right;
@@ -122,7 +122,7 @@ const Win32Platform = struct {
                 win32.MonitorFromWindow(self.window, win32.MONITOR_DEFAULTTOPRIMARY),
                 &monitor_info,
             );
-            if (result != 0 and result2 != 0) {
+            if (result.toBool() and result2.toBool()) {
                 // NOTE: We are changing the window style so that it has no borders or title bar and then
                 // setting the window position and size to be the top left corner of the monitor and the size of the monitor
                 _ = win32.SetWindowLongA(self.window, win32.GWL_STYLE, window_style & ~WS_OVERLAPPEDWINDOW);
@@ -174,9 +174,10 @@ pub const DebugGameDLLApi = struct {
 };
 
 const DebugGame = switch (builtin.mode) {
-    .Debug => struct {
-        instance: std.DynLib,
+    .debug => struct {
+        instance: windows.HINSTANCE,
         is_loaded: bool = false,
+        temp_index: u1 = 0,
         time_stamp: i96 align(8),
         game_api: DebugGameDLLApi,
     },
@@ -206,7 +207,9 @@ var DBG_show_cursor: bool = false;
 // different lifetimes such as a scene or game level arena. It is possible the renderer will need to allocate stuff
 // when it is performing the rendering pass. We could also have fixed size arena pools for each thread/task that can be
 // requested when one is run out.
-pub fn main() void {
+pub fn main(init: std.process.Init) void {
+    // TODO: Figure out the correct io for the platform
+    const io = init.io;
     // Platform specific state
     DBG_cursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse {
         _ = win32.MessageBoxA(null, "Failed to load cursor", "Error", win32.MB_ICONEXCLAMATION);
@@ -253,10 +256,11 @@ pub fn main() void {
     // TODO: Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
     // making a new type AppState and then allocating it.
     const engine_state: *EngineState = &app_state.engine;
+    engine_state.io = io;
 
     engine_state.sound.init() catch |err| {
         var buffer: [1024]u8 = undefined;
-        const msg = std.fmt.bufPrintZ(&buffer, "Failed to initialize sound system: {s}", .{@errorName(err)}) catch unreachable;
+        const msg = std.mem.printSentinel(&buffer, "Failed to initialize sound system: {s}", .{@errorName(err)}, 0) catch unreachable;
         _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
@@ -306,7 +310,7 @@ pub fn main() void {
         engine_state.renderer.back_buffer.height,
     ) catch |err| {
         var buffer: [1024]u8 = undefined;
-        const msg = std.fmt.bufPrintZ(&buffer, "Failed to initialize window: {s}", .{@errorName(err)}) catch unreachable;
+        const msg = std.mem.printSentinel(&buffer, "Failed to initialize window: {s}", .{@errorName(err)}, 0) catch unreachable;
         _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
@@ -314,12 +318,13 @@ pub fn main() void {
     platform_state.showWindow();
 
     switch (builtin.mode) {
-        .Debug => {
+        .debug => {
             app_state.debug_game.is_loaded = false;
+            app_state.debug_game.temp_index = 0;
             app_state.debug_game.time_stamp = 0;
-            if (!(reload_library(&app_state.debug_game) catch |err| {
+            if (!(reloadLibrary(io, &app_state.debug_game) catch |err| {
                 var buffer: [1024]u8 = undefined;
-                const msg = std.fmt.bufPrintZ(&buffer, "Failed to reload dynamic game library: {s}", .{@errorName(err)}) catch unreachable;
+                const msg = std.mem.printSentinel(&buffer, "Failed to reload dynamic game library: {s}", .{@errorName(err)}, 0) catch unreachable;
                 _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
                 return;
             })) {
@@ -331,34 +336,33 @@ pub fn main() void {
     }
 
     const game_state: *anyopaque = switch (builtin.mode) {
-        .Debug => app_state.debug_game.game_api.init(engine_state),
+        .debug => app_state.debug_game.game_api.init(engine_state),
         else => game.init(engine_state),
     };
 
     running = true;
 
-    // NOTE: This will not fail on windows >= XP/2000
-    var frame_timer = std.time.Timer.start() catch unreachable;
-    const ms_per_ns: f32 = 1.0 / @as(f32, std.time.ns_per_ms);
-    _ = ms_per_ns;
+    var frame_timestamp = std.Io.Clock.awake.now(io);
     const s_per_ns: f32 = 1.0 / @as(f32, std.time.ns_per_s);
 
-    var dll_timer = std.time.Timer.start() catch unreachable;
+    var dll_timestamp = frame_timestamp;
 
     while (running) {
         // @TODO: Should this be just stored as the raw ns in int
-        engine_state.delta_time = @as(f32, @floatFromInt(frame_timer.lap())) * s_per_ns;
+        const now = std.Io.Clock.awake.now(io);
+        engine_state.delta_time = @as(f32, @floatFromInt(frame_timestamp.durationTo(now).toNanoseconds())) * s_per_ns;
+        frame_timestamp = now;
         engine_state.input.update();
 
         running = pumpMessages(engine_state);
 
         running &= switch (builtin.mode) {
-            .Debug => app_state.debug_game.game_api.updateAndRender(engine_state, game_state),
+            .debug => app_state.debug_game.game_api.updateAndRender(engine_state, game_state),
             else => game.updateAndRender(engine_state, game_state),
         };
 
         // TODO: this should be done in the renderer
-        var rect: windows.RECT = undefined;
+        var rect: win32.RECT = undefined;
         _ = win32.GetClientRect(platform_state.window, &rect);
         const window_width = rect.right - rect.left;
         const window_height = rect.bottom - rect.top;
@@ -401,11 +405,11 @@ pub fn main() void {
         // TODO: Build in a fail-safe stub functions for when the reload fails so the game can still run
         // without crashing and we can try to recover.
         switch (builtin.mode) {
-            .Debug => {
+            .debug => {
                 // Replace this with rdtsc maybe? Since this is for internal builds only
-                if (dll_timer.read() > std.time.ns_per_s / 30) {
-                    dll_timer.reset();
-                    _ = reload_library(&app_state.debug_game) catch |err| {
+                if (dll_timestamp.durationTo(now).toNanoseconds() > std.time.ns_per_s / 30) {
+                    dll_timestamp = now;
+                    _ = reloadLibrary(io, &app_state.debug_game) catch |err| {
                         std.log.err("Failed to reload dynamic game library: {s}", .{@errorName(err)});
                     };
                 }
@@ -415,9 +419,9 @@ pub fn main() void {
     }
 
     switch (builtin.mode) {
-        .Debug => {
+        .debug => {
             app_state.debug_game.game_api.deinit(engine_state, game_state);
-            app_state.debug_game.instance.close();
+            _ = win32.FreeLibrary(app_state.debug_game.instance);
         },
         else => game.deinit(engine_state, game_state),
     }
@@ -471,7 +475,7 @@ inline fn stretchBlitBits(
             src_height,
             @ptrCast(frame_data),
             frame_buffer_info,
-            @intFromEnum(win32.DIB_RGB_COLORS),
+            @backingInt(win32.DIB_RGB_COLORS),
             @bitCast(win32.SRCCOPY),
         );
     } else blk: {
@@ -509,7 +513,7 @@ inline fn stretchBlitBits(
             src_height,
             @ptrCast(frame_data),
             frame_buffer_info,
-            @intFromEnum(win32.DIB_RGB_COLORS),
+            @backingInt(win32.DIB_RGB_COLORS),
             @bitCast(win32.SRCCOPY),
         );
     };
@@ -521,7 +525,7 @@ inline fn stretchBlitBits(
 
 fn pumpMessages(eng: *EngineState) bool {
     var msg: win32.MSG = undefined;
-    while (win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE) != 0) {
+    while (win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE).toBool()) {
         const lparam: usize = @bitCast(msg.lParam);
         const wparam: usize = @bitCast(msg.wParam);
         switch (msg.message) {
@@ -542,51 +546,51 @@ fn pumpMessages(eng: *EngineState) bool {
                 eng.input.mouse_wheel_delta = delta;
             },
             win32.WM_LBUTTONDOWN => {
-                eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.left)] = 1;
-                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.left)] += 1;
+                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.left)] = 1;
+                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.left)] += 1;
             },
             win32.WM_LBUTTONUP => {
-                eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.left)] = 0;
-                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.left)] += 1;
+                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.left)] = 0;
+                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.left)] += 1;
             },
             win32.WM_RBUTTONDOWN => {
-                eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.right)] = 1;
-                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.right)] += 1;
+                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.right)] = 1;
+                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.right)] += 1;
             },
             win32.WM_RBUTTONUP => {
-                eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.right)] = 0;
-                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.right)] += 1;
+                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.right)] = 0;
+                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.right)] += 1;
             },
             win32.WM_MBUTTONDOWN => {
-                eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.middle)] = 1;
-                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.middle)] += 1;
+                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.middle)] = 1;
+                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.middle)] += 1;
             },
             win32.WM_MBUTTONUP => {
-                eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.middle)] = 0;
-                eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.middle)] += 1;
+                eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.middle)] = 0;
+                eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.middle)] += 1;
             },
             win32.WM_XBUTTONDOWN => {
                 if (wparam & 0x100000000 != 0) {
-                    eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x1)] = 1;
-                    eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.x1)] += 1;
+                    eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x1)] = 1;
+                    eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x1)] += 1;
                 } else {
-                    eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x2)] = 1;
-                    eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.x2)] += 1;
+                    eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x2)] = 1;
+                    eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x2)] += 1;
                 }
             },
             win32.WM_XBUTTONUP => {
                 if (wparam & 0x100000000 != 0) {
-                    eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x1)] = 0;
-                    eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.x1)] += 1;
+                    eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x1)] = 0;
+                    eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x1)] += 1;
                 } else {
-                    eng.input.mouse_buttons_ended_down[@intFromEnum(MouseButton.x2)] = 0;
-                    eng.input.mouse_buttons_half_transition_count[@intFromEnum(MouseButton.x2)] += 1;
+                    eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x2)] = 0;
+                    eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x2)] += 1;
                 }
             },
             win32.WM_KEYDOWN,
             win32.WM_SYSKEYDOWN,
             => {
-                var key: Key = @enumFromInt(wparam);
+                var key: Key = @fromBackingInt(@intCast(wparam));
 
                 const is_extended: bool = lparam & 0x01000000 != 0;
 
@@ -603,7 +607,7 @@ fn pumpMessages(eng: *EngineState) bool {
                     else => {},
                 }
 
-                const key_code: u8 = @intFromEnum(key);
+                const key_code: u8 = @backingInt(key);
 
                 // NOTE: For (sys)KeyDown messages this bit is set to 1 if the key was down before this message and 0 if it was up.
                 // this means for key down messages we need to check if this is 0 for transition count and 1 if it is sysUp message
@@ -614,7 +618,7 @@ fn pumpMessages(eng: *EngineState) bool {
             win32.WM_KEYUP,
             win32.WM_SYSKEYUP,
             => {
-                var key: Key = @enumFromInt(wparam);
+                var key: Key = @fromBackingInt(@intCast(wparam));
 
                 const is_extended: bool = lparam & 0x01000000 != 0;
 
@@ -631,7 +635,7 @@ fn pumpMessages(eng: *EngineState) bool {
                     else => {},
                 }
 
-                const key_code: u8 = @intFromEnum(key);
+                const key_code: u8 = @backingInt(key);
 
                 // NOTE: The 30th bit is always 1 for (sys)KeyUp messages. Since we only get up messages from the down state.
                 // this message always means a transition
@@ -655,10 +659,10 @@ fn pumpMessages(eng: *EngineState) bool {
 fn windowProc(
     window: windows.HWND,
     message: u32,
-    w_param: windows.WPARAM,
+    w_param: win32.WPARAM,
     l_param: windows.LPARAM,
-) callconv(.winapi) windows.LRESULT {
-    var result: windows.LRESULT = 0;
+) callconv(.winapi) win32.LRESULT {
+    var result: win32.LRESULT = 0;
 
     switch (message) {
         win32.WM_ERASEBKGND => result = 1,
@@ -679,7 +683,7 @@ fn windowProc(
         // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits to scale it.
         // We could figure out a way to keep the aspect ration the same, but that might be tricky.
         // win32.WM_SIZE => {
-        // var rect: windows.RECT = undefined;
+        // var rect: win32.RECT = undefined;
         // _ = win32.GetClientRect(app_state.window, &rect);
         // app_state.back_buffer.width = @intCast(rect.right - rect.left);
         // app_state.back_buffer.height = @intCast(rect.bottom - rect.top);
@@ -703,43 +707,37 @@ fn windowProc(
     return result;
 }
 
-fn reload_library(debug_game: *DebugGame) !bool {
-    const cwd = std.fs.cwd();
-    const file: std.fs.File = cwd.openFile(dll_name, .{}) catch {
-        return error.FailedToOpenFile;
-    };
-    const stats = try file.stat();
-    file.close();
-    if (debug_game.time_stamp == stats.mtime.nanoseconds) {
+fn reloadLibrary(io: std.Io, debug_game: *DebugGame) !bool {
+    const stats = try std.Io.Dir.cwd().statFile(io, dll_name, .{});
+    if (debug_game.is_loaded and debug_game.time_stamp == stats.mtime.nanoseconds) {
         return false;
     }
 
-    const new_name = dll_name ++ "_tmp";
+    // Keep the current DLL loaded until its replacement and all symbols are ready.
+    const next_index = debug_game.temp_index ^ 1;
+    const temp_names = [_][:0]const u8{ dll_name ++ "_tmp0", dll_name ++ "_tmp1" };
+    const new_name = temp_names[next_index];
 
-    // TODO: Is this better than using CopyFileA?
-    // try cwd.copyFile(dll_name, cwd, new_name, .{});
-    if (debug_game.is_loaded) {
-        debug_game.instance.close();
-    }
-
-    if (win32.CopyFileA(dll_name.ptr, new_name.ptr, 0) == 0) {
+    if (!win32.CopyFileA(dll_name.ptr, new_name.ptr, .FALSE).toBool()) {
         return error.FailedToCopyFile;
     }
 
-    var new_instance = std.DynLib.open(new_name) catch return false;
-    errdefer new_instance.close();
-    const init_fn = new_instance.lookup(DebugGameDLLApi.InitFn, "init") orelse return error.FailedToLookupInitFn;
-    const deinit_fn = new_instance.lookup(DebugGameDLLApi.DeinitFn, "deinit") orelse return error.FailedToLookupDeinitFn;
-    const update_and_render = new_instance.lookup(
-        DebugGameDLLApi.UpdateAndRenderFn,
-        "updateAndRender",
-    ) orelse return error.FailedToLookupUpdateAndRenderFn;
+    const new_instance = win32.LoadLibraryA(new_name.ptr) orelse return error.FailedToLoadLibrary;
+    errdefer _ = win32.FreeLibrary(new_instance);
+    const init_fn: DebugGameDLLApi.InitFn = @ptrCast(win32.GetProcAddress(new_instance, "init") orelse return error.FailedToLookupInitFn);
+    const deinit_fn: DebugGameDLLApi.DeinitFn = @ptrCast(win32.GetProcAddress(new_instance, "deinit") orelse return error.FailedToLookupDeinitFn);
+    const update_and_render: DebugGameDLLApi.UpdateAndRenderFn = @ptrCast(win32.GetProcAddress(new_instance, "updateAndRender") orelse return error.FailedToLookupUpdateAndRenderFn);
+
+    if (debug_game.is_loaded) {
+        _ = win32.FreeLibrary(debug_game.instance);
+    }
 
     debug_game.instance = new_instance;
     debug_game.game_api.init = init_fn;
     debug_game.game_api.deinit = deinit_fn;
     debug_game.game_api.updateAndRender = update_and_render;
     debug_game.is_loaded = true;
+    debug_game.temp_index = next_index;
     debug_game.time_stamp = stats.mtime.nanoseconds;
 
     return true;

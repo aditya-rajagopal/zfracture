@@ -3,7 +3,7 @@ const win = std.os.windows;
 const Guid = win.GUID;
 const win32 = @import("win32.zig");
 const IUnknown = win32.IUnknown;
-const HRESULT = win.HRESULT;
+const HRESULT = win32.HRESULT;
 const BOOL = win.BOOL;
 const HINSTANCE = win.HINSTANCE;
 

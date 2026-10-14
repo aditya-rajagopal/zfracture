@@ -123,11 +123,12 @@ const ReaderState = enum(u8) {
 };
 
 test "wav decode" {
-    const wav_data = try std.fs.cwd().readFileAlloc("assets/sounds/pop.wav", std.testing.allocator, .unlimited);
+    const wav_data = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "assets/sounds/pop.wav", std.testing.allocator, .unlimited);
     defer std.testing.allocator.free(wav_data);
 
     const wav_data_decoded = try decode(std.testing.allocator, wav_data);
     defer std.testing.allocator.free(wav_data_decoded.data);
 
-    std.log.err("first bytes: {any}", .{wav_data_decoded.data[0..10]});
+    try std.testing.expect(wav_data_decoded.data.len > 0);
+    try std.testing.expectEqual(0, wav_data_decoded.data.len % 4);
 }

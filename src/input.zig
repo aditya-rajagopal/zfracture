@@ -227,19 +227,19 @@ pub const InputState = struct {
     }
 
     pub inline fn isKeyDown(self: *const InputState, key: Key) bool {
-        return self.keys_ended_down[@intFromEnum(key)] != 0;
+        return self.keys_ended_down[@backingInt(key)] != 0;
     }
 
     pub inline fn isMouseButtonDown(self: *const InputState, button: MouseButton) bool {
-        return self.mouse_buttons_ended_down[@intFromEnum(button)] != 0;
+        return self.mouse_buttons_ended_down[@backingInt(button)] != 0;
     }
 
     pub inline fn isKeyUp(self: *const InputState, key: Key) bool {
-        return self.keys_ended_down[@intFromEnum(key)] == 0;
+        return self.keys_ended_down[@backingInt(key)] == 0;
     }
 
     pub inline fn isMouseButtonUp(self: *const InputState, button: MouseButton) bool {
-        return self.mouse_buttons_ended_down[@intFromEnum(button)] == 0;
+        return self.mouse_buttons_ended_down[@backingInt(button)] == 0;
     }
 
     pub inline fn keyPressedThisFrame(self: *const InputState, key: Key) bool {
@@ -250,19 +250,19 @@ pub const InputState = struct {
         // For example, if the button was down at the start of the frame and somewhere in the middle of the frame
         // the button was released, should we consider the button as pressed?
         // FIX: This is not correct. We need to check if the key ended down as well
-        return self.keys_ended_down[@intFromEnum(key)] != 0 and self.keys_half_transition_count[@intFromEnum(key)] >= 1;
+        return self.keys_ended_down[@backingInt(key)] != 0 and self.keys_half_transition_count[@backingInt(key)] >= 1;
     }
 
     pub inline fn mouseButtonPressedThisFrame(self: *const InputState, button: MouseButton) bool {
-        return self.mouse_buttons_ended_down[@intFromEnum(button)] != 0 and self.mouse_buttons_half_transition_count[@intFromEnum(button)] >= 1;
+        return self.mouse_buttons_ended_down[@backingInt(button)] != 0 and self.mouse_buttons_half_transition_count[@backingInt(button)] >= 1;
     }
 
     pub inline fn keyReleasedThisFrame(self: *const InputState, key: Key) bool {
         // NOTE(adi): a key was released within a frame if it ended up and it had more than 1 transitions.
-        return self.keys_ended_down[@intFromEnum(key)] == 0 and self.keys_half_transition_count[@intFromEnum(key)] >= 1;
+        return self.keys_ended_down[@backingInt(key)] == 0 and self.keys_half_transition_count[@backingInt(key)] >= 1;
     }
 
     pub inline fn mouseButtonReleasedThisFrame(self: *const InputState, button: MouseButton) bool {
-        return self.mouse_buttons_ended_down[@intFromEnum(button)] == 0 and self.mouse_buttons_half_transition_count[@intFromEnum(button)] >= 1;
+        return self.mouse_buttons_ended_down[@backingInt(button)] == 0 and self.mouse_buttons_half_transition_count[@backingInt(button)] >= 1;
     }
 };

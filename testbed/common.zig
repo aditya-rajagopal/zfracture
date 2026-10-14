@@ -5,6 +5,7 @@ const MouseButton = fr.MouseButton;
 const Renderer = fr.Renderer;
 
 pub const EngineState = struct {
+    io: std.Io,
     input: fr.input.InputState,
     sound: fr.SoundSystem,
     permanent_allocator: std.mem.Allocator,
