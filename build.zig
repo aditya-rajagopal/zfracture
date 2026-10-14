@@ -113,6 +113,34 @@ pub fn build(b: *std.Build) !void {
     check.dependOn(&dll_check.step);
 
     // ==================================== TESTS ==================================/
+    const test_step = b.step("test", "Run portable tests and check Windows audio tests");
+    for ([_][]const u8{ "src/software_renderer.zig", "src/windows/win32.zig" }) |path| {
+        const host_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(path),
+                .target = b.graph.host,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(host_tests).step);
+    }
+
+    const audio_tests = b.addTest(.{
+        .name = "audio-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/windows/xaudio2.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    check.dependOn(&audio_tests.step);
+    if (b.graph.host.result.os.tag == .windows and target.result.os.tag == .windows and
+        b.graph.host.result.cpu.arch == target.result.cpu.arch)
+    {
+        test_step.dependOn(&b.addRunArtifact(audio_tests).step);
+    } else {
+        test_step.dependOn(&audio_tests.step);
+    }
 }
 
 // fn compile_shader(

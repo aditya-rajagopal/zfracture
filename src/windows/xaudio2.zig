@@ -26,7 +26,9 @@ callback: StopOnEndCallback = undefined,
 
 pub const XAudioVoice = struct {
     source: *IXAudio2SourceVoice = undefined,
-    playing: bool = false,
+    // The game thread reserves the slot; the audio callback releases it.
+    in_use: std.atomic.Value(bool) = .init(false),
+    // Only the game thread accesses the buffer metadata.
     buffer: ?[]const u8 = null,
 };
 
@@ -63,9 +65,8 @@ const StopOnEndCallback = extern struct {
     fn _onBufferEnd(_: *IXAudio2VoiceCallback, context: ?*anyopaque) callconv(.winapi) void {
         const voice: *XAudioVoice = @ptrCast(@alignCast(context));
         _ = voice.source.Stop(0, XAUDIO2_COMMIT_NOW);
-        _ = voice.source.FlushSourceBuffers();
-        voice.buffer = null;
-        voice.playing = false;
+        // Publish availability only after all callback work on the source is done.
+        voice.in_use.store(false, .release);
     }
 
     fn _onBufferStart(_: *IXAudio2VoiceCallback, _: ?*anyopaque) callconv(.winapi) void {}
@@ -152,18 +153,21 @@ pub fn deinit(self: *Self) void {
 
 fn getAvailableVoice(self: *Self) ?*XAudioVoice {
     for (&self.voices) |*voice| {
-        if (!voice.playing) {
+        if (!voice.in_use.load(.acquire)) {
             return voice;
         }
     }
     return null;
 }
 
+/// Call from the game thread. The audio data must outlive its playback.
 pub fn playSound(self: *Self, data: []const u8, params: PlaybackParams) bool {
     // TODO(sound): if we are full on voices we are just not going to play the sound.
     // Should we do something else?
     const voice: *XAudioVoice = getAvailableVoice(self) orelse return false;
     voice.buffer = data;
+    // Completion may run as soon as playback starts, including before Start returns.
+    voice.in_use.store(true, .release);
     const x_audio_buffer = XAUDIO2_BUFFER{
         .Flags = XAUDIO2_END_OF_STREAM,
         .AudioBytes = @truncate(data.len),
@@ -179,30 +183,159 @@ pub fn playSound(self: *Self, data: []const u8, params: PlaybackParams) bool {
     if (result != win32.S_OK) {
         // TODO(io): remove this log and should go into the IO queue
         std.log.info("Failed to submit source buffer: {d}", .{result});
+        voice.buffer = null;
+        voice.in_use.store(false, .release);
         return false;
     }
     result = voice.source.Start(0, XAUDIO2_COMMIT_NOW);
     if (result != win32.S_OK) {
         // TODO(io): remove this log and should go into the IO queue
         std.log.info("Failed to start source buffer: {d}", .{result});
+        stopAndFlushVoice(voice);
         return false;
     }
-    voice.playing = true;
     return true;
 }
 
+fn stopAndFlushVoice(voice: *XAudioVoice) void {
+    const stop_result = voice.source.Stop(0, XAUDIO2_COMMIT_NOW);
+    if (stop_result != win32.S_OK) {
+        std.log.err("Failed to stop source voice: {d}", .{stop_result});
+        return;
+    }
+    const flush_result = voice.source.FlushSourceBuffers();
+    if (flush_result != win32.S_OK) {
+        std.log.err("Failed to flush source buffers: {d}", .{flush_result});
+        return;
+    }
+    // Skip this instance in subsequent stop requests. Only OnBufferEnd releases the slot.
+    voice.buffer = null;
+}
+
+/// Call from the game thread. Stops the first active instance of this buffer.
+/// Completion is asynchronous; the audio data must remain alive until it finishes.
 pub fn stopSound(self: *Self, data: []const u8) void {
     for (&self.voices) |*voice| {
+        if (!voice.in_use.load(.acquire)) continue;
         if (voice.buffer) |buffer| {
             if (buffer.ptr == data.ptr) {
-                voice.Stop(0, XAUDIO2_COMMIT_NOW);
-                voice.FlushSourceBuffers();
-                voice.buffer = null;
-                voice.playing = false;
+                stopAndFlushVoice(voice);
                 return;
             }
         }
     }
+}
+
+const TestSourceVoice = struct {
+    source: IXAudio2SourceVoice = .{ .vtable = &vtable },
+    callback: *StopOnEndCallback = undefined,
+    context: ?*anyopaque = null,
+    complete_on_start: bool = false,
+    stop_count: usize = 0,
+    flush_count: usize = 0,
+
+    const vtable: IXAudio2SourceVoice.VTable = blk: {
+        var table: IXAudio2SourceVoice.VTable = undefined;
+        table.SubmitSourceBuffer = submit;
+        table.Start = start;
+        table.Stop = stop;
+        table.FlushSourceBuffers = flush;
+        break :blk table;
+    };
+
+    fn initAudio(self: *TestSourceVoice, audio: *Self) void {
+        audio.* = .{};
+        audio.callback = .{};
+        self.callback = &audio.callback;
+        // Keep the other slots occupied so premature reuse or a leaked slot is observable.
+        for (&audio.voices) |*voice| voice.* = .{ .source = &self.source, .in_use = .init(true) };
+        audio.voices[0].in_use.store(false, .monotonic);
+    }
+
+    fn complete(self: *TestSourceVoice) void {
+        const context = self.context orelse return;
+        self.context = null;
+        self.callback.vtable.OnBufferEnd(@ptrCast(self.callback), context);
+    }
+
+    fn submit(source: *IXAudio2SourceVoice, buffer: ?*const XAUDIO2_BUFFER, _: ?*const XAUDIO2_BUFFER_WMA) callconv(.winapi) HRESULT {
+        const self: *TestSourceVoice = @fieldParentPtr("source", source);
+        std.debug.assert(self.context == null);
+        self.context = buffer.?.pContext;
+        return win32.S_OK;
+    }
+
+    fn start(source: *IXAudio2SourceVoice, _: u32, _: u32) callconv(.winapi) HRESULT {
+        const self: *TestSourceVoice = @fieldParentPtr("source", source);
+        if (self.complete_on_start) self.complete();
+        return win32.S_OK;
+    }
+
+    fn stop(source: *const IXAudio2SourceVoice, _: u32, _: u32) callconv(.winapi) HRESULT {
+        const self: *TestSourceVoice = @fieldParentPtr("source", @constCast(source));
+        self.stop_count += 1;
+        return win32.S_OK;
+    }
+
+    fn flush(source: *const IXAudio2SourceVoice) callconv(.winapi) HRESULT {
+        const self: *TestSourceVoice = @fieldParentPtr("source", @constCast(source));
+        self.flush_count += 1;
+        // Tests deliver the pending completion explicitly, after stopSound returns.
+        return win32.S_OK;
+    }
+};
+
+test "completion_before_start_returns_does_not_leak_voices" {
+    var audio: Self = undefined;
+    var source: TestSourceVoice = .{ .complete_on_start = true };
+    source.initAudio(&audio);
+    for (0..MaxConcurrentVoices + 1) |_| {
+        try std.testing.expect(audio.playSound(&.{ 0, 0, 0, 0 }, .{}));
+        try std.testing.expect(!audio.voices[0].in_use.load(.acquire));
+    }
+}
+
+test "stopped_voice_waits_for_flush_completion_before_reuse" {
+    var audio: Self = undefined;
+    var source: TestSourceVoice = .{};
+    source.initAudio(&audio);
+    const data = [_]u8{ 0, 0, 0, 0 };
+    try std.testing.expect(audio.playSound(&data, .{}));
+    audio.stopSound(&data);
+    try std.testing.expectEqual(@as(usize, 1), source.stop_count);
+    try std.testing.expectEqual(@as(usize, 1), source.flush_count);
+    try std.testing.expect(!audio.playSound(&data, .{}));
+    source.complete();
+    try std.testing.expect(audio.playSound(&data, .{}));
+    try std.testing.expect(audio.voices[0].in_use.load(.acquire));
+    source.complete();
+}
+
+test "repeated_stops_target_distinct_active_instances" {
+    var audio: Self = undefined;
+    var first: TestSourceVoice = .{};
+    first.initAudio(&audio);
+    var second: TestSourceVoice = .{ .callback = &audio.callback };
+    audio.voices[1] = .{ .source = &second.source };
+    const data = [_]u8{ 0, 0, 0, 0 };
+    try std.testing.expect(audio.playSound(&data, .{}));
+    try std.testing.expect(audio.playSound(&data, .{}));
+
+    audio.stopSound(&data);
+    audio.stopSound(&data);
+    try std.testing.expectEqual(@as(usize, 1), first.stop_count);
+    try std.testing.expectEqual(@as(usize, 1), first.flush_count);
+    try std.testing.expectEqual(@as(usize, 1), second.stop_count);
+    try std.testing.expectEqual(@as(usize, 1), second.flush_count);
+    try std.testing.expect(!audio.playSound(&data, .{}));
+
+    first.complete();
+    try std.testing.expect(audio.playSound(&data, .{}));
+    try std.testing.expect(!audio.playSound(&data, .{}));
+    second.complete();
+    try std.testing.expect(audio.playSound(&data, .{}));
+    first.complete();
+    second.complete();
 }
 
 // ------------------------------------------------------------------------------------------------------------

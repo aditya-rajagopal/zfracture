@@ -570,7 +570,7 @@ fn pumpMessages(eng: *EngineState) bool {
                 eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.middle)] += 1;
             },
             win32.WM_XBUTTONDOWN => {
-                if (wparam & 0x100000000 != 0) {
+                if (wparam & 0x00010000 != 0) {
                     eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x1)] = 1;
                     eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x1)] += 1;
                 } else {
@@ -579,7 +579,7 @@ fn pumpMessages(eng: *EngineState) bool {
                 }
             },
             win32.WM_XBUTTONUP => {
-                if (wparam & 0x100000000 != 0) {
+                if (wparam & 0x00010000 != 0) {
                     eng.input.mouse_buttons_ended_down[@backingInt(MouseButton.x1)] = 0;
                     eng.input.mouse_buttons_half_transition_count[@backingInt(MouseButton.x1)] += 1;
                 } else {

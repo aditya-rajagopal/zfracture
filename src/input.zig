@@ -191,6 +191,9 @@ pub const Key = enum(u8) {
     apostrophe = 0xde,
 
     ime_process = 0xe5,
+
+    // Windows can deliver virtual-key codes without a named entry here.
+    _,
 };
 
 /// TODO(adi): Figure out how to include more than 2 extra mouse buttons.
@@ -224,6 +227,7 @@ pub const InputState = struct {
         self.mouse_position_previous = self.mouse_position_current;
         self.keys_half_transition_count = @splat(0);
         self.mouse_buttons_half_transition_count = @splat(0);
+        self.mouse_wheel_delta = 0;
     }
 
     pub inline fn isKeyDown(self: *const InputState, key: Key) bool {

@@ -41,49 +41,79 @@ pub fn drawRectangle(renderer: *Renderer, x: f32, y: f32, width: f32, height: f3
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
     // TODO: Consider blending
     // NOTE: We are rounding here to if the position of the corner covers most of a pixel in x or y we will draw it.
-    var x_int: i32 = @intFromFloat(@round(x * renderer.pixels_per_meter));
-    var y_int: i32 = @intFromFloat(@round(y * renderer.pixels_per_meter));
+    const x_int: i32 = @intFromFloat(@round(x * renderer.pixels_per_meter));
+    const y_int: i32 = @intFromFloat(@round(y * renderer.pixels_per_meter));
     // @TODO: Should we do x + width and then round it?
-    var width_int: i32 = @intFromFloat(@round(width * renderer.pixels_per_meter));
-    var height_int: i32 = @intFromFloat(@round(height * renderer.pixels_per_meter));
+    const width_int: i32 = @intFromFloat(@round(width * renderer.pixels_per_meter));
+    const height_int: i32 = @intFromFloat(@round(height * renderer.pixels_per_meter));
 
-    // NOTE: If the position is too far off screen to draw a rectangle we dont draw it
-    if (y_int > back_buffer.height or
-        x_int > back_buffer.width or
-        y_int < -width_int or
-        x_int < -height_int)
-    {
-        return;
-    }
+    // Clip both ends of each axis, widening endpoint sums before adding.
+    const left = @max(@as(i64, x_int), 0);
+    const top = @max(@as(i64, y_int), 0);
+    const right = @min(@as(i64, x_int) + width_int, back_buffer.width);
+    const bottom = @min(@as(i64, y_int) + height_int, back_buffer.height);
+    if (right <= left or bottom <= top) return;
 
-    // NOTE: Clamping so we dont overflow the buffer and only draw the visible part of the rectangle
-    if (x_int < 0) {
-        width_int += x_int;
-        x_int = 0;
-    } else if (x_int + width_int > back_buffer.width) {
-        width_int = back_buffer.width - x_int;
-    }
-    if (y_int < 0) {
-        height_int += y_int;
-        y_int = 0;
-    } else if (y_int + height_int > back_buffer.height) {
-        height_int = back_buffer.height - y_int;
-    }
-
-    const x_uint: u32 = @intCast(x_int);
-    const y_uint: u32 = @intCast(y_int);
-    const width_uint: u32 = @intCast(width_int);
-    const height_uint: u32 = @intCast(height_int);
+    const x_min: usize = @intCast(left);
+    const y_min: usize = @intCast(top);
+    const x_max: usize = @intCast(right);
+    const y_max: usize = @intCast(bottom);
 
     const colour_u32: u32 = colour.a8r8g8b8();
 
     const total_pixels: usize = @as(usize, @intCast(back_buffer.width)) * @as(usize, @intCast(back_buffer.height));
     const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
 
-    for (0..height_uint) |j| {
-        for (0..width_uint) |i| {
-            pixles_u32[(y_uint + j) * back_buffer.width + x_uint + i] = colour_u32;
+    for (y_min..y_max) |j| {
+        for (x_min..x_max) |i| {
+            pixles_u32[j * back_buffer.width + i] = colour_u32;
         }
+    }
+}
+
+test "rectangle_clipping" {
+    const Case = struct {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        left: usize = 0,
+        top: usize = 0,
+        right: usize = 0,
+        bottom: usize = 0,
+    };
+    const cases = [_]Case{
+        .{ .x = 0, .y = -3, .width = 10, .height = 2 },
+        .{ .x = -3, .y = 0, .width = 2, .height = 10 },
+        .{ .x = -3, .y = 0, .width = 10, .height = 2, .right = 7, .bottom = 2 },
+        .{ .x = 0, .y = -3, .width = 2, .height = 10, .right = 2, .bottom = 7 },
+        .{ .x = -1, .y = -1, .width = 20, .height = 20, .right = 16, .bottom = 16 },
+        .{ .x = 14, .y = 14, .width = 4, .height = 4, .left = 14, .top = 14, .right = 16, .bottom = 16 },
+        .{ .x = 16, .y = 0, .width = 2, .height = 10 },
+        .{ .x = 0, .y = 16, .width = 10, .height = 2 },
+        .{ .x = -2, .y = 0, .width = 2, .height = 10 },
+        .{ .x = 0, .y = -2, .width = 10, .height = 2 },
+        .{ .x = 4, .y = 4, .width = 0, .height = 4 },
+        .{ .x = 4, .y = 4, .width = 4, .height = -1 },
+    };
+
+    for (cases) |case| {
+        // The trailing pixels detect writes past the framebuffer in fast builds too.
+        var pixels: [16 * 16 + 16]u32 align(4096) = @splat(0);
+        @memset(pixels[16 * 16 ..], 0x12345678);
+        var renderer: Renderer = .{
+            .back_buffer = .{ .width = 16, .height = 16, .data = std.mem.sliceAsBytes(pixels[0 .. 16 * 16]) },
+            .pixels_per_meter = 1,
+            .camera_position = .{ .x = 0, .y = 0 },
+        };
+        renderer.drawRectangle(case.x, case.y, case.width, case.height, .white);
+        for (pixels[0 .. 16 * 16], 0..) |pixel, index| {
+            const x = index % 16;
+            const y = index / 16;
+            const expected: u32 = if (x >= case.left and x < case.right and y >= case.top and y < case.bottom) 0xffffffff else 0;
+            try std.testing.expectEqual(expected, pixel);
+        }
+        for (pixels[16 * 16 ..]) |pixel| try std.testing.expectEqual(@as(u32, 0x12345678), pixel);
     }
 }
 
