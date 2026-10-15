@@ -4,4 +4,5 @@ zig-pkg
 Logs/*
 *.rdbg
 .obsidian
-UntitledGame/*
+UntitledGame
+.DS_Store
