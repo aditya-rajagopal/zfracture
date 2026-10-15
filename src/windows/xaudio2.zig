@@ -1,4 +1,5 @@
 const std = @import("std");
+const SoundSystem = @import("../sound.zig");
 const win = std.os.windows;
 const Guid = win.GUID;
 const win32 = @import("win32.zig");
@@ -7,34 +8,23 @@ const HRESULT = win32.HRESULT;
 const BOOL = win.BOOL;
 const HINSTANCE = win.HINSTANCE;
 
-pub const PlaybackParams = struct {
-    play_begin: u32 = 0,
-    play_length: u32 = 0,
-    loop_begin: u32 = 0,
-    loop_length: u32 = 0,
-    loop_count: u32 = 0,
+pub const PlayError = SoundSystem.PlayError;
+
+pub const State = struct {
+    dll: ?HINSTANCE = null,
+    x_audio2: ?*IXAudio2 = null,
+    mastering_voice: ?*IXAudio2MasteringVoice = null,
+    com_initialized: bool = false,
+    voices: [SoundSystem.voice_capacity]XAudioVoice = @splat(.{}),
+    callback: VoiceCallback = .{},
 };
-
-pub const MaxConcurrentVoices = 16;
-
-dll: HINSTANCE = undefined,
-x_audio2: *IXAudio2 = undefined,
-mastering_voice: *IXAudio2MasteringVoice = undefined,
-// TODO(io): Do we need different voice stacks for SFX and Music?
-voices: [MaxConcurrentVoices]XAudioVoice = undefined,
-callback: StopOnEndCallback = undefined,
 
 pub const XAudioVoice = struct {
-    source: *IXAudio2SourceVoice = undefined,
-    // The game thread reserves the slot; the audio callback releases it.
-    in_use: std.atomic.Value(bool) = .init(false),
-    // Only the game thread accesses the buffer metadata.
-    buffer: ?[]const u8 = null,
+    source: ?*IXAudio2SourceVoice = null,
+    slot: *SoundSystem.Slot = undefined,
 };
 
-const Self = @This();
-
-pub const Error = error{
+pub const InitError = error{
     FailedToInitializeCOM,
     FailedToLoadXAudio2DLL,
     FailedToCreateXAudio2,
@@ -49,7 +39,7 @@ const PFNXAudio2Create = *const fn (
 ) callconv(.winapi) HRESULT;
 
 // TODO(sound): Do we need any other type of callbacks for different kinds of voices?
-const StopOnEndCallback = extern struct {
+const VoiceCallback = extern struct {
     vtable: *const IXAudio2VoiceCallback.VTable = &default,
 
     pub const default = IXAudio2VoiceCallback.VTable{
@@ -64,9 +54,9 @@ const StopOnEndCallback = extern struct {
 
     fn _onBufferEnd(_: *IXAudio2VoiceCallback, context: ?*anyopaque) callconv(.winapi) void {
         const voice: *XAudioVoice = @ptrCast(@alignCast(context));
-        _ = voice.source.Stop(0, XAUDIO2_COMMIT_NOW);
-        // Publish availability only after all callback work on the source is done.
-        voice.in_use.store(false, .release);
+        // A source with no queued buffers is silent. Don't issue a delayed native
+        // Stop here that could interfere with a subsequent playback.
+        voice.slot.complete();
     }
 
     fn _onBufferStart(_: *IXAudio2VoiceCallback, _: ?*anyopaque) callconv(.winapi) void {}
@@ -74,182 +64,209 @@ const StopOnEndCallback = extern struct {
     fn _onVoiceProcessingPassStart(_: *IXAudio2VoiceCallback, _: u32) callconv(.winapi) void {}
     fn _onVoiceProcessingPassEnd(_: *IXAudio2VoiceCallback) callconv(.winapi) void {}
     fn _onLoopEnd(_: *IXAudio2VoiceCallback, _: ?*anyopaque) callconv(.winapi) void {}
-    fn _onVoiceError(_: *IXAudio2VoiceCallback, _: ?*anyopaque, _: HRESULT) callconv(.winapi) void {}
+    fn _onVoiceError(
+        _: *IXAudio2VoiceCallback,
+        context: ?*anyopaque,
+        _: HRESULT,
+    ) callconv(.winapi) void {
+        if (context) |ptr| {
+            const voice: *XAudioVoice = @ptrCast(@alignCast(ptr));
+            // The game thread will destroy the failed native voice. Never block
+            // or log from the callback, or make this slot available for reuse.
+            voice.slot.state.store(.failed, .release);
+        }
+    }
 };
 
-pub fn init(audio_engine: *Self) Error!void {
-    // TODO(adi): Should the sound system be configurable
-    // TODO(adi): Should we use COINIT_SPEED_OVER_MEMORY?
-    var result = win32.CoInitializeEx(null, win32.COINIT_MULTITHREADED | win32.COINIT_SPEED_OVER_MEMORY);
-    errdefer win32.CoUninitialize();
-    if (result != win32.S_OK) {
-        return Error.FailedToInitializeCOM;
-    }
+/// Initialize in place from executable-owned code; callbacks must survive hot reload.
+/// Preallocate native voices here; fracture does not allocate during play/stop.
+pub fn init(audio_engine: *SoundSystem) InitError!void {
+    audio_engine.* = .{};
+    var result = win32.CoInitializeEx(
+        null,
+        win32.COINIT_MULTITHREADED | win32.COINIT_SPEED_OVER_MEMORY,
+    );
+    // S_FALSE is also success and still requires a matching CoUninitialize.
+    if (result < 0) return error.FailedToInitializeCOM;
+    audio_engine.native.com_initialized = true;
+    errdefer audio_engine.deinit();
 
-    audio_engine.dll = win32.LoadLibraryA("xaudio2_9.dll") orelse return Error.FailedToLoadXAudio2DLL;
-    errdefer _ = win32.FreeLibrary(audio_engine.dll);
+    audio_engine.native.dll = win32.LoadLibraryA("xaudio2_9.dll") orelse
+        return error.FailedToLoadXAudio2DLL;
+    const xAudio2Create: PFNXAudio2Create = @ptrCast(win32.GetProcAddress(
+        audio_engine.native.dll.?,
+        "XAudio2Create",
+    ) orelse return error.FailedToLoadXAudio2DLL);
+    result = xAudio2Create(&audio_engine.native.x_audio2, FLAGS{}, XAUDIO2_ANY_PROCESSOR);
+    if (result < 0 or audio_engine.native.x_audio2 == null) return error.FailedToCreateXAudio2;
 
-    const xAudio2Create: PFNXAudio2Create = @ptrCast(win32.GetProcAddress(audio_engine.dll, "XAudio2Create") orelse return Error.FailedToLoadXAudio2DLL);
-    var x_audio2_interface: ?*IXAudio2 = undefined;
-    result = xAudio2Create(&x_audio2_interface, FLAGS{}, XAUDIO2_ANY_PROCESSOR);
-    if (result != win32.S_OK) {
-        return Error.FailedToCreateXAudio2;
-    }
-
-    audio_engine.x_audio2 = x_audio2_interface orelse return Error.FailedToCreateXAudio2;
-    errdefer audio_engine.x_audio2.Relese();
-
-    var mastering_voice_interface: ?*IXAudio2MasteringVoice = undefined;
-    result = audio_engine.x_audio2.CreateMasteringVoice(
-        &mastering_voice_interface,
-        2,
-        44100,
+    result = audio_engine.native.x_audio2.?.CreateMasteringVoice(
+        &audio_engine.native.mastering_voice,
+        SoundSystem.channels,
+        SoundSystem.sample_rate_hz,
         0,
         null,
         null,
         AUDIO_STREAM_CATEGORY.GameEffects,
     );
-    if (result != win32.S_OK) {
-        return Error.FailedToCreateMasteringVoice;
-    }
-    audio_engine.mastering_voice = mastering_voice_interface orelse return Error.FailedToCreateMasteringVoice;
+    if (result < 0) return error.FailedToCreateMasteringVoice;
+    if (audio_engine.native.mastering_voice == null) return error.FailedToCreateMasteringVoice;
 
-    // TODO(adi): idk if this needs to be configurable
+    for (&audio_engine.native.voices, &audio_engine.pool.slots) |*voice, *slot| {
+        voice.slot = slot;
+        try createVoice(audio_engine, voice);
+    }
+}
+
+fn createVoice(self: *SoundSystem, voice: *XAudioVoice) error{FailedToCreateVoice}!void {
+    std.debug.assert(voice.source == null);
     const wave_format: WAVEFORMATEX = .default;
-
-    audio_engine.callback = .{};
-
-    for (&audio_engine.voices) |*voice| {
-        var v: ?*IXAudio2SourceVoice = undefined;
-        result = audio_engine.x_audio2.CreateSourceVoice(
-            &v,
-            &wave_format,
-            0,
-            XAUDIO2_DEFAULT_FREQ_RATIO,
-            @ptrCast(@alignCast(&audio_engine.callback)),
-            null,
-            null,
-        );
-
-        if (result != win32.S_OK) {
-            return Error.FailedToCreateVoice;
-        }
-
-        voice.* = .{};
-        voice.source = v orelse return Error.FailedToCreateVoice;
-        result = voice.source.SetVolume(1.0, XAUDIO2_COMMIT_NOW);
-        if (result != win32.S_OK) {
-            // TODO(io):
-            std.log.info("Failed to set volume: {d}", .{result});
-        }
+    const result = self.native.x_audio2.?.CreateSourceVoice(
+        &voice.source,
+        &wave_format,
+        0,
+        XAUDIO2_DEFAULT_FREQ_RATIO,
+        @ptrCast(@alignCast(&self.native.callback)),
+        null,
+        null,
+    );
+    if (result < 0 or voice.source == null) {
+        if (voice.source) |source| source.IXAudio2Voice.DestroyVoice();
+        voice.source = null;
+        return error.FailedToCreateVoice;
     }
 }
 
-pub fn deinit(self: *Self) void {
-    self.x_audio2.Relese();
-    _ = win32.FreeLibrary(self.dll);
-    win32.CoUninitialize();
-}
-
-fn getAvailableVoice(self: *Self) ?*XAudioVoice {
-    for (&self.voices) |*voice| {
-        if (!voice.in_use.load(.acquire)) {
-            return voice;
-        }
+pub fn deinit(self: *SoundSystem) void {
+    if (self.native.x_audio2) |engine| engine.StopEngine();
+    for (&self.native.voices) |*voice| {
+        if (voice.source) |source| source.IXAudio2Voice.DestroyVoice();
+        voice.source = null;
     }
-    return null;
+    if (self.native.mastering_voice) |voice| voice.IXAudio2Voice.DestroyVoice();
+    if (self.native.x_audio2) |engine| engine.Relese();
+    if (self.native.dll) |dll| _ = win32.FreeLibrary(dll);
+    if (self.native.com_initialized) win32.CoUninitialize();
+    self.* = .{};
 }
 
-/// Call from the game thread. The audio data must outlive its playback.
-pub fn playSound(self: *Self, data: []const u8, params: PlaybackParams) bool {
-    // TODO(sound): if we are full on voices we are just not going to play the sound.
-    // Should we do something else?
-    const voice: *XAudioVoice = getAvailableVoice(self) orelse return false;
-    voice.buffer = data;
+/// Game thread, executable-owned code only. Retry each failed voice once per call.
+pub fn update(self: *SoundSystem) void {
+    for (&self.pool.slots, &self.native.voices, 0..) |*slot, *voice, index| {
+        if (slot.state.load(.acquire) != .failed) continue;
+        if (voice.source) |source| {
+            // DestroyVoice waits for all callbacks and sample reads to finish.
+            // Keep the slot failed throughout teardown and recreation.
+            source.IXAudio2Voice.DestroyVoice();
+            voice.source = null;
+            std.log.warn("Audio voice {d} failed; attempting recovery", .{index});
+        }
+        createVoice(self, voice) catch continue;
+        // Preserve the generation so the next play cannot revive an old handle.
+        slot.state.store(.free, .release);
+    }
+}
+
+/// Game thread only. Borrow immutable PCM until sound-system shutdown.
+pub fn play(self: *SoundSystem, data: []const u8) PlayError!SoundSystem.PlaybackHandle {
+    const reservation = try self.pool.reserve(data);
+    const voice = &self.native.voices[reservation.index];
+    const source = voice.source.?;
     // Completion may run as soon as playback starts, including before Start returns.
-    voice.in_use.store(true, .release);
+    voice.slot.state.store(.active, .release);
     const x_audio_buffer = XAUDIO2_BUFFER{
         .Flags = XAUDIO2_END_OF_STREAM,
-        .AudioBytes = @truncate(data.len),
+        .AudioBytes = @intCast(data.len),
         .pAudioData = @ptrCast(data.ptr),
-        .PlayBegin = params.play_begin,
-        .PlayLength = params.play_length,
-        .LoopBegin = params.loop_begin,
-        .LoopLength = params.loop_length,
-        .LoopCount = params.loop_count,
+        .PlayBegin = 0,
+        .PlayLength = 0,
+        .LoopBegin = 0,
+        .LoopLength = 0,
+        .LoopCount = 0,
         .pContext = @ptrCast(voice),
     };
-    var result = voice.source.SubmitSourceBuffer(&x_audio_buffer, null);
-    if (result != win32.S_OK) {
-        // TODO(io): remove this log and should go into the IO queue
-        std.log.info("Failed to submit source buffer: {d}", .{result});
-        voice.buffer = null;
-        voice.in_use.store(false, .release);
-        return false;
+    if (source.SubmitSourceBuffer(&x_audio_buffer, null) < 0) {
+        voice.slot.state.store(.failed, .release);
+        return error.PlaybackFailed;
     }
-    result = voice.source.Start(0, XAUDIO2_COMMIT_NOW);
-    if (result != win32.S_OK) {
-        // TODO(io): remove this log and should go into the IO queue
-        std.log.info("Failed to start source buffer: {d}", .{result});
-        stopAndFlushVoice(voice);
-        return false;
+    if (source.Start(0, XAUDIO2_COMMIT_NOW) < 0) {
+        voice.slot.state.store(.failed, .release);
+        return error.PlaybackFailed;
     }
-    return true;
+    return reservation.handle;
 }
 
-fn stopAndFlushVoice(voice: *XAudioVoice) void {
-    const stop_result = voice.source.Stop(0, XAUDIO2_COMMIT_NOW);
-    if (stop_result != win32.S_OK) {
-        std.log.err("Failed to stop source voice: {d}", .{stop_result});
+/// Requests a stop. Only completion releases the slot; stale handles are ignored.
+pub fn stop(self: *SoundSystem, handle: SoundSystem.PlaybackHandle) void {
+    const index = self.pool.requestStop(handle) orelse return;
+    const source = self.native.voices[index].source.?;
+    if (source.Stop(0, XAUDIO2_COMMIT_NOW) < 0) {
+        self.pool.slots[index].state.store(.failed, .release);
         return;
     }
-    const flush_result = voice.source.FlushSourceBuffers();
-    if (flush_result != win32.S_OK) {
-        std.log.err("Failed to flush source buffers: {d}", .{flush_result});
-        return;
-    }
-    // Skip this instance in subsequent stop requests. Only OnBufferEnd releases the slot.
-    voice.buffer = null;
-}
-
-/// Call from the game thread. Stops the first active instance of this buffer.
-/// Completion is asynchronous; the audio data must remain alive until it finishes.
-pub fn stopSound(self: *Self, data: []const u8) void {
-    for (&self.voices) |*voice| {
-        if (!voice.in_use.load(.acquire)) continue;
-        if (voice.buffer) |buffer| {
-            if (buffer.ptr == data.ptr) {
-                stopAndFlushVoice(voice);
-                return;
-            }
-        }
+    if (source.FlushSourceBuffers() < 0) {
+        self.pool.slots[index].state.store(.failed, .release);
     }
 }
 
 const TestSourceVoice = struct {
     source: IXAudio2SourceVoice = .{ .vtable = &vtable },
-    callback: *StopOnEndCallback = undefined,
+    engine: IXAudio2 = .{ .vtable = &engine_vtable },
+    callback: *VoiceCallback = undefined,
     context: ?*anyopaque = null,
     complete_on_start: bool = false,
+    fail_start: bool = false,
+    fail_stop: bool = false,
+    fail_create: bool = false,
+    create_count: usize = 0,
     stop_count: usize = 0,
     flush_count: usize = 0,
+    destroy_count: usize = 0,
 
     const vtable: IXAudio2SourceVoice.VTable = blk: {
         var table: IXAudio2SourceVoice.VTable = undefined;
         table.SubmitSourceBuffer = submit;
         table.Start = start;
-        table.Stop = stop;
+        table.Stop = TestSourceVoice.stop;
         table.FlushSourceBuffers = flush;
+        table.base.DestroyVoice = destroy;
         break :blk table;
     };
 
-    fn initAudio(self: *TestSourceVoice, audio: *Self) void {
+    const engine_vtable: IXAudio2.VTable = blk: {
+        var table: IXAudio2.VTable = undefined;
+        table.CreateSourceVoice = create;
+        break :blk table;
+    };
+
+    fn initAudio(self: *TestSourceVoice, audio: *SoundSystem) void {
         audio.* = .{};
-        audio.callback = .{};
-        self.callback = &audio.callback;
+        audio.native.x_audio2 = &self.engine;
+        audio.native.callback = .{};
+        self.callback = &audio.native.callback;
         // Keep the other slots occupied so premature reuse or a leaked slot is observable.
-        for (&audio.voices) |*voice| voice.* = .{ .source = &self.source, .in_use = .init(true) };
-        audio.voices[0].in_use.store(false, .monotonic);
+        for (&audio.pool.slots) |*slot| slot.state.store(.retired, .monotonic);
+        audio.pool.slots[0].state.store(.free, .monotonic);
+        audio.native.voices[0] = .{ .source = &self.source, .slot = &audio.pool.slots[0] };
+    }
+
+    fn create(
+        engine: *const IXAudio2,
+        source: ?*?*IXAudio2SourceVoice,
+        _: ?*const WAVEFORMATEX,
+        _: u32,
+        _: f32,
+        callback: ?*IXAudio2VoiceCallback,
+        _: ?*const XAUDIO2_VOICE_SENDS,
+        _: ?*const XAUDIO2_EFFECT_CHAIN,
+    ) callconv(.winapi) HRESULT {
+        const self: *TestSourceVoice = @fieldParentPtr("engine", @constCast(engine));
+        self.create_count += 1;
+        if (self.fail_create) return @bitCast(@as(u32, 0x80004005)); // E_FAIL
+        std.debug.assert(self.context == null);
+        self.callback = @ptrCast(@alignCast(callback.?));
+        source.?.* = &self.source;
+        return win32.S_OK;
     }
 
     fn complete(self: *TestSourceVoice) void {
@@ -258,7 +275,11 @@ const TestSourceVoice = struct {
         self.callback.vtable.OnBufferEnd(@ptrCast(self.callback), context);
     }
 
-    fn submit(source: *IXAudio2SourceVoice, buffer: ?*const XAUDIO2_BUFFER, _: ?*const XAUDIO2_BUFFER_WMA) callconv(.winapi) HRESULT {
+    fn submit(
+        source: *IXAudio2SourceVoice,
+        buffer: ?*const XAUDIO2_BUFFER,
+        _: ?*const XAUDIO2_BUFFER_WMA,
+    ) callconv(.winapi) HRESULT {
         const self: *TestSourceVoice = @fieldParentPtr("source", source);
         std.debug.assert(self.context == null);
         self.context = buffer.?.pContext;
@@ -267,6 +288,7 @@ const TestSourceVoice = struct {
 
     fn start(source: *IXAudio2SourceVoice, _: u32, _: u32) callconv(.winapi) HRESULT {
         const self: *TestSourceVoice = @fieldParentPtr("source", source);
+        if (self.fail_start) return @bitCast(@as(u32, 0x80004005)); // E_FAIL
         if (self.complete_on_start) self.complete();
         return win32.S_OK;
     }
@@ -274,66 +296,141 @@ const TestSourceVoice = struct {
     fn stop(source: *const IXAudio2SourceVoice, _: u32, _: u32) callconv(.winapi) HRESULT {
         const self: *TestSourceVoice = @fieldParentPtr("source", @constCast(source));
         self.stop_count += 1;
+        if (self.fail_stop) return @bitCast(@as(u32, 0x80004005)); // E_FAIL
         return win32.S_OK;
     }
 
     fn flush(source: *const IXAudio2SourceVoice) callconv(.winapi) HRESULT {
         const self: *TestSourceVoice = @fieldParentPtr("source", @constCast(source));
         self.flush_count += 1;
-        // Tests deliver the pending completion explicitly, after stopSound returns.
+        // Tests deliver the pending completion explicitly, after stop returns.
         return win32.S_OK;
+    }
+
+    fn destroy(base: *const IXAudio2Voice) callconv(.winapi) void {
+        const source: *IXAudio2SourceVoice = @ptrCast(@constCast(base));
+        const self: *TestSourceVoice = @fieldParentPtr("source", source);
+        self.destroy_count += 1;
+        // Exercise a final completion during teardown, before native callbacks cease.
+        self.complete();
     }
 };
 
-test "completion_before_start_returns_does_not_leak_voices" {
-    var audio: Self = undefined;
+test "completion_before_start_returns_and_failed_voice_recovery" {
+    var audio: SoundSystem = undefined;
     var source: TestSourceVoice = .{ .complete_on_start = true };
     source.initAudio(&audio);
-    for (0..MaxConcurrentVoices + 1) |_| {
-        try std.testing.expect(audio.playSound(&.{ 0, 0, 0, 0 }, .{}));
-        try std.testing.expect(!audio.voices[0].in_use.load(.acquire));
+    var old_handle: SoundSystem.PlaybackHandle = undefined;
+    for (0..SoundSystem.voice_capacity + 1) |_| {
+        old_handle = try audio.play(&.{ 0, 0, 0, 0 });
+        try std.testing.expectEqual(.free, audio.pool.slots[0].state.load(.acquire));
     }
+    // Play only quarantines; update owns native destruction and recreation.
+    source.complete_on_start = false;
+    source.fail_start = true;
+    try std.testing.expectError(error.PlaybackFailed, audio.play(&.{ 0, 0, 0, 0 }));
+    try std.testing.expectEqual(@as(usize, 0), source.destroy_count);
+    try std.testing.expectEqual(@as(usize, 0), source.create_count);
+    try std.testing.expectEqual(.failed, audio.pool.slots[0].state.load(.acquire));
+    try std.testing.expectError(error.NoFreeVoices, audio.play(&.{ 0, 0, 0, 0 }));
+    const generation = audio.pool.slots[0].generation;
+    source.fail_create = true;
+    audio.update();
+    try std.testing.expectEqual(@as(usize, 1), source.destroy_count);
+    try std.testing.expectEqual(null, source.context);
+    try std.testing.expectEqual(null, audio.native.voices[0].source);
+    try std.testing.expectEqual(.failed, audio.pool.slots[0].state.load(.acquire));
+    audio.update();
+    try std.testing.expectEqual(@as(usize, 1), source.destroy_count);
+    try std.testing.expectEqual(@as(usize, 2), source.create_count);
+    try std.testing.expectError(error.NoFreeVoices, audio.play(&.{ 0, 0, 0, 0 }));
+    source.fail_create = false;
+    source.fail_start = false;
+    audio.update();
+    try std.testing.expectEqual(.free, audio.pool.slots[0].state.load(.acquire));
+    try std.testing.expectEqual(generation, audio.pool.slots[0].generation);
+    const recovered = try audio.play(&.{ 0, 0, 0, 0 });
+    audio.stop(old_handle);
+    try std.testing.expect(recovered != old_handle);
+    try std.testing.expectEqual(@as(usize, 0), source.stop_count);
+    // Errors reported asynchronously use the same recovery path.
+    source.callback.vtable.OnVoiceError(
+        @ptrCast(source.callback),
+        source.context,
+        @bitCast(@as(u32, 0x80004005)),
+    );
+    try std.testing.expectEqual(.failed, audio.pool.slots[0].state.load(.acquire));
+    audio.update();
+    try std.testing.expectEqual(@as(usize, 2), source.destroy_count);
+    try std.testing.expectEqual(@as(usize, 4), source.create_count);
+    _ = try audio.play(&.{ 0, 0, 0, 0 });
+    audio.stop(recovered);
+    try std.testing.expectEqual(.active, audio.pool.slots[0].state.load(.acquire));
+    source.complete();
 }
 
 test "stopped_voice_waits_for_flush_completion_before_reuse" {
-    var audio: Self = undefined;
+    var audio: SoundSystem = undefined;
     var source: TestSourceVoice = .{};
     source.initAudio(&audio);
     const data = [_]u8{ 0, 0, 0, 0 };
-    try std.testing.expect(audio.playSound(&data, .{}));
-    audio.stopSound(&data);
+    const handle = try audio.play(&data);
+    audio.stop(handle);
+    audio.stop(handle);
     try std.testing.expectEqual(@as(usize, 1), source.stop_count);
     try std.testing.expectEqual(@as(usize, 1), source.flush_count);
-    try std.testing.expect(!audio.playSound(&data, .{}));
+    try std.testing.expectError(error.NoFreeVoices, audio.play(&data));
     source.complete();
-    try std.testing.expect(audio.playSound(&data, .{}));
-    try std.testing.expect(audio.voices[0].in_use.load(.acquire));
+    const replacement = try audio.play(&data);
+    try std.testing.expect(replacement != handle);
+    audio.stop(handle);
+    try std.testing.expectEqual(@as(usize, 1), source.stop_count);
+    try std.testing.expectEqual(.active, audio.pool.slots[0].state.load(.acquire));
+    source.fail_stop = true;
+    audio.stop(replacement);
+    try std.testing.expectEqual(.failed, audio.pool.slots[0].state.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 0), source.destroy_count);
+    try std.testing.expectEqual(@as(usize, 0), source.create_count);
+    source.fail_stop = false;
+    audio.update();
+    try std.testing.expectEqual(@as(usize, 1), source.destroy_count);
+    try std.testing.expectEqual(@as(usize, 1), source.create_count);
+    _ = try audio.play(&data);
+    audio.stop(replacement);
+    try std.testing.expectEqual(.active, audio.pool.slots[0].state.load(.acquire));
     source.complete();
 }
 
-test "repeated_stops_target_distinct_active_instances" {
-    var audio: Self = undefined;
+test "handles_stop_only_the_requested_instance" {
+    var audio: SoundSystem = undefined;
     var first: TestSourceVoice = .{};
     first.initAudio(&audio);
-    var second: TestSourceVoice = .{ .callback = &audio.callback };
-    audio.voices[1] = .{ .source = &second.source };
+    var second: TestSourceVoice = .{ .callback = &audio.native.callback };
+    audio.pool.slots[1].state.store(.free, .monotonic);
+    audio.native.voices[1] = .{ .source = &second.source, .slot = &audio.pool.slots[1] };
     const data = [_]u8{ 0, 0, 0, 0 };
-    try std.testing.expect(audio.playSound(&data, .{}));
-    try std.testing.expect(audio.playSound(&data, .{}));
+    const first_handle = try audio.play(&data);
+    const second_handle = try audio.play(&data);
 
-    audio.stopSound(&data);
-    audio.stopSound(&data);
+    audio.stop(second_handle);
+    audio.stop(second_handle);
+    try std.testing.expectEqual(@as(usize, 0), first.stop_count);
+    audio.stop(first_handle);
     try std.testing.expectEqual(@as(usize, 1), first.stop_count);
     try std.testing.expectEqual(@as(usize, 1), first.flush_count);
     try std.testing.expectEqual(@as(usize, 1), second.stop_count);
     try std.testing.expectEqual(@as(usize, 1), second.flush_count);
-    try std.testing.expect(!audio.playSound(&data, .{}));
+    try std.testing.expectError(error.NoFreeVoices, audio.play(&data));
 
     first.complete();
-    try std.testing.expect(audio.playSound(&data, .{}));
-    try std.testing.expect(!audio.playSound(&data, .{}));
+    _ = try audio.play(&data);
+    try std.testing.expectError(error.NoFreeVoices, audio.play(&data));
     second.complete();
-    try std.testing.expect(audio.playSound(&data, .{}));
+    _ = try audio.play(&data);
+    audio.stop(first_handle);
+    audio.stop(second_handle);
+    try std.testing.expectEqual(@as(usize, 1), first.stop_count);
+    try std.testing.expectEqual(@as(usize, 1), second.stop_count);
     first.complete();
     second.complete();
 }
@@ -357,10 +454,10 @@ const WAVEFORMATEX = extern struct {
 
     pub const default: WAVEFORMATEX = .{
         .wFormatTag = WAVE_FORMAT_PCM,
-        .nChannels = 2,
-        .nSamplesPerSec = 44100,
-        .nAvgBytesPerSec = 4 * 44100, // nSamplesPerSec * nBlockAlign
-        .nBlockAlign = 4, // num_channels * bits_per_sample / 8
+        .nChannels = SoundSystem.channels,
+        .nSamplesPerSec = SoundSystem.sample_rate_hz,
+        .nAvgBytesPerSec = SoundSystem.bytes_per_frame * SoundSystem.sample_rate_hz,
+        .nBlockAlign = SoundSystem.bytes_per_frame,
         .wBitsPerSample = 16,
         .cbSize = 0,
     };

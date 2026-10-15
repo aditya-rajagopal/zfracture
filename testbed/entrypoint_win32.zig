@@ -380,6 +380,7 @@ pub fn main(init: std.process.Init) void {
     while (running) {
         engine_state.input.update();
         if (!pumpMessages(&platform_state)) break;
+        engine_state.sound.update();
 
         // The pump can spend an arbitrary amount of time in native window tracking.
         const now = std.Io.Clock.awake.now(io);

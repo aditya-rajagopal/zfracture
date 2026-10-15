@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 // TODO: Move this to a common module? So we can use platform specific code in many places
 // TODO: Seperate the win32 code into seperate files that has similar structure to the zig windows module
@@ -18,13 +17,8 @@ pub const input = @import("input.zig");
 // TODO: Make a switch for which type of renderer we want to use
 pub const Renderer = @import("software_renderer.zig");
 
-// TODO: Currently this is a direct call into the platform api. We maybe can explore abstracting
-// the loading of sounds especially when IO is going to be abstrated out into jobs.
-pub const SoundSystem = switch (builtin.target.os.tag) {
-    .windows => @import("windows/xaudio2.zig"),
-    .macos => @import("macos/sound.zig"),
-    else => @compileError("Unsupported OS"),
-};
+pub const SoundSystem = @import("sound.zig");
+pub const PlaybackHandle = SoundSystem.PlaybackHandle;
 
 // TODO: Move this to some common place
 pub fn KB(value: comptime_int) comptime_int {

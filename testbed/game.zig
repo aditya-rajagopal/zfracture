@@ -30,6 +30,7 @@ const NUM_ENEMIES = 200;
 pub const GameState = struct {
     impact_sound: fr.wav.WavData,
     pop_sound: fr.wav.WavData,
+    latest_pop: ?fr.PlaybackHandle,
 
     // FIXME:
     tile_map: TileMap,
@@ -90,6 +91,7 @@ const secret_seed: [std.Random.ChaCha.secret_seed_length]u8 = "This is a 32 byte
 
 pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
+    game_state.latest_pop = null;
     game_state.camera_x = @as(f32, @floatFromInt(engine.renderer.back_buffer.width)) / 2;
     game_state.camera_y = @as(f32, @floatFromInt(engine.renderer.back_buffer.height)) / 2;
 
@@ -179,11 +181,16 @@ pub fn updateAndRender(
     }
 
     if (engine.input.mouseButtonPressedThisFrame(.left)) {
-        _ = engine.sound.playSound(state.pop_sound.data, .{});
+        if (playSound(engine, state.pop_sound.data)) |handle| state.latest_pop = handle;
+    }
+
+    if (engine.input.mouseButtonPressedThisFrame(.right)) {
+        if (state.latest_pop) |handle| engine.sound.stop(handle);
+        state.latest_pop = null;
     }
 
     if (engine.input.keyPressedThisFrame(.space)) {
-        _ = engine.sound.playSound(state.impact_sound.data, .{});
+        _ = playSound(engine, state.impact_sound.data);
     }
 
     // The limits in pixels for the tilemap
@@ -338,4 +345,11 @@ pub fn updateAndRender(
     }
 
     return running;
+}
+
+fn playSound(engine: *EngineState, data: []const u8) ?fr.PlaybackHandle {
+    return engine.sound.play(data) catch |err| {
+        if (err != error.NoFreeVoices) std.log.err("Sound playback failed: {s}", .{@errorName(err)});
+        return null;
+    };
 }

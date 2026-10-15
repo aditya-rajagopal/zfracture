@@ -33,6 +33,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    try addAudioDependencies(b, fracture);
 
     // TODO(adi): Import the module from a build file within the game folder
     // const game = b.createModule(.{
@@ -153,6 +154,15 @@ pub fn build(b: *std.Build) !void {
         .target = b.graph.host,
         .optimize = optimize,
     });
+    const host_sound = b.createModule(.{
+        .root_source_file = b.path("src/sound.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+    });
+    try addAudioDependencies(b, host_fracture);
+    try addAudioDependencies(b, host_sound);
+    const sound_tests = b.addTest(.{ .name = "sound-tests", .root_module = host_sound });
+    test_step.dependOn(&b.addRunArtifact(sound_tests).step);
     for ([_][]const u8{ "src/software_renderer.zig", "src/windows/win32.zig", "src/input.zig" }) |path| {
         const host_tests = b.addTest(.{
             .root_module = b.createModule(.{
@@ -165,13 +175,15 @@ pub fn build(b: *std.Build) !void {
         test_step.dependOn(&b.addRunArtifact(host_tests).step);
     }
 
+    const windows_target = b.resolveTargetQuery(try std.Target.Query.parse(.{ .arch_os_abi = "x86_64-windows" }));
+    const windows_sound = b.createModule(.{
+        .root_source_file = b.path("src/sound.zig"),
+        .target = windows_target,
+        .optimize = optimize,
+    });
     const audio_tests = b.addTest(.{
         .name = "audio-tests",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/windows/xaudio2.zig"),
-            .target = b.resolveTargetQuery(try std.Target.Query.parse(.{ .arch_os_abi = "x86_64-windows" })),
-            .optimize = optimize,
-        }),
+        .root_module = windows_sound,
     });
     check.dependOn(&audio_tests.step);
     if (is_macos and b.graph.host.result.os.tag == .macos and b.graph.host.result.cpu.arch == target.result.cpu.arch) {
@@ -197,6 +209,23 @@ pub fn build(b: *std.Build) !void {
     } else {
         test_step.dependOn(&audio_tests.step);
     }
+}
+
+fn addAudioDependencies(b: *std.Build, module: *std.Build.Module) !void {
+    const target = module.resolved_target.?;
+    if (target.result.os.tag != .macos) return;
+    const sdk_path = std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result) orelse return error.MacOSSDKNotFound;
+    const sdk_frameworks = b.pathJoin(&.{ sdk_path, "System/Library/Frameworks" });
+    const header = b.addWriteFiles().add("audio-c.h",
+        \\#include <AudioToolbox/AudioComponent.h>
+        \\#include <AudioToolbox/AudioUnit.h>
+    );
+    const audio = b.addTranslateC(.{ .root_source_file = header, .target = target, .optimize = module.optimize.? });
+    audio.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk_path, "usr/include" }) });
+    audio.addSystemFrameworkPath(.{ .cwd_relative = sdk_frameworks });
+    module.addImport("audio-c", audio.createModule());
+    module.addSystemFrameworkPath(.{ .cwd_relative = sdk_frameworks });
+    module.linkFramework("AudioToolbox", .{});
 }
 
 // fn compile_shader(

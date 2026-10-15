@@ -292,6 +292,7 @@ pub fn main(init: std.process.Init) !void {
         defer frame_pool.deinit();
         engine_state.input.update();
         if (!pumpMessages(&platform_state)) break;
+        engine_state.sound.update();
         // Match Win32: pause simulation during tracking and resume with zero dt.
         const now = std.Io.Clock.awake.now(io);
         if (platform_state.input_suspended) {
