@@ -277,28 +277,26 @@ pub const InputState = struct {
         return self.mouse_buttons_ended_down[@backingInt(button)] == 0;
     }
 
+    // Queries cover all transitions collected during the current native frame.
+    // Two or more transitions contain both edges, even when a tap ends up released.
     pub inline fn keyPressedThisFrame(self: *const InputState, key: Key) bool {
-        // NOTE: a key was pressed this frame if it ended down but started up i.e the transition count is odd and it ended down.
-        // or it started down and ended down but the transition count is even.
-        // This effectively means that if the key ended down and there was any transition it was pressed this frame.
-        // TODO: Should we consider button was pressed this frame if any point in the frame the button was down?
-        // For example, if the button was down at the start of the frame and somewhere in the middle of the frame
-        // the button was released, should we consider the button as pressed?
-        // FIX: This is not correct. We need to check if the key ended down as well
-        return self.keys_ended_down[@backingInt(key)] != 0 and self.keys_half_transition_count[@backingInt(key)] >= 1;
+        const count = self.keys_half_transition_count[@backingInt(key)];
+        return count >= 2 or (count == 1 and self.isKeyDown(key));
     }
 
     pub inline fn mouseButtonPressedThisFrame(self: *const InputState, button: MouseButton) bool {
-        return self.mouse_buttons_ended_down[@backingInt(button)] != 0 and self.mouse_buttons_half_transition_count[@backingInt(button)] >= 1;
+        const count = self.mouse_buttons_half_transition_count[@backingInt(button)];
+        return count >= 2 or (count == 1 and self.isMouseButtonDown(button));
     }
 
     pub inline fn keyReleasedThisFrame(self: *const InputState, key: Key) bool {
-        // NOTE(adi): a key was released within a frame if it ended up and it had more than 1 transitions.
-        return self.keys_ended_down[@backingInt(key)] == 0 and self.keys_half_transition_count[@backingInt(key)] >= 1;
+        const count = self.keys_half_transition_count[@backingInt(key)];
+        return count >= 2 or (count == 1 and self.isKeyUp(key));
     }
 
     pub inline fn mouseButtonReleasedThisFrame(self: *const InputState, button: MouseButton) bool {
-        return self.mouse_buttons_ended_down[@backingInt(button)] == 0 and self.mouse_buttons_half_transition_count[@backingInt(button)] >= 1;
+        const count = self.mouse_buttons_half_transition_count[@backingInt(button)];
+        return count >= 2 or (count == 1 and self.isMouseButtonUp(button));
     }
 };
 

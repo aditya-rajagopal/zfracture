@@ -20,6 +20,15 @@ pub const Renderer = @import("software_renderer.zig");
 pub const SoundSystem = @import("sound.zig");
 pub const PlaybackHandle = SoundSystem.PlaybackHandle;
 
+/// Sleeps until frame_start + frame_duration, retrying if sleep returns early.
+/// frame_start must use std.Io.Clock.awake. Late frames return without sleeping.
+pub fn paceFrame(io: std.Io, frame_start: std.Io.Timestamp, frame_duration: std.Io.Duration) std.Io.Cancelable!void {
+    const deadline = frame_start.addDuration(frame_duration);
+    while (std.Io.Clock.awake.now(io).nanoseconds < deadline.nanoseconds) {
+        try deadline.withClock(.awake).wait(io);
+    }
+}
+
 // TODO: Move this to some common place
 pub fn KB(value: comptime_int) comptime_int {
     return value * 1024;

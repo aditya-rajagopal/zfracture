@@ -288,10 +288,22 @@ pub fn main(init: std.process.Init) !void {
     var dll_timestamp = frame_timestamp;
     var last_reload_error: ?anyerror = null;
     while (running) {
+        const frame_start = std.Io.Clock.awake.now(io);
+        defer {
+            if (running and !platform_state.quit_requested) {
+                fr.paceFrame(io, frame_start, common.frame_duration) catch {
+                    running = false;
+                };
+            }
+        }
         const frame_pool = objc.AutoreleasePool.init();
         defer frame_pool.deinit();
+        defer transient_fixed_buffer.reset();
         engine_state.input.update();
-        if (!pumpMessages(&platform_state)) break;
+        if (!pumpMessages(&platform_state)) {
+            running = false;
+            break;
+        }
         engine_state.sound.update();
         // Match Win32: pause simulation during tracking and resume with zero dt.
         const now = std.Io.Clock.awake.now(io);
@@ -299,16 +311,25 @@ pub fn main(init: std.process.Init) !void {
             frame_timestamp = now;
             continue;
         }
-        engine_state.delta_time = if (platform_state.reset_frame_clock) 0 else @as(f32, @floatFromInt(frame_timestamp.durationTo(now).toNanoseconds())) / std.time.ns_per_s;
+        engine_state.delta_time = if (platform_state.reset_frame_clock)
+            0
+        else
+            @as(f32, @floatFromInt(frame_timestamp.durationTo(now).toNanoseconds())) / std.time.ns_per_s;
         platform_state.reset_frame_clock = false;
         frame_timestamp = now;
-        running = if (builtin.mode == .debug) app_state.debug_game.game_api.updateAndRender(engine_state, game_state) else game.updateAndRender(engine_state, game_state);
+
+        running = if (builtin.mode == .debug)
+            app_state.debug_game.game_api.updateAndRender(engine_state, game_state)
+        else
+            game.updateAndRender(engine_state, game_state);
+
         platform_state.present();
-        transient_fixed_buffer.reset();
-        if (engine_state.input.isKeyDown(.@"2")) std.log.info("Delta time: {d}", .{engine_state.delta_time});
+
         if (engine_state.input.keyPressedThisFrame(.@"3")) platform_state.debug_show_cursor = !platform_state.debug_show_cursor;
         if (engine_state.input.isKeyDown(.lalt) and engine_state.input.keyPressedThisFrame(.enter)) platform_state.toggleFullscreen();
+
         platform_state.updateCursor();
+
         if (builtin.mode == .debug) {
             if (dll_timestamp.durationTo(now).toNanoseconds() > std.time.ns_per_s / 30) {
                 dll_timestamp = now;
@@ -320,7 +341,6 @@ pub fn main(init: std.process.Init) !void {
                 last_reload_error = null;
             }
         }
-        // Frame pacing is intentionally unchanged from the Win32 testbed.
     }
 }
 
@@ -384,6 +404,9 @@ fn windowShouldClose(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(
 fn applicationShouldTerminate(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c) c_ulong {
     if (platformForCallback(receiver)) |platform| platform.quit_requested = true;
     // Finish the loop and release engine resources before terminating.
+    // TODO: NSTerminateCancel also cancels macOS logout/restart/shutdown.
+    // Coordinate AppKit termination with Zig cleanup before accepting termination.
+    // NSTerminateLater alone blocks the outer loop from reaching its cleanup.
     return @backingInt(appkit.NSApplicationTerminateReply.cancel);
 }
 fn didResignFocus(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c) void {

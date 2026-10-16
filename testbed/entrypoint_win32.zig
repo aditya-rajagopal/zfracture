@@ -71,7 +71,7 @@ const Win32Platform = struct {
         _ = win32.AdjustWindowRectEx(&border_rect, @bitCast(window_style), .FALSE, @bitCast(window_style_ex));
 
         window_x += border_rect.left;
-        window_y += border_rect.right;
+        window_y += border_rect.top;
 
         window_final_width += border_rect.right - border_rect.left;
         window_final_height += border_rect.bottom - border_rect.top;
@@ -165,12 +165,12 @@ const Win32Platform = struct {
             _ = win32.SetWindowPlacement(self.window, &self.window_placement);
             _ = win32.SetWindowPos(
                 self.window,
-                null,
+                win32.HWND_NOTOPMOST,
                 0,
                 0,
                 0,
                 0,
-                @bitCast(win32.SWP_NOMOVE | win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOOWNERZORDER | win32.SWP_FRAMECHANGED),
+                @bitCast(win32.SWP_NOMOVE | win32.SWP_NOSIZE | win32.SWP_NOOWNERZORDER | win32.SWP_FRAMECHANGED),
             );
         }
     }
@@ -309,6 +309,7 @@ pub fn main(init: std.process.Init) void {
         _ = win32.MessageBoxA(null, "Out of memory for back buffer allocation", "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
+    engine_state.renderer.clearScreen(0, 0, 0);
 
     buffer_info = .{
         .bmiHeader = .{
@@ -378,8 +379,20 @@ pub fn main(init: std.process.Init) void {
     var dll_timestamp = frame_timestamp;
 
     while (running) {
+        const frame_start = std.Io.Clock.awake.now(io);
+        defer {
+            if (running and !platform_state.quit_requested) {
+                fr.paceFrame(io, frame_start, common.frame_duration) catch {
+                    running = false;
+                };
+            }
+        }
+        defer transient_fixed_buffer.reset();
         engine_state.input.update();
-        if (!pumpMessages(&platform_state)) break;
+        if (!pumpMessages(&platform_state)) {
+            running = false;
+            break;
+        }
         engine_state.sound.update();
 
         // The pump can spend an arbitrary amount of time in native window tracking.
@@ -418,12 +431,6 @@ pub fn main(init: std.process.Init) void {
             platform_state.fullscreen,
         );
 
-        transient_fixed_buffer.reset();
-
-        if (engine_state.input.isKeyDown(.@"2")) {
-            std.log.info("Delta time: {d}", .{engine_state.delta_time});
-        }
-
         if (engine_state.input.keyPressedThisFrame(.@"3")) {
             DBG_show_cursor = !DBG_show_cursor;
         }
@@ -434,8 +441,6 @@ pub fn main(init: std.process.Init) void {
             std.log.info("Toggle fullscreen", .{});
             platform_state.toggleFullscreen();
         }
-
-        // TODO: Frame rate limiter
 
         // TODO: Reload library every X seconds instead of on every frame
         // TODO: Build in a fail-safe stub functions for when the reload fails so the game can still run
