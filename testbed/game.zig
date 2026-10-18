@@ -65,11 +65,35 @@ const Stats = struct {
 const tile_width: f32 = 1.0;
 const tile_height: f32 = 1.0;
 
-const meters_per_pixel: f32 = 1.0 / 32.0;
+const meters_per_pixel: f32 = 1.0 / 48.0;
 
 const player_width: f32 = tile_width;
 const player_height: f32 = tile_height;
 const player_half_width: f32 = player_width / 2.0;
+
+// Exclude outer void padding while keeping movement bounds rectangular.
+const level_bounds = blk: {
+    @setEvalBranchQuota(10000);
+    var bounds: [test_levels.len]struct { min_x: f32, min_y: f32, max_x: f32, max_y: f32 } = undefined;
+    for (test_levels, 0..) |level, index| {
+        bounds[index] = .{
+            .min_x = @as(f32, @floatFromInt(level.width)) * tile_width,
+            .min_y = @as(f32, @floatFromInt(level.height)) * tile_height,
+            .max_x = 0,
+            .max_y = 0,
+        };
+        for (level.tiles, 0..) |tile, tile_index| {
+            if (tile == 0) continue;
+            const x = @as(f32, @floatFromInt(tile_index % level.width)) * tile_width;
+            const y = @as(f32, @floatFromInt(tile_index / level.width)) * tile_height;
+            bounds[index].min_x = @min(bounds[index].min_x, x);
+            bounds[index].min_y = @min(bounds[index].min_y, y);
+            bounds[index].max_x = @max(bounds[index].max_x, x + tile_width);
+            bounds[index].max_y = @max(bounds[index].max_y, y + tile_height);
+        }
+    }
+    break :blk bounds;
+};
 
 pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
@@ -160,8 +184,7 @@ pub fn updateAndRender(
     }
 
     const level = test_levels[state.level_index];
-    const tile_map_width = @as(f32, @floatFromInt(level.width)) * tile_width;
-    const tile_map_height = @as(f32, @floatFromInt(level.height)) * tile_height;
+    const bounds = level_bounds[state.level_index];
 
     if (!entered_level) { // Leave the player exactly at the start on entry.
         var delta_x: f32 = 0.0;
@@ -190,17 +213,16 @@ pub fn updateAndRender(
         var new_camera_x = state.camera_x + delta_x * state.player.stats.movement_speed * engine.delta_time;
         var new_camera_y = state.camera_y + delta_y * state.player.stats.movement_speed * engine.delta_time;
 
-        // Bounds-only movement; (0, 0) is the top-left corner of the map.
-
+        // Keep the full player rectangle inside the level bounds.
         new_camera_x = std.math.clamp(
             new_camera_x,
-            0,
-            tile_map_width,
+            bounds.min_x + player_half_width,
+            bounds.max_x - player_half_width,
         );
         new_camera_y = std.math.clamp(
             new_camera_y,
-            0,
-            tile_map_height,
+            bounds.min_y + player_height / 2,
+            bounds.max_y - player_height / 2,
         );
 
         // @INCOMPLETE: Collision detection against tilemap
