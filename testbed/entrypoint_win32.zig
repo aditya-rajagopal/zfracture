@@ -55,8 +55,8 @@ const Win32Platform = struct {
             return error.FailedToRegisterWindowClass;
         }
 
-        var window_x: i32 = 0;
-        var window_y: i32 = 0;
+        var window_x: i32 = 50;
+        var window_y: i32 = 50;
         var window_final_width: i32 = window_width;
         var window_final_height: i32 = window_height;
 
@@ -431,7 +431,9 @@ pub fn main(init: std.process.Init) void {
             platform_state.fullscreen,
         );
 
-        if (engine_state.input.keyPressedThisFrame(.@"3")) {
+        const control = engine_state.input.isKeyDown(.lcontrol) or engine_state.input.isKeyDown(.rcontrol) or
+            engine_state.input.keyPressedThisFrame(.lcontrol) or engine_state.input.keyPressedThisFrame(.rcontrol);
+        if (engine_state.input.keyPressedThisFrame(.@"3") and !control) {
             DBG_show_cursor = !DBG_show_cursor;
         }
 

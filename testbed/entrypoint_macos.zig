@@ -325,7 +325,11 @@ pub fn main(init: std.process.Init) !void {
 
         platform_state.present();
 
-        if (engine_state.input.keyPressedThisFrame(.@"3")) platform_state.debug_show_cursor = !platform_state.debug_show_cursor;
+        const control = engine_state.input.isKeyDown(.lcontrol) or engine_state.input.isKeyDown(.rcontrol) or
+            engine_state.input.keyPressedThisFrame(.lcontrol) or engine_state.input.keyPressedThisFrame(.rcontrol);
+        if (engine_state.input.keyPressedThisFrame(.@"3") and !control) {
+            platform_state.debug_show_cursor = !platform_state.debug_show_cursor;
+        }
         if (engine_state.input.isKeyDown(.lalt) and engine_state.input.keyPressedThisFrame(.enter)) platform_state.toggleFullscreen();
 
         platform_state.updateCursor();
