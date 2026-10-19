@@ -13,7 +13,6 @@ pub const XAudio2 = @import("windows/xaudio2.zig");
 const Types = @import("types.zig");
 pub const Color = Types.Color;
 pub const wav = @import("wav.zig");
-pub const input = @import("input.zig");
 pub const event = @import("event.zig");
 
 // TODO: Make a switch for which type of renderer we want to use

@@ -12,10 +12,10 @@ const win32 = fr.win32;
 const game = @import("game.zig");
 const common = @import("common.zig");
 const EngineState = common.EngineState;
-const Key = fr.input.Key;
+const Key = fr.event.Key;
 const Event = fr.event.Event;
 const max_messages_per_frame = 4096;
-const MouseButton = fr.input.MouseButton;
+const MouseButton = fr.event.MouseButton;
 
 const Win32Platform = struct {
     instance: windows.HINSTANCE,

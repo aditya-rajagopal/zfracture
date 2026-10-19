@@ -87,7 +87,7 @@ pub const Controls = struct {
         }
     }
 
-    fn setHeld(self: *Controls, key: fr.input.Key, is_down: bool) void {
+    fn setHeld(self: *Controls, key: fr.event.Key, is_down: bool) void {
         switch (key) {
             .s => self.down.s = is_down,
             .f => self.down.f = is_down,

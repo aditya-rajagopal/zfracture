@@ -184,7 +184,6 @@ pub fn build(b: *std.Build) !void {
     for ([_][]const u8{
         "src/software_renderer.zig",
         "src/windows/win32.zig",
-        "src/input.zig",
         "src/wav.zig",
     }) |path| {
         const test_module = b.createModule(.{

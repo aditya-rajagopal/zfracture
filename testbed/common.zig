@@ -55,7 +55,7 @@ pub const HostControls = struct {
         }
     }
 
-    fn setHeld(self: *HostControls, key: fr.input.Key, is_down: bool) void {
+    fn setHeld(self: *HostControls, key: fr.event.Key, is_down: bool) void {
         const mask: u4 = switch (key) {
             .lcontrol => left_ctrl,
             .rcontrol => right_ctrl,

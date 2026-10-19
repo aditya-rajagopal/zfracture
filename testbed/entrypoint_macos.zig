@@ -11,10 +11,10 @@ const game = @import("game.zig");
 const common = @import("common.zig");
 const EngineState = common.EngineState;
 const Renderer = fr.Renderer;
-const Key = fr.input.Key;
+const Key = fr.event.Key;
 const Event = fr.event.Event;
 const max_messages_per_frame = 4096;
-const MouseButton = fr.input.MouseButton;
+const MouseButton = fr.event.MouseButton;
 const Object = objc.Object;
 const Rect = c.CGRect;
 const Point = c.CGPoint;
@@ -924,7 +924,7 @@ fn eventInsideView(platform: *MacOSPlatform, event: Object) bool {
         point.x < bounds.size.width and point.y < bounds.size.height;
 }
 
-fn mousePosition(platform: *MacOSPlatform, event: Object) fr.input.MousePosition {
+fn mousePosition(platform: *MacOSPlatform, event: Object) fr.event.MousePosition {
     const window_point = event.msgSend(Point, "locationInWindow", .{});
     const point = platform.view.msgSend(Point, "convertPoint:fromView:", .{ window_point, nil });
     return .{
