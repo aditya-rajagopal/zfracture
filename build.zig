@@ -185,6 +185,7 @@ pub fn build(b: *std.Build) !void {
         "src/software_renderer.zig",
         "src/windows/win32.zig",
         "src/input.zig",
+        "src/wav.zig",
     }) |path| {
         const test_module = b.createModule(.{
             .root_source_file = b.path(path),

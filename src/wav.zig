@@ -123,18 +123,18 @@ const ReaderState = enum(u8) {
     parse_data_chunk,
 };
 
-test "wav decode" {
-    const wav_data = try std.Io.Dir.cwd().readFileAlloc(
-        std.testing.io,
-        "assets/sounds/pop.wav",
-        std.testing.allocator,
-        .unlimited,
-    );
-    defer std.testing.allocator.free(wav_data);
+test "WAV decoding copies only the PCM data chunk" {
+    // Two stereo PCM frames, with unrelated chunks before and after the samples.
+    var wav_data align(4) = ("RIFF\x44\x00\x00\x00WAVE" ++
+        "fmt \x10\x00\x00\x00" ++
+        "\x01\x00\x02\x00\x44\xac\x00\x00\x10\xb1\x02\x00\x04\x00\x10\x00" ++
+        "JUNK\x04\x00\x00\x00skip" ++
+        "data\x08\x00\x00\x00\x01\x00\xff\x7f\x00\x80\xfe\xff" ++
+        "JUNK\x04\x00\x00\x00tail").*;
+    const decoded = try decode(std.testing.allocator, &wav_data);
+    defer std.testing.allocator.free(decoded.data);
 
-    const wav_data_decoded = try decode(std.testing.allocator, wav_data);
-    defer std.testing.allocator.free(wav_data_decoded.data);
-
-    try std.testing.expect(wav_data_decoded.data.len > 0);
-    try std.testing.expectEqual(0, wav_data_decoded.data.len % 4);
+    // The returned samples must remain valid after the caller reuses the source.
+    @memset(&wav_data, 0);
+    try std.testing.expectEqualSlices(u8, &.{ 0x01, 0x00, 0xff, 0x7f, 0x00, 0x80, 0xfe, 0xff }, decoded.data);
 }

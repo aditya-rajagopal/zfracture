@@ -203,6 +203,8 @@ pub const MouseButton = enum(u8) {
     x2 = 0x04,
 };
 
+pub const MousePosition = struct { x: i16, y: i16 };
+
 pub const InputState = struct {
     // TODO(adi): Controller support
     // TODO(adi): Support for multiple controllers/keyboards
@@ -215,7 +217,6 @@ pub const InputState = struct {
     mouse_position_previous: MousePosition,
     mouse_wheel_delta: i8,
 
-    pub const MousePosition = struct { x: i16, y: i16 };
     pub const NumKeys = 256;
     pub const NumMouseButtons = 5;
     pub const max_events_per_frame = 4096;
@@ -301,27 +302,31 @@ test "key repeats do not add press transitions" {
     var input: InputState = .init;
     input.keyEvent(.e, true, false);
     input.keyEvent(.e, true, true);
-    try std.testing.expectEqual(@as(u8, 1), input.keys_half_transition_count[@backingInt(Key.e)]);
     try std.testing.expect(input.keyPressedThisFrame(.e));
+    try std.testing.expect(!input.keyReleasedThisFrame(.e));
 
     input.update();
     input.keyEvent(.e, true, true);
-    try std.testing.expectEqual(@as(u8, 0), input.keys_half_transition_count[@backingInt(Key.e)]);
     try std.testing.expect(input.isKeyDown(.e));
     try std.testing.expect(!input.keyPressedThisFrame(.e));
+    try std.testing.expect(!input.keyReleasedThisFrame(.e));
 
     input.keyEvent(.e, false, false);
-    try std.testing.expectEqual(@as(u8, 1), input.keys_half_transition_count[@backingInt(Key.e)]);
     try std.testing.expect(input.keyReleasedThisFrame(.e));
+    try std.testing.expect(!input.keyPressedThisFrame(.e));
 }
 
-test "key press release and repress in one frame retain all transitions" {
+test "same-frame taps and represses preserve both input edges" {
     var input: InputState = .init;
     input.keyEvent(.a, true, false);
     input.keyEvent(.a, false, false);
+    try std.testing.expect(input.isKeyUp(.a));
+    try std.testing.expect(input.keyPressedThisFrame(.a));
+    try std.testing.expect(input.keyReleasedThisFrame(.a));
     input.keyEvent(.a, true, false);
-    try std.testing.expectEqual(@as(u8, 3), input.keys_half_transition_count[@backingInt(Key.a)]);
     try std.testing.expect(input.isKeyDown(.a));
+    try std.testing.expect(input.keyPressedThisFrame(.a));
+    try std.testing.expect(input.keyReleasedThisFrame(.a));
 }
 
 test "focus loss releases each held mouse button only once" {
@@ -332,9 +337,16 @@ test "focus loss releases each held mouse button only once" {
     input.update();
     input.releaseAll();
     input.releaseAll();
-    for (input.mouse_buttons_half_transition_count) |count| try std.testing.expectEqual(
-        @as(u8, 1),
-        count,
-    );
-    for (input.mouse_buttons_ended_down) |down| try std.testing.expectEqual(@as(u8, 0), down);
+    for (0..InputState.NumMouseButtons) |index| {
+        const button: MouseButton = @fromBackingInt(@as(u8, @intCast(index)));
+        try std.testing.expect(input.isMouseButtonUp(button));
+        try std.testing.expect(input.mouseButtonReleasedThisFrame(button));
+        try std.testing.expect(!input.mouseButtonPressedThisFrame(button));
+    }
+    input.update();
+    input.releaseAll();
+    for (0..InputState.NumMouseButtons) |index| {
+        const button: MouseButton = @fromBackingInt(@as(u8, @intCast(index)));
+        try std.testing.expect(!input.mouseButtonReleasedThisFrame(button));
+    }
 }

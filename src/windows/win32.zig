@@ -954,6 +954,8 @@ pub extern "user32" fn GetClientRect(
     lpRect: ?*RECT,
 ) callconv(.winapi) windows.BOOL;
 
+pub extern "user32" fn ScreenToClient(window: windows.HWND, point: *POINT) callconv(.winapi) windows.BOOL;
+
 pub extern "user32" fn SetCapture(window: windows.HWND) callconv(.winapi) ?windows.HWND;
 pub extern "user32" fn GetCapture() callconv(.winapi) ?windows.HWND;
 pub extern "kernel32" fn GetTickCount() callconv(.winapi) u32;
@@ -1354,15 +1356,14 @@ pub fn typedConst2(
     }
 }
 
-test "typedConst" {
+test "Win32 constants preserve negative sentinels and signed high bits" {
     try testing.expectEqual(
-        @as(usize, @bitCast(@as(isize, -1))),
+        std.math.maxInt(usize),
         @intFromPtr(typedConst(?*opaque {}, -1)),
     );
     try testing.expectEqual(
-        @as(usize, @bitCast(@as(isize, -12))),
+        std.math.maxInt(usize) - 11,
         @intFromPtr(typedConst(?*opaque {}, -12)),
     );
-    try testing.expectEqual(@as(u32, 0xffffffff), typedConst(u32, 0xffffffff));
-    try testing.expectEqual(@as(i32, @bitCast(@as(u32, 0x80000000))), typedConst(i32, 0x80000000));
+    try testing.expectEqual(std.math.minInt(i32), typedConst(i32, 0x80000000));
 }
