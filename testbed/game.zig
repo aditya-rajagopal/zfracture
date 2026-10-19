@@ -29,7 +29,87 @@ const test_levels = @import("levels/level.zig").test_levels;
 // two groups of enemies that are fighing each other: YES
 // @TODO: Deal with window resize.
 
+pub const Controls = struct {
+    pressed_this_frame: struct {
+        ctrl: bool = false,
+        space: bool = false,
+        p: bool = false,
+        @"1": bool = false,
+        @"2": bool = false,
+        @"3": bool = false,
+        left_mouse: bool = false,
+        right_mouse: bool = false,
+    } = .{},
+    down: struct {
+        s: bool = false,
+        f: bool = false,
+        e: bool = false,
+        d: bool = false,
+        escape: bool = false,
+        ctrl: bool = false,
+    } = .{},
+
+    // Retain each side so releasing one Ctrl does not release the other.
+    modifier_down: u2 = 0,
+
+    const left_ctrl: u2 = 1 << 0;
+    const right_ctrl: u2 = 1 << 1;
+
+    pub fn consumeFrame(self: *Controls, events: []const fr.event.Event) void {
+        self.pressed_this_frame = .{};
+        for (events) |event| {
+            switch (event) {
+                .key_pressed => |key| {
+                    self.setHeld(key, true);
+                    switch (key) {
+                        .lcontrol, .rcontrol => self.pressed_this_frame.ctrl = true,
+                        .space => self.pressed_this_frame.space = true,
+                        .p => self.pressed_this_frame.p = true,
+                        .@"1" => self.pressed_this_frame.@"1" = true,
+                        .@"2" => self.pressed_this_frame.@"2" = true,
+                        .@"3" => self.pressed_this_frame.@"3" = true,
+                        else => {},
+                    }
+                },
+                .key_repeat => |key| self.setHeld(key, true),
+                .key_released => |key| self.setHeld(key, false),
+                .reset_keyboard, .reset_all => {
+                    self.down = .{};
+                    self.modifier_down = 0;
+                },
+                .mouse_pressed => |button| switch (button.button) {
+                    .left => self.pressed_this_frame.left_mouse = true,
+                    .right => self.pressed_this_frame.right_mouse = true,
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn setHeld(self: *Controls, key: fr.input.Key, is_down: bool) void {
+        switch (key) {
+            .s => self.down.s = is_down,
+            .f => self.down.f = is_down,
+            .e => self.down.e = is_down,
+            .d => self.down.d = is_down,
+            .escape => self.down.escape = is_down,
+            .lcontrol, .rcontrol => {
+                const mask: u2 = if (key == .lcontrol) left_ctrl else right_ctrl;
+                if (is_down) {
+                    self.modifier_down |= mask;
+                } else {
+                    self.modifier_down &= ~mask;
+                }
+                self.down.ctrl = self.modifier_down != 0;
+            },
+            else => {},
+        }
+    }
+};
+
 pub const GameState = struct {
+    controls: Controls,
     impact_sound: fr.wav.WavData,
     pop_sound: fr.wav.WavData,
     latest_pop: ?fr.PlaybackHandle,
@@ -107,6 +187,7 @@ const level_bounds = blk: {
 
 pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
+    game_state.controls = .{};
     game_state.latest_pop = null;
 
     const impact_sound = std.Io.Dir.cwd().readFileAlloc(
@@ -163,37 +244,51 @@ fn enterLevel(state: *GameState, index: usize) void {
 pub fn updateAndRender(
     engine: *EngineState,
     game_state: *anyopaque,
+    events: []const fr.event.Event,
 ) bool {
     const renderer: *Renderer = &engine.renderer;
     const state: *GameState = @ptrCast(@alignCast(game_state));
+    state.controls.consumeFrame(events);
+    const controls = &state.controls;
     var running: bool = true;
 
     // NOTE: Clear to magenta
     renderer.clearScreen(1.0, 0.0, 1.0);
 
-    if (engine.input.isKeyDown(.escape)) {
+    if (controls.down.escape) {
         running = false;
     }
 
-    if (engine.input.mouseButtonPressedThisFrame(.left)) {
+    if (controls.pressed_this_frame.left_mouse) {
         if (playSound(engine, state.pop_sound.data)) |handle| state.latest_pop = handle;
     }
 
-    if (engine.input.mouseButtonPressedThisFrame(.right)) {
+    if (controls.pressed_this_frame.right_mouse) {
         if (state.latest_pop) |handle| engine.sound.stop(handle);
         state.latest_pop = null;
     }
 
-    if (engine.input.keyPressedThisFrame(.space)) {
+    if (controls.pressed_this_frame.space) {
         _ = playSound(engine, state.impact_sound.data);
     }
 
+    if (controls.pressed_this_frame.p) {
+        // The host measures frame intervals including pacing; held keys do not repeat this log.
+        if (engine.delta_time > 0) {
+            std.log.info("FPS: {d:.1} | frame: {d:.2} ms", .{
+                1.0 / engine.delta_time,
+                engine.delta_time * 1000.0,
+            });
+        } else {
+            std.log.info("FPS: waiting for a timed frame", .{});
+        }
+    }
+
     var entered_level = false;
-    const control = engine.input.isKeyDown(.lcontrol) or engine.input.isKeyDown(.rcontrol) or
-        engine.input.keyPressedThisFrame(.lcontrol) or engine.input.keyPressedThisFrame(.rcontrol);
-    const level_keys = [_]fr.input.Key{ .@"1", .@"2", .@"3" };
-    for (level_keys, 0..) |key, index| {
-        if (control and engine.input.keyPressedThisFrame(key)) {
+    const control = controls.down.ctrl or controls.pressed_this_frame.ctrl;
+    const level_presses = [_]bool{ controls.pressed_this_frame.@"1", controls.pressed_this_frame.@"2", controls.pressed_this_frame.@"3" };
+    for (level_presses, 0..) |pressed, index| {
+        if (control and pressed) {
             enterLevel(state, index);
             entered_level = true;
             break;
@@ -207,16 +302,16 @@ pub fn updateAndRender(
         var delta_x: f32 = 0.0;
         var delta_y: f32 = 0.0;
 
-        if (engine.input.isKeyDown(.s)) {
+        if (controls.down.s) {
             delta_x -= 1.0;
         }
-        if (engine.input.isKeyDown(.f)) {
+        if (controls.down.f) {
             delta_x += 1.0;
         }
-        if (engine.input.isKeyDown(.e)) {
+        if (controls.down.e) {
             delta_y -= 1.0;
         }
-        if (engine.input.isKeyDown(.d)) {
+        if (controls.down.d) {
             delta_y += 1.0;
         }
 

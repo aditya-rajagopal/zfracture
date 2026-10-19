@@ -13,6 +13,8 @@ const game = @import("game.zig");
 const common = @import("common.zig");
 const EngineState = common.EngineState;
 const Key = fr.input.Key;
+const Event = fr.event.Event;
+const max_messages_per_frame = 4096;
 const MouseButton = fr.input.MouseButton;
 
 const Win32Platform = struct {
@@ -21,14 +23,26 @@ const Win32Platform = struct {
     device_context: windows.HDC,
     window_placement: win32.WINDOWPLACEMENT,
     fullscreen: bool = false,
-    input: *fr.input.InputState,
+    event_storage: [2][1024]Event = undefined,
+    event_lists: [2]std.ArrayList(Event) = undefined,
+    pending_event_buffer: usize = 0,
     focused: bool = false,
     quit_requested: bool = false,
-    input_suspended: bool = false,
+    modal_depth: u32 = 0,
+    client_mouse_buttons: u8 = 0,
+    owns_mouse_capture: bool = false,
     reset_frame_clock: bool = false,
-    discard_input_before: ?u32 = null,
 
     const Self = @This();
+
+    // The slice stays immutable until the next handoff. Native callbacks append to the other list.
+    fn takeEvents(self: *Self) []const Event {
+        const ready = self.pending_event_buffer;
+        const next = ready ^ 1;
+        self.event_lists[next].clearRetainingCapacity();
+        self.pending_event_buffer = next;
+        return self.event_lists[ready].items;
+    }
 
     // Initialize in place: GWLP_USERDATA retains this address until destruction.
     fn createWindow(
@@ -36,7 +50,6 @@ const Win32Platform = struct {
         window_title: [*:0]const u8,
         window_width: i32,
         window_height: i32,
-        input: *fr.input.InputState,
     ) WindowCreateError!void {
         const engine_name: [*:0]const u8 = "zfracture";
 
@@ -52,7 +65,7 @@ const Win32Platform = struct {
         // error.FailedToLoadCursor;
 
         const result = win32.RegisterClassA(&window_class);
-        if (result == 0) {
+        if (result == 0 and windows.GetLastError() != .CLASS_ALREADY_EXISTS) {
             _ = win32.MessageBoxA(
                 null,
                 "Windows Registration Failed",
@@ -116,12 +129,16 @@ const Win32Platform = struct {
             return error.FailedToGetDeviceContext;
         platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
         platform_state.fullscreen = false;
-        platform_state.input = input;
         platform_state.focused = false;
         platform_state.quit_requested = false;
-        platform_state.input_suspended = false;
+        platform_state.modal_depth = 0;
+        platform_state.client_mouse_buttons = 0;
+        platform_state.owns_mouse_capture = false;
+        platform_state.pending_event_buffer = 0;
+        for (&platform_state.event_lists, &platform_state.event_storage) |*list, *storage| {
+            list.* = std.ArrayList(Event).initBuffer(storage);
+        }
         platform_state.reset_frame_clock = false;
-        platform_state.discard_input_before = null;
 
         // Creation callbacks see null user data until the platform is ready.
         const user_data: isize = @bitCast(@intFromPtr(platform_state));
@@ -225,6 +242,8 @@ pub const DebugGameDLLApi = struct {
     pub const UpdateAndRenderFn = *const fn (
         engine: *EngineState,
         game_state: *anyopaque,
+        events: [*]const Event,
+        event_count: usize,
     ) callconv(.c) bool;
 
     init: InitFn,
@@ -246,12 +265,6 @@ const DebugGame = switch (builtin.mode) {
 pub const AppState = struct {
     engine: EngineState,
     debug_game: DebugGame,
-};
-
-const game_api_default = DebugGameDLLApi{
-    .init = game.init,
-    .deinit = game.deinit,
-    .updateAndRender = game.updateAndRender,
 };
 
 const dll_name = "./zig-out/bin/dynamic_game.dll";
@@ -283,77 +296,52 @@ pub fn main(init: std.process.Init) void {
     // TODO: What do we do about the back buffer? This is a renderer specific thing
     var buffer_info: win32.BITMAPINFO = undefined;
 
-    // TODO: We need to figure out if I want to use the debug allocator since we are using fixed
-    // buffer arenas
+    // TODO: We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
     const allocator = std.heap.page_allocator;
 
-    // NOTE: We want to gaurantee that the game can run in a fixed amount of memory. We can bump
-    // this up
+    // NOTE: We want to gaurantee that the game can run in a fixed amount of memory. We can bump this up
     // dpeneding on if we ever see us running out of memory.
     const permanenent_memory_size = MB(128);
     const transient_memory_size = MB(128);
     const total_game_memory_size = permanenent_memory_size + transient_memory_size;
 
     // TODO: We may need more arenas depending on how the game goes.
-    // TODO: We can just use VirtualAlloc to allocate a large virtual address space and then map
-    // parts of it
-    // into the different arenas so they can potentially grow? Maybe we want this sometimes.
-    // Especially if we want
+    // TODO: We can just use VirtualAlloc to allocate a large virtual address space and then map parts of it
+    // into the different arenas so they can potentially grow? Maybe we want this sometimes. Especially if we want
     // to allocate new arenas when some run out.
-    // TODO: Create an arena allocator that we can use everywhere instead of passing the Allocator
-    // struct around
-    // since we only need alloc/push/pop and not free/realloc and stuff. We can create a allocator
-    // if we really need it.
+    // TODO: Create an arena allocator that we can use everywhere instead of passing the Allocator struct around
+    // since we only need alloc/push/pop and not free/realloc and stuff. We can create a allocator if we really need it.
     // out of this one.
     const game_memory: []u8 = allocator.alloc(u8, total_game_memory_size) catch {
-        _ = win32.MessageBoxA(
-            null,
-            "Failed to allocate game memory",
-            "Error",
-            win32.MB_ICONEXCLAMATION,
-        );
+        _ = win32.MessageBoxA(null, "Failed to allocate game memory", "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
 
-    const permanent_memory = game_memory[0..permanenent_memory_size];
-    var permanent_fixed_buffer = std.heap.FixedBufferAllocator.init(permanent_memory);
+    var permanent_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[0..permanenent_memory_size]);
     const permanent_allocator = permanent_fixed_buffer.allocator();
 
-    const transient_memory = game_memory[permanenent_memory_size..total_game_memory_size];
-    var transient_fixed_buffer = std.heap.FixedBufferAllocator.init(transient_memory);
+    var transient_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[permanenent_memory_size .. permanenent_memory_size + transient_memory_size]);
     const transient_allocator = transient_fixed_buffer.allocator();
 
     const app_state: *AppState = permanent_allocator.create(AppState) catch {
-        _ = win32.MessageBoxA(
-            null,
-            "Failed to allocate engine state",
-            "Error",
-            win32.MB_ICONEXCLAMATION,
-        );
+        _ = win32.MessageBoxA(null, "Failed to allocate engine state", "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
 
-    // TODO: Figure out why the engine pointer does not showup in raddebugger when allocated
-    // directly vs
+    // TODO: Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
     // making a new type AppState and then allocating it.
     const engine_state: *EngineState = &app_state.engine;
     engine_state.io = io;
 
     engine_state.sound.init() catch |err| {
         var buffer: [1024]u8 = undefined;
-        const msg = std.mem.printSentinel(
-            &buffer,
-            "Failed to initialize sound system: {s}",
-            .{@errorName(err)},
-            0,
-        ) catch unreachable;
+        const msg = std.mem.printSentinel(&buffer, "Failed to initialize sound system: {s}", .{@errorName(err)}, 0) catch unreachable;
         _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
 
     engine_state.permanent_allocator = permanent_allocator;
     engine_state.transient_allocator = transient_allocator;
-    engine_state.input = .init;
 
     // NOTE: We allocate a large enough back buffer such that we do not need to reallocate it. If
     // the window
@@ -413,7 +401,6 @@ pub fn main(init: std.process.Init) void {
         "Testbed",
         initial_window_width,
         initial_window_height,
-        &engine_state.input,
     ) catch |err| {
         var buffer: [1024]u8 = undefined;
         const msg = std.mem.printSentinel(
@@ -473,6 +460,7 @@ pub fn main(init: std.process.Init) void {
 
     running = true;
 
+    var host_controls: common.HostControls = .{};
     var frame_timestamp = std.Io.Clock.awake.now(io);
     const s_per_ns: f32 = 1.0 / @as(f32, std.time.ns_per_s);
 
@@ -490,7 +478,6 @@ pub fn main(init: std.process.Init) void {
 
         defer transient_fixed_buffer.reset();
 
-        engine_state.input.update();
         if (!pumpMessages(&platform_state)) {
             running = false;
             break;
@@ -499,7 +486,7 @@ pub fn main(init: std.process.Init) void {
 
         // The pump can spend an arbitrary amount of time in native window tracking.
         const now = std.Io.Clock.awake.now(io);
-        if (platform_state.input_suspended) {
+        if (platform_state.modal_depth != 0) {
             frame_timestamp = now;
             continue;
         }
@@ -514,9 +501,11 @@ pub fn main(init: std.process.Init) void {
         platform_state.reset_frame_clock = false;
         frame_timestamp = now;
 
+        const events = platform_state.takeEvents();
+        host_controls.consumeFrame(events);
         running = switch (builtin.mode) {
-            .debug => app_state.debug_game.game_api.updateAndRender(engine_state, game_state),
-            else => game.updateAndRender(engine_state, game_state),
+            .debug => app_state.debug_game.game_api.updateAndRender(engine_state, game_state, events.ptr, events.len),
+            else => game.updateAndRender(engine_state, game_state, events),
         };
 
         // TODO: this should be done in the renderer
@@ -540,16 +529,14 @@ pub fn main(init: std.process.Init) void {
             platform_state.fullscreen,
         );
 
-        const input = &engine_state.input;
-        const control = input.isKeyDown(.lcontrol) or input.isKeyDown(.rcontrol) or
-            input.keyPressedThisFrame(.lcontrol) or input.keyPressedThisFrame(.rcontrol);
-        if (engine_state.input.keyPressedThisFrame(.@"3") and !control) {
+        const control = host_controls.down.ctrl or host_controls.pressed_this_frame.ctrl;
+        if (host_controls.pressed_this_frame.@"3" and !control) {
             DBG_show_cursor = !DBG_show_cursor;
         }
 
         // @HACK:
         // @TODO: We need allow the game to decide when it wants to toggle full screen
-        if (input.isKeyDown(.lalt) and input.keyPressedThisFrame(.enter)) {
+        if (host_controls.down.alt and host_controls.pressed_this_frame.enter) {
             std.log.info("Toggle fullscreen", .{});
             platform_state.toggleFullscreen();
         }
@@ -684,113 +671,10 @@ inline fn stretchBlitBits(
 
 fn pumpMessages(platform: *Win32Platform) bool {
     if (platform.quit_requested) return false;
-
     var msg: win32.MSG = undefined;
-    for (0..fr.input.InputState.max_events_per_frame) |_| {
-        if (!win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE).toBool()) {
-            platform.discard_input_before = null;
-            break;
-        }
+    for (0..max_messages_per_frame) |_| {
+        if (!win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE).toBool()) break;
         if (platform.quit_requested or msg.message == win32.WM_QUIT) return false;
-
-        // Ignore input left queued by a native move/resize loop. MSG.time and
-        // GetTickCount share a wrapping millisecond clock; compare the difference.
-        const stale = if (platform.discard_input_before) |cutoff|
-            @as(i32, @bitCast(msg.time -% cutoff)) <= 0
-        else
-            false;
-        const accept_input = msg.hwnd == platform.window and platform.focused and
-            !platform.input_suspended and !stale;
-
-        switch (msg.message) {
-            win32.WM_KEYDOWN,
-            win32.WM_SYSKEYDOWN,
-            win32.WM_KEYUP,
-            win32.WM_SYSKEYUP,
-            => {
-                if (accept_input) {
-                    const key_code: usize = @bitCast(msg.wParam);
-                    if (key_code > std.math.maxInt(u8)) continue;
-                    var key: Key = @fromBackingInt(@as(u8, @intCast(key_code)));
-                    const key_info: win32.KeyMessageLParam = @bitCast(msg.lParam);
-                    key = switch (key) {
-                        .alt => if (key_info.is_extended) .ralt else .lalt,
-                        .control => if (key_info.is_extended) .rcontrol else .lcontrol,
-                        .shift => if (key_info.scan_code == .left_shift) .lshift else .rshift,
-                        else => key,
-                    };
-
-                    const down = msg.message == win32.WM_KEYDOWN or
-                        msg.message == win32.WM_SYSKEYDOWN;
-                    platform.input.keyEvent(key, down, down and key_info.was_down);
-                    continue;
-                }
-            },
-            win32.WM_MOUSEMOVE => {
-                if (accept_input) {
-                    const position: win32.MousePositionLParam = @bitCast(msg.lParam);
-                    platform.input.mouse_position_current = .{ .x = position.x, .y = position.y };
-                    continue;
-                }
-            },
-            win32.WM_MOUSEWHEEL => {
-                if (accept_input) {
-                    const wheel: win32.MouseWheelWParam = @bitCast(msg.wParam);
-                    platform.input.wheelEvent(@floatFromInt(wheel.delta));
-                    continue;
-                }
-            },
-            win32.WM_LBUTTONDOWN,
-            win32.WM_LBUTTONUP,
-            win32.WM_RBUTTONDOWN,
-            win32.WM_RBUTTONUP,
-            win32.WM_MBUTTONDOWN,
-            win32.WM_MBUTTONUP,
-            win32.WM_XBUTTONDOWN,
-            win32.WM_XBUTTONUP,
-            => {
-                if (accept_input) {
-                    const button: ?MouseButton = switch (msg.message) {
-                        win32.WM_LBUTTONDOWN, win32.WM_LBUTTONUP => .left,
-                        win32.WM_RBUTTONDOWN, win32.WM_RBUTTONUP => .right,
-                        win32.WM_MBUTTONDOWN, win32.WM_MBUTTONUP => .middle,
-                        else => extra: {
-                            const extra_button: win32.XButtonWParam = @bitCast(msg.wParam);
-                            break :extra switch (extra_button.button) {
-                                .x1 => .x1,
-                                .x2 => .x2,
-                                else => null,
-                            };
-                        },
-                    };
-                    if (button) |mapped| {
-                        const down = msg.message == win32.WM_LBUTTONDOWN or
-                            msg.message == win32.WM_RBUTTONDOWN or
-                            msg.message == win32.WM_MBUTTONDOWN or
-                            msg.message == win32.WM_XBUTTONDOWN;
-                        platform.input.mouseButtonEvent(mapped, down);
-                    }
-
-                    // Capture keeps button releases observable after a drag leaves the window.
-                    const any_button_down = std.mem.indexOfScalar(
-                        u8,
-                        &platform.input.mouse_buttons_ended_down,
-                        1,
-                    ) != null;
-                    if (any_button_down) {
-                        if (win32.GetCapture() != platform.window) {
-                            _ = win32.SetCapture(platform.window.?);
-                        }
-                    } else if (win32.GetCapture() == platform.window) {
-                        _ = win32.ReleaseCapture();
-                    }
-                    continue;
-                }
-            },
-            else => {},
-        }
-        // Native window management remains in windowProc. Game input is only
-        // recorded by this pump, never by Windows-owned modal loops.
         _ = win32.DispatchMessageA(&msg);
         if (platform.quit_requested) return false;
     }
@@ -809,30 +693,153 @@ fn windowProc(
         return win32.DefWindowProcA(window, message, w_param, l_param);
 
     switch (message) {
-        win32.WM_ENTERSIZEMOVE => {
-            platform.input_suspended = true;
-            platform.input.releaseAll();
-            platform.input.update();
-            // Windows owns mouse capture while tracking the window border/title bar.
+        win32.WM_ENTERSIZEMOVE, win32.WM_ENTERMENULOOP => {
+            if (platform.modal_depth == 0) {
+                platform.event_lists[platform.pending_event_buffer].appendBounded(.reset_keyboard) catch
+                    @panic("event buffer overflow");
+            }
+            platform.modal_depth = std.math.add(u32, platform.modal_depth, 1) catch
+                @panic("native modal nesting overflow");
             return 0;
         },
-        win32.WM_EXITSIZEMOVE => {
-            platform.input.releaseAll();
-            platform.input.update();
-            platform.input_suspended = false;
-            platform.discard_input_before = win32.GetTickCount();
-            platform.reset_frame_clock = true;
+        win32.WM_EXITSIZEMOVE, win32.WM_EXITMENULOOP => {
+            if (platform.modal_depth != 0) platform.modal_depth -= 1;
+            if (platform.modal_depth == 0) platform.reset_frame_clock = true;
             return 0;
         },
         win32.WM_SETFOCUS => platform.focused = true,
         win32.WM_KILLFOCUS, win32.WM_ACTIVATEAPP => {
-            if (message == win32.WM_KILLFOCUS or w_param == 0) {
-                platform.focused = false;
-                platform.input.releaseAll();
+            const lost_focus = message == win32.WM_KILLFOCUS or w_param == 0;
+            if (lost_focus) {
+                if (platform.focused) {
+                    platform.focused = false;
+                    platform.event_lists[platform.pending_event_buffer].appendBounded(.reset_all) catch
+                        @panic("event buffer overflow");
+                }
+                platform.client_mouse_buttons = 0;
+                // Clear ownership before ReleaseCapture reenters this procedure.
+                platform.owns_mouse_capture = false;
                 if (win32.GetCapture() == window) _ = win32.ReleaseCapture();
             }
         },
-        win32.WM_CAPTURECHANGED => platform.input.releaseMouseButtons(),
+        win32.WM_CAPTURECHANGED => {
+            if (platform.owns_mouse_capture) {
+                platform.owns_mouse_capture = false;
+                platform.client_mouse_buttons = 0;
+                platform.event_lists[platform.pending_event_buffer].appendBounded(.reset_mouse) catch
+                    @panic("event buffer overflow");
+            }
+        },
+        win32.WM_KEYDOWN, win32.WM_SYSKEYDOWN, win32.WM_KEYUP, win32.WM_SYSKEYUP => {
+            if (platform.focused) {
+                if (w_param <= std.math.maxInt(u8)) {
+                    var key: Key = @fromBackingInt(@as(u8, @intCast(w_param)));
+                    const info: win32.KeyMessageLParam = @bitCast(l_param);
+                    key = switch (key) {
+                        .alt => if (info.is_extended) .ralt else .lalt,
+                        .control => if (info.is_extended) .rcontrol else .lcontrol,
+                        .shift => if (info.scan_code == .left_shift) .lshift else .rshift,
+                        else => key,
+                    };
+                    const down = message == win32.WM_KEYDOWN or message == win32.WM_SYSKEYDOWN;
+                    const translated: Event = if (!down)
+                        .{ .key_released = key }
+                    else if (info.was_down)
+                        .{ .key_repeat = key }
+                    else
+                        .{ .key_pressed = key };
+                    platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
+                        @panic("event buffer overflow");
+                    return 0;
+                }
+            }
+        },
+        win32.WM_MOUSEMOVE => {
+            if (platform.focused) {
+                const position: win32.MousePositionLParam = @bitCast(l_param);
+                platform.event_lists[platform.pending_event_buffer].appendBounded(.{
+                    .mouse_move = .{ .x = position.x, .y = position.y },
+                }) catch @panic("event buffer overflow");
+                return 0;
+            }
+        },
+        win32.WM_MOUSEWHEEL => {
+            if (platform.focused) {
+                const wheel: win32.MouseWheelWParam = @bitCast(w_param);
+                if (wheel.delta != 0) {
+                    const position: win32.MousePositionLParam = @bitCast(l_param);
+                    var client: win32.POINT = .{ .x = position.x, .y = position.y };
+                    if (win32.ScreenToClient(window, &client).toBool()) {
+                        platform.event_lists[platform.pending_event_buffer].appendBounded(.{
+                            .mouse_scroll = .{
+                                .value = if (wheel.delta > 0) 1 else -1,
+                                .mouse_pos = .{
+                                    .x = @intCast(std.math.clamp(client.x, std.math.minInt(i16), std.math.maxInt(i16))),
+                                    .y = @intCast(std.math.clamp(client.y, std.math.minInt(i16), std.math.maxInt(i16))),
+                                },
+                            },
+                        }) catch @panic("event buffer overflow");
+                    }
+                }
+                return 0;
+            }
+        },
+        win32.WM_LBUTTONDOWN,
+        win32.WM_LBUTTONUP,
+        win32.WM_RBUTTONDOWN,
+        win32.WM_RBUTTONUP,
+        win32.WM_MBUTTONDOWN,
+        win32.WM_MBUTTONUP,
+        win32.WM_XBUTTONDOWN,
+        win32.WM_XBUTTONUP,
+        => {
+            if (platform.focused) {
+                const button: ?MouseButton = switch (message) {
+                    win32.WM_LBUTTONDOWN, win32.WM_LBUTTONUP => .left,
+                    win32.WM_RBUTTONDOWN, win32.WM_RBUTTONUP => .right,
+                    win32.WM_MBUTTONDOWN, win32.WM_MBUTTONUP => .middle,
+                    else => extra: {
+                        const extra_button: win32.XButtonWParam = @bitCast(w_param);
+                        break :extra switch (extra_button.button) {
+                            .x1 => .x1,
+                            .x2 => .x2,
+                            else => null,
+                        };
+                    },
+                };
+                if (button) |mapped| {
+                    const down = message == win32.WM_LBUTTONDOWN or message == win32.WM_RBUTTONDOWN or
+                        message == win32.WM_MBUTTONDOWN or message == win32.WM_XBUTTONDOWN;
+                    const position: win32.MousePositionLParam = @bitCast(l_param);
+                    const payload: Event.MouseButtonEvent = .{
+                        .button = mapped,
+                        .pos = .{ .x = position.x, .y = position.y },
+                    };
+                    const translated: Event = if (down) .{ .mouse_pressed = payload } else .{ .mouse_released = payload };
+                    platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
+                        @panic("event buffer overflow");
+                    const mask = @as(u8, 1) << @as(u3, @intCast(@backingInt(mapped)));
+
+                    // NOTE(adi): Tracking the clicks if they start inside the window and continueing to do so even if
+                    // it is dragged outside the window till it is released.
+                    if (down) {
+                        platform.client_mouse_buttons |= mask;
+                        if (win32.GetCapture() != window) {
+                            _ = win32.SetCapture(window);
+                        }
+                        platform.owns_mouse_capture = win32.GetCapture() == window;
+                    } else {
+                        platform.client_mouse_buttons &= ~mask;
+                        if (platform.client_mouse_buttons == 0) {
+                            platform.owns_mouse_capture = false;
+                            if (win32.GetCapture() == window) _ = win32.ReleaseCapture();
+                        }
+                    }
+                    if (message == win32.WM_XBUTTONDOWN or message == win32.WM_XBUTTONUP) return 1;
+                    return 0;
+                }
+            }
+        },
         win32.WM_ERASEBKGND => return 1,
         win32.WM_DESTROY, win32.WM_CLOSE => {
             platform.quit_requested = true;

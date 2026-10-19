@@ -14,6 +14,8 @@ export fn deinit(engine: *EngineState, game_state: *anyopaque) void {
 export fn updateAndRender(
     engine: *EngineState,
     game_state: *anyopaque,
+    events: [*]const fr.event.Event,
+    event_count: usize,
 ) bool {
-    return game.updateAndRender(engine, game_state);
+    return game.updateAndRender(engine, game_state, events[0..event_count]);
 }

@@ -165,7 +165,7 @@ pub fn build(b: *std.Build) !void {
     // ==================================== TESTS ==================================/
     const test_step = b.step(
         "test",
-        "Run portable and native platform tests; check Windows audio tests",
+        "Run engine tests; check Windows audio tests",
     );
     const host_fracture = b.createModule(.{
         .root_source_file = b.path("src/fracture.zig"),
@@ -209,30 +209,6 @@ pub fn build(b: *std.Build) !void {
         .root_module = windows_sound,
     });
     check.dependOn(&audio_tests.step);
-    if (is_macos and b.graph.host.result.os.tag == .macos and
-        b.graph.host.result.cpu.arch == target.result.cpu.arch)
-    {
-        const test_options = b.addOptions();
-        const window_smoke = b.option(
-            bool,
-            "macos-window-smoke",
-            "Test native input routing, queue limits, focus loss, resize suspension, " ++
-                "and quit (requires a desktop session)",
-        ) orelse false;
-        test_options.addOption(bool, "window_smoke", window_smoke);
-        const test_module = b.createModule(.{
-            .root_source_file = b.path("testbed/entrypoint_macos.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
-        var imports = entrypoint.import_table.iterator();
-        while (imports.next()) |entry| test_module.addImport(entry.key_ptr.*, entry.value_ptr.*);
-        test_module.linkFramework("AppKit", .{});
-        test_module.linkFramework("CoreGraphics", .{});
-        test_module.addOptions("test_options", test_options);
-        const mac_tests = b.addTest(.{ .name = "macos-tests", .root_module = test_module });
-        test_step.dependOn(&b.addRunArtifact(mac_tests).step);
-    }
     if (b.graph.host.result.os.tag == .windows and target.result.os.tag == .windows and
         b.graph.host.result.cpu.arch == target.result.cpu.arch)
     {
