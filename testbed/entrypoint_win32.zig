@@ -40,18 +40,25 @@ const Win32Platform = struct {
     ) WindowCreateError!void {
         const engine_name: [*:0]const u8 = "zfracture";
 
-        platform_state.instance = win32.GetModuleHandleA(null) orelse return error.FailedToGetModuleHandle;
+        platform_state.instance = win32.GetModuleHandleA(null) orelse
+            return error.FailedToGetModuleHandle;
 
         var window_class: win32.WNDCLASSA = .zero;
         window_class.style = .{ .OWNDC = 1 };
         window_class.lpfnWndProc = windowProc;
         window_class.hInstance = platform_state.instance;
         window_class.lpszClassName = engine_name;
-        // window_class.hCursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse return error.FailedToLoadCursor;
+        // window_class.hCursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse return
+        // error.FailedToLoadCursor;
 
         const result = win32.RegisterClassA(&window_class);
         if (result == 0) {
-            _ = win32.MessageBoxA(null, "Windows Registration Failed", "Error", win32.MB_ICONEXCLAMATION);
+            _ = win32.MessageBoxA(
+                null,
+                "Windows Registration Failed",
+                "Error",
+                win32.MB_ICONEXCLAMATION,
+            );
             return error.FailedToRegisterWindowClass;
         }
 
@@ -68,7 +75,12 @@ const Win32Platform = struct {
         window_style |= win32.WS_THICKFRAME;
 
         var border_rect: win32.RECT = std.mem.zeroes(win32.RECT);
-        _ = win32.AdjustWindowRectEx(&border_rect, @bitCast(window_style), .FALSE, @bitCast(window_style_ex));
+        _ = win32.AdjustWindowRectEx(
+            &border_rect,
+            @bitCast(window_style),
+            .FALSE,
+            @bitCast(window_style_ex),
+        );
 
         window_x += border_rect.left;
         window_y += border_rect.top;
@@ -90,12 +102,18 @@ const Win32Platform = struct {
             platform_state.instance,
             null,
         ) orelse {
-            _ = win32.MessageBoxA(null, "Windows Creation Failed", "Error", win32.MB_ICONEXCLAMATION);
+            _ = win32.MessageBoxA(
+                null,
+                "Windows Creation Failed",
+                "Error",
+                win32.MB_ICONEXCLAMATION,
+            );
             return error.FailedToCreateWindow;
         };
         errdefer _ = win32.DestroyWindow(platform_state.window);
 
-        platform_state.device_context = win32.GetDC(platform_state.window) orelse return error.FailedToGetDeviceContext;
+        platform_state.device_context = win32.GetDC(platform_state.window) orelse
+            return error.FailedToGetDeviceContext;
         platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
         platform_state.fullscreen = false;
         platform_state.input = input;
@@ -104,6 +122,7 @@ const Win32Platform = struct {
         platform_state.input_suspended = false;
         platform_state.reset_frame_clock = false;
         platform_state.discard_input_before = null;
+
         // Creation callbacks see null user data until the platform is ready.
         const user_data: isize = @bitCast(@intFromPtr(platform_state));
         _ = win32.SetWindowLongPtrA(platform_state.window.?, win32.GWLP_USERDATA, user_data);
@@ -137,32 +156,46 @@ const Win32Platform = struct {
                 .rcWork = undefined,
                 .dwFlags = 0,
             };
-            // NOTE: Save the current window placement so we can restore it later.
-            const result = win32.GetWindowPlacement(self.window, &self.window_placement);
 
-            const result2 = win32.GetMonitorInfoA(
-                // NOTE: In case windows cannot find which is the closest monitor we default to getting the primary monitor
-                win32.MonitorFromWindow(self.window, win32.MONITOR_DEFAULTTOPRIMARY),
-                &monitor_info,
-            );
-            if (result.toBool() and result2.toBool()) {
-                // NOTE: We are changing the window style so that it has no borders or title bar and then
-                // setting the window position and size to be the top left corner of the monitor and the size of the monitor
-                _ = win32.SetWindowLongA(self.window, win32.GWL_STYLE, window_style & ~WS_OVERLAPPEDWINDOW);
+            // NOTE: Save the current window placement so we can restore it later.
+            const placement_result = win32.GetWindowPlacement(self.window, &self.window_placement);
+            // If Windows cannot find the closest monitor, use the primary monitor.
+            const monitor = win32.MonitorFromWindow(self.window, win32.MONITOR_DEFAULTTOPRIMARY);
+            const monitor_result = win32.GetMonitorInfoA(monitor, &monitor_info);
+            if (placement_result.toBool() and monitor_result.toBool()) {
+                // NOTE: We are changing the window style so that it has no borders or title bar and
+                // then
+                // setting the window position and size to be the top left corner of the monitor and
+                // the size of the monitor
+                _ = win32.SetWindowLongA(
+                    self.window,
+                    win32.GWL_STYLE,
+                    window_style & ~WS_OVERLAPPEDWINDOW,
+                );
+
+                const monitor_width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+                const monitor_height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
                 _ = win32.SetWindowPos(
                     self.window,
                     win32.HWND_TOPMOST,
                     monitor_info.rcMonitor.left,
                     monitor_info.rcMonitor.top,
-                    monitor_info.rcMonitor.right - monitor_info.rcMonitor.left,
-                    monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+                    monitor_width,
+                    monitor_height,
                     @bitCast(win32.SWP_NOOWNERZORDER | win32.SWP_FRAMECHANGED),
                 );
             }
         } else {
             self.fullscreen = false;
-            _ = win32.SetWindowLongA(self.window, win32.GWL_STYLE, window_style | WS_OVERLAPPEDWINDOW);
+            _ = win32.SetWindowLongA(
+                self.window,
+                win32.GWL_STYLE,
+                window_style | WS_OVERLAPPEDWINDOW,
+            );
             _ = win32.SetWindowPlacement(self.window, &self.window_placement);
+
+            const restore_flags = win32.SWP_NOMOVE | win32.SWP_NOSIZE |
+                win32.SWP_NOOWNERZORDER | win32.SWP_FRAMECHANGED;
             _ = win32.SetWindowPos(
                 self.window,
                 win32.HWND_NOTOPMOST,
@@ -170,7 +203,7 @@ const Win32Platform = struct {
                 0,
                 0,
                 0,
-                @bitCast(win32.SWP_NOMOVE | win32.SWP_NOSIZE | win32.SWP_NOOWNERZORDER | win32.SWP_FRAMECHANGED),
+                @bitCast(restore_flags),
             );
         }
     }
@@ -185,12 +218,14 @@ const WindowCreateError = error{
     FailedToSetWindowUserData,
 } || std.mem.Allocator.Error;
 
-/// This struct will be used when the game is running in debug mode and/or we enable hot reoloading.
-/// So instead of importing the game as a module we will replace them with function pointers.
+/// Indirect calls let debug builds replace game code without restarting the engine.
 pub const DebugGameDLLApi = struct {
     pub const InitFn = *const fn (engine: *EngineState) callconv(.c) ?*anyopaque;
     pub const DeinitFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) void;
-    pub const UpdateAndRenderFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) bool;
+    pub const UpdateAndRenderFn = *const fn (
+        engine: *EngineState,
+        game_state: *anyopaque,
+    ) callconv(.c) bool;
 
     init: InitFn,
     deinit: DeinitFn,
@@ -226,15 +261,18 @@ var DBG_cursor: ?windows.HCURSOR = null;
 var DBG_show_cursor: bool = false;
 
 // LEFTOFF: Implement WAV file loading and decoding. Complete audio system
-// TODO: We currently have 2 arenas. One is for permanent allocations which is the static lifetime arena.
-// The ther is the transient arena which has the lifetime of a frame. We probably want more arenas with potentially
-// different lifetimes such as a scene or game level arena. It is possible the renderer will need to allocate stuff
-// when it is performing the rendering pass. We could also have fixed size arena pools for each thread/task that can be
+// TODO: We currently have 2 arenas. One is for permanent allocations which is the static lifetime
+// arena.
+// The ther is the transient arena which has the lifetime of a frame. We probably want more arenas
+// with potentially
+// different lifetimes such as a scene or game level arena. It is possible the renderer will need to
+// allocate stuff
+// when it is performing the rendering pass. We could also have fixed size arena pools for each
+// thread/task that can be
 // requested when one is run out.
 pub fn main(init: std.process.Init) void {
     // TODO: Figure out the correct io for the platform
     const io = init.io;
-    // Platform specific state
     DBG_cursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse {
         _ = win32.MessageBoxA(null, "Failed to load cursor", "Error", win32.MB_ICONEXCLAMATION);
         return;
@@ -245,46 +283,70 @@ pub fn main(init: std.process.Init) void {
     // TODO: What do we do about the back buffer? This is a renderer specific thing
     var buffer_info: win32.BITMAPINFO = undefined;
 
-    // TODO: We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
+    // TODO: We need to figure out if I want to use the debug allocator since we are using fixed
+    // buffer arenas
     const allocator = std.heap.page_allocator;
 
-    // NOTE: We want to gaurantee that the game can run in a fixed amount of memory. We can bump this up
+    // NOTE: We want to gaurantee that the game can run in a fixed amount of memory. We can bump
+    // this up
     // dpeneding on if we ever see us running out of memory.
     const permanenent_memory_size = MB(128);
     const transient_memory_size = MB(128);
     const total_game_memory_size = permanenent_memory_size + transient_memory_size;
 
     // TODO: We may need more arenas depending on how the game goes.
-    // TODO: We can just use VirtualAlloc to allocate a large virtual address space and then map parts of it
-    // into the different arenas so they can potentially grow? Maybe we want this sometimes. Especially if we want
+    // TODO: We can just use VirtualAlloc to allocate a large virtual address space and then map
+    // parts of it
+    // into the different arenas so they can potentially grow? Maybe we want this sometimes.
+    // Especially if we want
     // to allocate new arenas when some run out.
-    // TODO: Create an arena allocator that we can use everywhere instead of passing the Allocator struct around
-    // since we only need alloc/push/pop and not free/realloc and stuff. We can create a allocator if we really need it.
+    // TODO: Create an arena allocator that we can use everywhere instead of passing the Allocator
+    // struct around
+    // since we only need alloc/push/pop and not free/realloc and stuff. We can create a allocator
+    // if we really need it.
     // out of this one.
     const game_memory: []u8 = allocator.alloc(u8, total_game_memory_size) catch {
-        _ = win32.MessageBoxA(null, "Failed to allocate game memory", "Error", win32.MB_ICONEXCLAMATION);
+        _ = win32.MessageBoxA(
+            null,
+            "Failed to allocate game memory",
+            "Error",
+            win32.MB_ICONEXCLAMATION,
+        );
         return;
     };
 
-    var permanent_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[0..permanenent_memory_size]);
+    const permanent_memory = game_memory[0..permanenent_memory_size];
+    var permanent_fixed_buffer = std.heap.FixedBufferAllocator.init(permanent_memory);
     const permanent_allocator = permanent_fixed_buffer.allocator();
 
-    var transient_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[permanenent_memory_size .. permanenent_memory_size + transient_memory_size]);
+    const transient_memory = game_memory[permanenent_memory_size..total_game_memory_size];
+    var transient_fixed_buffer = std.heap.FixedBufferAllocator.init(transient_memory);
     const transient_allocator = transient_fixed_buffer.allocator();
 
     const app_state: *AppState = permanent_allocator.create(AppState) catch {
-        _ = win32.MessageBoxA(null, "Failed to allocate engine state", "Error", win32.MB_ICONEXCLAMATION);
+        _ = win32.MessageBoxA(
+            null,
+            "Failed to allocate engine state",
+            "Error",
+            win32.MB_ICONEXCLAMATION,
+        );
         return;
     };
 
-    // TODO: Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
+    // TODO: Figure out why the engine pointer does not showup in raddebugger when allocated
+    // directly vs
     // making a new type AppState and then allocating it.
     const engine_state: *EngineState = &app_state.engine;
     engine_state.io = io;
 
     engine_state.sound.init() catch |err| {
         var buffer: [1024]u8 = undefined;
-        const msg = std.mem.printSentinel(&buffer, "Failed to initialize sound system: {s}", .{@errorName(err)}, 0) catch unreachable;
+        const msg = std.mem.printSentinel(
+            &buffer,
+            "Failed to initialize sound system: {s}",
+            .{@errorName(err)},
+            0,
+        ) catch unreachable;
         _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
@@ -293,8 +355,10 @@ pub fn main(init: std.process.Init) void {
     engine_state.transient_allocator = transient_allocator;
     engine_state.input = .init;
 
-    // NOTE: We allocate a large enough back buffer such that we do not need to reallocate it. If the window
-    // size becomes larger than this we will just throw an error and disallow it. Especially if we are rendering to a
+    // NOTE: We allocate a large enough back buffer such that we do not need to reallocate it. If
+    // the window
+    // size becomes larger than this we will just throw an error and disallow it. Especially if we
+    // are rendering to a
     // smaller back buffer and stretching it to fit the window.
     // TODO: We need to make this configurable globally by the game.
     // TODO: We might lower this if we want a smaller memory footprint
@@ -305,8 +369,17 @@ pub fn main(init: std.process.Init) void {
     // TODO: Move to the renderer
     engine_state.renderer.back_buffer.width = 1280;
     engine_state.renderer.back_buffer.height = 720;
-    engine_state.renderer.back_buffer.data = permanent_allocator.alignedAlloc(u8, .fromByteUnits(4096), window_buffer_max_size) catch {
-        _ = win32.MessageBoxA(null, "Out of memory for back buffer allocation", "Error", win32.MB_ICONEXCLAMATION);
+    engine_state.renderer.back_buffer.data = permanent_allocator.alignedAlloc(
+        u8,
+        .fromByteUnits(4096),
+        window_buffer_max_size,
+    ) catch {
+        _ = win32.MessageBoxA(
+            null,
+            "Out of memory for back buffer allocation",
+            "Error",
+            win32.MB_ICONEXCLAMATION,
+        );
         return;
     };
     engine_state.renderer.clearScreen(0, 0, 0);
@@ -329,15 +402,26 @@ pub fn main(init: std.process.Init) void {
             .{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 },
         },
     };
+
     var platform_state: Win32Platform = undefined;
+    const buffer_width: i32 = engine_state.renderer.back_buffer.width;
+    const initial_window_width = buffer_width + 2 * common.windowed_frame_margin;
+    const buffer_height: i32 = engine_state.renderer.back_buffer.height;
+    const initial_window_height = buffer_height + 2 * common.windowed_frame_margin;
+
     platform_state.createWindow(
         "Testbed",
-        engine_state.renderer.back_buffer.width,
-        engine_state.renderer.back_buffer.height,
+        initial_window_width,
+        initial_window_height,
         &engine_state.input,
     ) catch |err| {
         var buffer: [1024]u8 = undefined;
-        const msg = std.mem.printSentinel(&buffer, "Failed to initialize window: {s}", .{@errorName(err)}, 0) catch unreachable;
+        const msg = std.mem.printSentinel(
+            &buffer,
+            "Failed to initialize window: {s}",
+            .{@errorName(err)},
+            0,
+        ) catch unreachable;
         _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
         return;
     };
@@ -350,13 +434,24 @@ pub fn main(init: std.process.Init) void {
             app_state.debug_game.is_loaded = false;
             app_state.debug_game.temp_index = 0;
             app_state.debug_game.time_stamp = 0;
-            if (!(reloadLibrary(io, &app_state.debug_game) catch |err| {
+            const loaded = reloadLibrary(io, &app_state.debug_game) catch |err| {
                 var buffer: [1024]u8 = undefined;
-                const msg = std.mem.printSentinel(&buffer, "Failed to reload dynamic game library: {s}", .{@errorName(err)}, 0) catch unreachable;
+                const msg = std.mem.printSentinel(
+                    &buffer,
+                    "Failed to reload dynamic game library: {s}",
+                    .{@errorName(err)},
+                    0,
+                ) catch unreachable;
                 _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
                 return;
-            })) {
-                _ = win32.MessageBoxA(null, "Failed to reload dynamic game library", "Error", win32.MB_ICONEXCLAMATION);
+            };
+            if (!loaded) {
+                _ = win32.MessageBoxA(
+                    null,
+                    "Failed to reload dynamic game library",
+                    "Error",
+                    win32.MB_ICONEXCLAMATION,
+                );
                 return;
             }
         },
@@ -365,7 +460,12 @@ pub fn main(init: std.process.Init) void {
 
     const game_state: *anyopaque = switch (builtin.mode) {
         .debug => app_state.debug_game.game_api.init(engine_state) orelse {
-            _ = win32.MessageBoxA(null, "Failed to initialize game", "Error", win32.MB_ICONEXCLAMATION);
+            _ = win32.MessageBoxA(
+                null,
+                "Failed to initialize game",
+                "Error",
+                win32.MB_ICONEXCLAMATION,
+            );
             return;
         },
         else => game.init(engine_state),
@@ -387,7 +487,9 @@ pub fn main(init: std.process.Init) void {
                 };
             }
         }
+
         defer transient_fixed_buffer.reset();
+
         engine_state.input.update();
         if (!pumpMessages(&platform_state)) {
             running = false;
@@ -401,7 +503,14 @@ pub fn main(init: std.process.Init) void {
             frame_timestamp = now;
             continue;
         }
-        engine_state.delta_time = if (platform_state.reset_frame_clock) 0 else @as(f32, @floatFromInt(frame_timestamp.durationTo(now).toNanoseconds())) * s_per_ns;
+
+        if (platform_state.reset_frame_clock) {
+            engine_state.delta_time = 0;
+        } else {
+            const elapsed = frame_timestamp.durationTo(now);
+            const elapsed_ns: f32 = @floatFromInt(elapsed.toNanoseconds());
+            engine_state.delta_time = elapsed_ns * s_per_ns;
+        }
         platform_state.reset_frame_clock = false;
         frame_timestamp = now;
 
@@ -431,21 +540,23 @@ pub fn main(init: std.process.Init) void {
             platform_state.fullscreen,
         );
 
-        const control = engine_state.input.isKeyDown(.lcontrol) or engine_state.input.isKeyDown(.rcontrol) or
-            engine_state.input.keyPressedThisFrame(.lcontrol) or engine_state.input.keyPressedThisFrame(.rcontrol);
+        const input = &engine_state.input;
+        const control = input.isKeyDown(.lcontrol) or input.isKeyDown(.rcontrol) or
+            input.keyPressedThisFrame(.lcontrol) or input.keyPressedThisFrame(.rcontrol);
         if (engine_state.input.keyPressedThisFrame(.@"3") and !control) {
             DBG_show_cursor = !DBG_show_cursor;
         }
 
         // @HACK:
         // @TODO: We need allow the game to decide when it wants to toggle full screen
-        if (engine_state.input.isKeyDown(.lalt) and engine_state.input.keyPressedThisFrame(.enter)) {
+        if (input.isKeyDown(.lalt) and input.keyPressedThisFrame(.enter)) {
             std.log.info("Toggle fullscreen", .{});
             platform_state.toggleFullscreen();
         }
 
         // TODO: Reload library every X seconds instead of on every frame
-        // TODO: Build in a fail-safe stub functions for when the reload fails so the game can still run
+        // TODO: Build in a fail-safe stub functions for when the reload fails so the game can still
+        // run
         // without crashing and we can try to recover.
         switch (builtin.mode) {
             .debug => {
@@ -453,7 +564,10 @@ pub fn main(init: std.process.Init) void {
                 if (dll_timestamp.durationTo(now).toNanoseconds() > std.time.ns_per_s / 30) {
                     dll_timestamp = now;
                     _ = reloadLibrary(io, &app_state.debug_game) catch |err| {
-                        std.log.err("Failed to reload dynamic game library: {s}", .{@errorName(err)});
+                        std.log.err(
+                            "Failed to reload dynamic game library: {s}",
+                            .{@errorName(err)},
+                        );
                     };
                 }
             },
@@ -469,16 +583,18 @@ pub fn main(init: std.process.Init) void {
         else => game.deinit(engine_state, game_state),
     }
 
-    // Destroy the window
     platform_state.destroyWindow();
 
-    // NOTE: Destroy the sound system after the window is destroyed for some reason there seeems to be an exception thrown
-    // when destroying the window after the sound system has been deinitialized. This is probably some intercation with
+    // NOTE: Destroy the sound system after the window is destroyed for some reason there seeems to
+    // be an exception thrown
+    // when destroying the window after the sound system has been deinitialized. This is probably
+    // some intercation with
     // the COM being deinitialized before the window is destroyed?
     // TODO: We need to figure out why this is happening and if this is the intended behavior.
     engine_state.sound.deinit();
 
-    // NOTE: Technically this free is not really needed as the OS will clean up after the application exits.
+    // NOTE: Technically this free is not really needed as the OS will clean up after the
+    // application exits.
     // But it is nice to do it anyway.
     allocator.free(game_memory);
 
@@ -522,8 +638,8 @@ inline fn stretchBlitBits(
             @bitCast(win32.SRCCOPY),
         );
     } else blk: {
-        const top: i32 = 10;
-        const left: i32 = 10;
+        const top: i32 = common.windowed_frame_margin;
+        const left: i32 = common.windowed_frame_margin;
 
         _ = win32.PatBlt(device_context, 0, 0, dest_width, top, @bitCast(win32.BLACKNESS));
         _ = win32.PatBlt(device_context, 0, top, left, src_height, @bitCast(win32.BLACKNESS));
@@ -568,6 +684,7 @@ inline fn stretchBlitBits(
 
 fn pumpMessages(platform: *Win32Platform) bool {
     if (platform.quit_requested) return false;
+
     var msg: win32.MSG = undefined;
     for (0..fr.input.InputState.max_events_per_frame) |_| {
         if (!win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE).toBool()) {
@@ -575,13 +692,16 @@ fn pumpMessages(platform: *Win32Platform) bool {
             break;
         }
         if (platform.quit_requested or msg.message == win32.WM_QUIT) return false;
+
         // Ignore input left queued by a native move/resize loop. MSG.time and
         // GetTickCount share a wrapping millisecond clock; compare the difference.
         const stale = if (platform.discard_input_before) |cutoff|
             @as(i32, @bitCast(msg.time -% cutoff)) <= 0
         else
             false;
-        const accept_input = msg.hwnd == platform.window and platform.focused and !platform.input_suspended and !stale;
+        const accept_input = msg.hwnd == platform.window and platform.focused and
+            !platform.input_suspended and !stale;
+
         switch (msg.message) {
             win32.WM_KEYDOWN,
             win32.WM_SYSKEYDOWN,
@@ -599,7 +719,9 @@ fn pumpMessages(platform: *Win32Platform) bool {
                         .shift => if (key_info.scan_code == .left_shift) .lshift else .rshift,
                         else => key,
                     };
-                    const down = msg.message == win32.WM_KEYDOWN or msg.message == win32.WM_SYSKEYDOWN;
+
+                    const down = msg.message == win32.WM_KEYDOWN or
+                        msg.message == win32.WM_SYSKEYDOWN;
                     platform.input.keyEvent(key, down, down and key_info.was_down);
                     continue;
                 }
@@ -642,14 +764,23 @@ fn pumpMessages(platform: *Win32Platform) bool {
                         },
                     };
                     if (button) |mapped| {
-                        const down = msg.message == win32.WM_LBUTTONDOWN or msg.message == win32.WM_RBUTTONDOWN or
-                            msg.message == win32.WM_MBUTTONDOWN or msg.message == win32.WM_XBUTTONDOWN;
+                        const down = msg.message == win32.WM_LBUTTONDOWN or
+                            msg.message == win32.WM_RBUTTONDOWN or
+                            msg.message == win32.WM_MBUTTONDOWN or
+                            msg.message == win32.WM_XBUTTONDOWN;
                         platform.input.mouseButtonEvent(mapped, down);
                     }
-                    // Match AppKit's delivery of drag/release events outside the view.
-                    const any_button_down = std.mem.indexOfScalar(u8, &platform.input.mouse_buttons_ended_down, 1) != null;
+
+                    // Capture keeps button releases observable after a drag leaves the window.
+                    const any_button_down = std.mem.indexOfScalar(
+                        u8,
+                        &platform.input.mouse_buttons_ended_down,
+                        1,
+                    ) != null;
                     if (any_button_down) {
-                        if (win32.GetCapture() != platform.window) _ = win32.SetCapture(platform.window.?);
+                        if (win32.GetCapture() != platform.window) {
+                            _ = win32.SetCapture(platform.window.?);
+                        }
                     } else if (win32.GetCapture() == platform.window) {
                         _ = win32.ReleaseCapture();
                     }
@@ -721,7 +852,8 @@ fn windowProc(
             return 0;
         },
         // TODO: We might not want to resize the back buffer every time the window is resized.
-        // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits to scale it.
+        // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits
+        // to scale it.
         // We could figure out a way to keep the aspect ration the same, but that might be tricky.
         // win32.WM_SIZE => {
         // var rect: win32.RECT = undefined;
@@ -730,11 +862,14 @@ fn windowProc(
         // app_state.back_buffer.height = @intCast(rect.bottom - rect.top);
         //
         // app_state.back_buffer.info.bmiHeader.biWidth = @intCast(app_state.back_buffer.width);
-        // app_state.back_buffer.info.bmiHeader.biHeight = -@as(i32, @intCast(app_state.back_buffer.height));
+        // app_state.back_buffer.info.bmiHeader.biHeight = -@as(i32,
+        // @intCast(app_state.back_buffer.height));
         //
         // const bytes_per_pixel: usize = 4;
-        // const new_bitmap_size: usize = @as(usize, app_state.back_buffer.width) * @as(usize, app_state.back_buffer.height) * bytes_per_pixel;
-        // app_state.back_buffer.data = app_state.allocator.realloc(app_state.back_buffer.data, new_bitmap_size) catch unreachable;
+        // const new_bitmap_size: usize = @as(usize, app_state.back_buffer.width) * @as(usize,
+        // app_state.back_buffer.height) * bytes_per_pixel;
+        // app_state.back_buffer.data = app_state.allocator.realloc(app_state.back_buffer.data,
+        // new_bitmap_size) catch unreachable;
         // },
 
         else => {},
@@ -760,9 +895,16 @@ fn reloadLibrary(io: std.Io, debug_game: *DebugGame) !bool {
 
     const new_instance = win32.LoadLibraryA(new_name.ptr) orelse return error.FailedToLoadLibrary;
     errdefer _ = win32.FreeLibrary(new_instance);
-    const init_fn: DebugGameDLLApi.InitFn = @ptrCast(win32.GetProcAddress(new_instance, "init") orelse return error.FailedToLookupInitFn);
-    const deinit_fn: DebugGameDLLApi.DeinitFn = @ptrCast(win32.GetProcAddress(new_instance, "deinit") orelse return error.FailedToLookupDeinitFn);
-    const update_and_render: DebugGameDLLApi.UpdateAndRenderFn = @ptrCast(win32.GetProcAddress(new_instance, "updateAndRender") orelse return error.FailedToLookupUpdateAndRenderFn);
+
+    const init_address = win32.GetProcAddress(new_instance, "init") orelse
+        return error.FailedToLookupInitFn;
+    const init_fn: DebugGameDLLApi.InitFn = @ptrCast(init_address);
+    const deinit_address = win32.GetProcAddress(new_instance, "deinit") orelse
+        return error.FailedToLookupDeinitFn;
+    const deinit_fn: DebugGameDLLApi.DeinitFn = @ptrCast(deinit_address);
+    const update_address = win32.GetProcAddress(new_instance, "updateAndRender") orelse
+        return error.FailedToLookupUpdateAndRenderFn;
+    const update_and_render: DebugGameDLLApi.UpdateAndRenderFn = @ptrCast(update_address);
 
     if (debug_game.is_loaded) {
         _ = win32.FreeLibrary(debug_game.instance);

@@ -82,25 +82,34 @@ const VoiceCallback = extern struct {
 /// Preallocate native voices here; fracture does not allocate during play/stop.
 pub fn init(audio_engine: *SoundSystem) InitError!void {
     audio_engine.* = .{};
-    var result = win32.CoInitializeEx(
+
+    const com_result = win32.CoInitializeEx(
         null,
         win32.COINIT_MULTITHREADED | win32.COINIT_SPEED_OVER_MEMORY,
     );
     // S_FALSE is also success and still requires a matching CoUninitialize.
-    if (result < 0) return error.FailedToInitializeCOM;
+    if (com_result < 0) return error.FailedToInitializeCOM;
     audio_engine.native.com_initialized = true;
     errdefer audio_engine.deinit();
 
     audio_engine.native.dll = win32.LoadLibraryA("xaudio2_9.dll") orelse
         return error.FailedToLoadXAudio2DLL;
-    const xAudio2Create: PFNXAudio2Create = @ptrCast(win32.GetProcAddress(
+    const create_address = win32.GetProcAddress(
         audio_engine.native.dll.?,
         "XAudio2Create",
-    ) orelse return error.FailedToLoadXAudio2DLL);
-    result = xAudio2Create(&audio_engine.native.x_audio2, FLAGS{}, XAUDIO2_ANY_PROCESSOR);
-    if (result < 0 or audio_engine.native.x_audio2 == null) return error.FailedToCreateXAudio2;
+    ) orelse return error.FailedToLoadXAudio2DLL;
+    const xAudio2Create: PFNXAudio2Create = @ptrCast(create_address);
 
-    result = audio_engine.native.x_audio2.?.CreateMasteringVoice(
+    const create_result = xAudio2Create(
+        &audio_engine.native.x_audio2,
+        FLAGS{},
+        XAUDIO2_ANY_PROCESSOR,
+    );
+    if (create_result < 0 or audio_engine.native.x_audio2 == null) {
+        return error.FailedToCreateXAudio2;
+    }
+
+    const mastering_result = audio_engine.native.x_audio2.?.CreateMasteringVoice(
         &audio_engine.native.mastering_voice,
         SoundSystem.channels,
         SoundSystem.sample_rate_hz,
@@ -109,7 +118,7 @@ pub fn init(audio_engine: *SoundSystem) InitError!void {
         null,
         AUDIO_STREAM_CATEGORY.GameEffects,
     );
-    if (result < 0) return error.FailedToCreateMasteringVoice;
+    if (mastering_result < 0) return error.FailedToCreateMasteringVoice;
     if (audio_engine.native.mastering_voice == null) return error.FailedToCreateMasteringVoice;
 
     for (&audio_engine.native.voices, &audio_engine.pool.slots) |*voice, *slot| {
@@ -120,6 +129,7 @@ pub fn init(audio_engine: *SoundSystem) InitError!void {
 
 fn createVoice(self: *SoundSystem, voice: *XAudioVoice) error{FailedToCreateVoice}!void {
     std.debug.assert(voice.source == null);
+
     const wave_format: WAVEFORMATEX = .default;
     const result = self.native.x_audio2.?.CreateSourceVoice(
         &voice.source,
@@ -143,10 +153,12 @@ pub fn deinit(self: *SoundSystem) void {
         if (voice.source) |source| source.IXAudio2Voice.DestroyVoice();
         voice.source = null;
     }
+
     if (self.native.mastering_voice) |voice| voice.IXAudio2Voice.DestroyVoice();
     if (self.native.x_audio2) |engine| engine.Relese();
     if (self.native.dll) |dll| _ = win32.FreeLibrary(dll);
     if (self.native.com_initialized) win32.CoUninitialize();
+
     self.* = .{};
 }
 
@@ -154,6 +166,7 @@ pub fn deinit(self: *SoundSystem) void {
 pub fn update(self: *SoundSystem) void {
     for (&self.pool.slots, &self.native.voices, 0..) |*slot, *voice, index| {
         if (slot.state.load(.acquire) != .failed) continue;
+
         if (voice.source) |source| {
             // DestroyVoice waits for all callbacks and sample reads to finish.
             // Keep the slot failed throughout teardown and recreation.
@@ -161,6 +174,7 @@ pub fn update(self: *SoundSystem) void {
             voice.source = null;
             std.log.warn("Audio voice {d} failed; attempting recovery", .{index});
         }
+
         createVoice(self, voice) catch continue;
         // Preserve the generation so the next play cannot revive an old handle.
         slot.state.store(.free, .release);
@@ -172,8 +186,10 @@ pub fn play(self: *SoundSystem, data: []const u8) PlayError!SoundSystem.Playback
     const reservation = try self.pool.reserve(data);
     const voice = &self.native.voices[reservation.index];
     const source = voice.source.?;
+
     // Completion may run as soon as playback starts, including before Start returns.
     voice.slot.state.store(.active, .release);
+
     const x_audio_buffer = XAUDIO2_BUFFER{
         .Flags = XAUDIO2_END_OF_STREAM,
         .AudioBytes = @intCast(data.len),
@@ -189,6 +205,7 @@ pub fn play(self: *SoundSystem, data: []const u8) PlayError!SoundSystem.Playback
         voice.slot.state.store(.failed, .release);
         return error.PlaybackFailed;
     }
+
     if (source.Start(0, XAUDIO2_COMMIT_NOW) < 0) {
         voice.slot.state.store(.failed, .release);
         return error.PlaybackFailed;
@@ -204,6 +221,7 @@ pub fn stop(self: *SoundSystem, handle: SoundSystem.PlaybackHandle) void {
         self.pool.slots[index].state.store(.failed, .release);
         return;
     }
+
     if (source.FlushSourceBuffers() < 0) {
         self.pool.slots[index].state.store(.failed, .release);
     }
@@ -244,6 +262,7 @@ const TestSourceVoice = struct {
         audio.native.x_audio2 = &self.engine;
         audio.native.callback = .{};
         self.callback = &audio.native.callback;
+
         // Keep the other slots occupied so premature reuse or a leaked slot is observable.
         for (&audio.pool.slots) |*slot| slot.state.store(.retired, .monotonic);
         audio.pool.slots[0].state.store(.free, .monotonic);
@@ -435,11 +454,12 @@ test "handles_stop_only_the_requested_instance" {
     second.complete();
 }
 
-// ------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 // XAudio2 Win32 API
-// ------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 
-// TODO(adi): Do we need XAPO? https://github.com/marlersoft/zigwin32/blob/main/win32/media/audio/xaudio2.zig
+// TODO(adi): Do we need XAPO?
+// https://github.com/marlersoft/zigwin32/blob/main/win32/media/audio/xaudio2.zig
 
 pub const WAVE_FORMAT_PCM = @as(u32, 1);
 
@@ -686,10 +706,16 @@ pub const IXAudio2 = extern union {
     };
     vtable: *const VTable,
     IUnknown: IUnknown,
-    pub inline fn RegisterForCallbacks(self: *const IXAudio2, pCallback: ?*IXAudio2EngineCallback) HRESULT {
+    pub inline fn RegisterForCallbacks(
+        self: *const IXAudio2,
+        pCallback: ?*IXAudio2EngineCallback,
+    ) HRESULT {
         return self.vtable.RegisterForCallbacks(self, pCallback);
     }
-    pub inline fn UnregisterForCallbacks(self: *const IXAudio2, pCallback: ?*IXAudio2EngineCallback) void {
+    pub inline fn UnregisterForCallbacks(
+        self: *const IXAudio2,
+        pCallback: ?*IXAudio2EngineCallback,
+    ) void {
         return self.vtable.UnregisterForCallbacks(self, pCallback);
     }
     pub inline fn CreateSourceVoice(
@@ -764,7 +790,10 @@ pub const IXAudio2 = extern union {
     pub inline fn CommitChanges(self: *const IXAudio2, OperationSet: u32) HRESULT {
         return self.vtable.CommitChanges(self, OperationSet);
     }
-    pub inline fn GetPerformanceData(self: *const IXAudio2, pPerfData: ?*XAUDIO2_PERFORMANCE_DATA) void {
+    pub inline fn GetPerformanceData(
+        self: *const IXAudio2,
+        pPerfData: ?*XAUDIO2_PERFORMANCE_DATA,
+    ) void {
         return self.vtable.GetPerformanceData(self, pPerfData);
     }
     pub inline fn SetDebugConfiguration(
@@ -908,22 +937,43 @@ pub const IXAudio2Voice = extern union {
         ) callconv(.winapi) void,
     };
     vtable: *const VTable,
-    pub inline fn GetVoiceDetails(self: *const IXAudio2Voice, pVoiceDetails: ?*XAUDIO2_VOICE_DETAILS) void {
+    pub inline fn GetVoiceDetails(
+        self: *const IXAudio2Voice,
+        pVoiceDetails: ?*XAUDIO2_VOICE_DETAILS,
+    ) void {
         return self.vtable.GetVoiceDetails(self, pVoiceDetails);
     }
-    pub inline fn SetOutputVoices(self: *const IXAudio2Voice, pSendList: ?*const XAUDIO2_VOICE_SENDS) HRESULT {
+    pub inline fn SetOutputVoices(
+        self: *const IXAudio2Voice,
+        pSendList: ?*const XAUDIO2_VOICE_SENDS,
+    ) HRESULT {
         return self.vtable.SetOutputVoices(self, pSendList);
     }
-    pub inline fn SetEffectChain(self: *const IXAudio2Voice, pEffectChain: ?*const XAUDIO2_EFFECT_CHAIN) HRESULT {
+    pub inline fn SetEffectChain(
+        self: *const IXAudio2Voice,
+        pEffectChain: ?*const XAUDIO2_EFFECT_CHAIN,
+    ) HRESULT {
         return self.vtable.SetEffectChain(self, pEffectChain);
     }
-    pub inline fn EnableEffect(self: *const IXAudio2Voice, EffectIndex: u32, OperationSet: u32) HRESULT {
+    pub inline fn EnableEffect(
+        self: *const IXAudio2Voice,
+        EffectIndex: u32,
+        OperationSet: u32,
+    ) HRESULT {
         return self.vtable.EnableEffect(self, EffectIndex, OperationSet);
     }
-    pub inline fn DisableEffect(self: *const IXAudio2Voice, EffectIndex: u32, OperationSet: u32) HRESULT {
+    pub inline fn DisableEffect(
+        self: *const IXAudio2Voice,
+        EffectIndex: u32,
+        OperationSet: u32,
+    ) HRESULT {
         return self.vtable.DisableEffect(self, EffectIndex, OperationSet);
     }
-    pub inline fn GetEffectState(self: *const IXAudio2Voice, EffectIndex: u32, pEnabled: ?*BOOL) void {
+    pub inline fn GetEffectState(
+        self: *const IXAudio2Voice,
+        EffectIndex: u32,
+        pEnabled: ?*BOOL,
+    ) void {
         return self.vtable.GetEffectState(self, EffectIndex, pEnabled);
     }
     pub inline fn SetEffectParameters(
@@ -933,7 +983,13 @@ pub const IXAudio2Voice = extern union {
         ParametersByteSize: u32,
         OperationSet: u32,
     ) HRESULT {
-        return self.vtable.SetEffectParameters(self, EffectIndex, pParameters, ParametersByteSize, OperationSet);
+        return self.vtable.SetEffectParameters(
+            self,
+            EffectIndex,
+            pParameters,
+            ParametersByteSize,
+            OperationSet,
+        );
     }
     pub inline fn GetEffectParameters(
         self: *const IXAudio2Voice,
@@ -950,7 +1006,10 @@ pub const IXAudio2Voice = extern union {
     ) HRESULT {
         return self.vtable.SetFilterParameters(self, pParameters, OperationSet);
     }
-    pub inline fn GetFilterParameters(self: *const IXAudio2Voice, pParameters: ?*XAUDIO2_FILTER_PARAMETERS) void {
+    pub inline fn GetFilterParameters(
+        self: *const IXAudio2Voice,
+        pParameters: ?*XAUDIO2_FILTER_PARAMETERS,
+    ) void {
         return self.vtable.GetFilterParameters(self, pParameters);
     }
     pub inline fn SetOutputFilterParameters(
@@ -959,7 +1018,12 @@ pub const IXAudio2Voice = extern union {
         pParameters: ?*const XAUDIO2_FILTER_PARAMETERS,
         OperationSet: u32,
     ) HRESULT {
-        return self.vtable.SetOutputFilterParameters(self, pDestinationVoice, pParameters, OperationSet);
+        return self.vtable.SetOutputFilterParameters(
+            self,
+            pDestinationVoice,
+            pParameters,
+            OperationSet,
+        );
     }
     pub inline fn GetOutputFilterParameters(
         self: *const IXAudio2Voice,
@@ -982,7 +1046,11 @@ pub const IXAudio2Voice = extern union {
     ) HRESULT {
         return self.vtable.SetChannelVolumes(self, Channels, pVolumes, OperationSet);
     }
-    pub inline fn GetChannelVolumes(self: *const IXAudio2Voice, Channels: u32, pVolumes: [*]f32) void {
+    pub inline fn GetChannelVolumes(
+        self: *const IXAudio2Voice,
+        Channels: u32,
+        pVolumes: [*]f32,
+    ) void {
         return self.vtable.GetChannelVolumes(self, Channels, pVolumes);
     }
     pub inline fn SetOutputMatrix(
@@ -1093,16 +1161,27 @@ pub const IXAudio2SourceVoice = extern union {
     pub inline fn ExitLoop(self: *const IXAudio2SourceVoice, OperationSet: u32) HRESULT {
         return self.vtable.ExitLoop(self, OperationSet);
     }
-    pub inline fn GetState(self: *const IXAudio2SourceVoice, pVoiceState: ?*XAUDIO2_VOICE_STATE, Flags: u32) void {
+    pub inline fn GetState(
+        self: *const IXAudio2SourceVoice,
+        pVoiceState: ?*XAUDIO2_VOICE_STATE,
+        Flags: u32,
+    ) void {
         return self.vtable.GetState(self, pVoiceState, Flags);
     }
-    pub inline fn SetFrequencyRatio(self: *const IXAudio2SourceVoice, Ratio: f32, OperationSet: u32) HRESULT {
+    pub inline fn SetFrequencyRatio(
+        self: *const IXAudio2SourceVoice,
+        Ratio: f32,
+        OperationSet: u32,
+    ) HRESULT {
         return self.vtable.SetFrequencyRatio(self, Ratio, OperationSet);
     }
     pub inline fn GetFrequencyRatio(self: *const IXAudio2SourceVoice, pRatio: ?*f32) void {
         return self.vtable.GetFrequencyRatio(self, pRatio);
     }
-    pub inline fn SetSourceSampleRate(self: *const IXAudio2SourceVoice, NewSourceSampleRate: u32) HRESULT {
+    pub inline fn SetSourceSampleRate(
+        self: *const IXAudio2SourceVoice,
+        NewSourceSampleRate: u32,
+    ) HRESULT {
         return self.vtable.SetSourceSampleRate(self, NewSourceSampleRate);
     }
 
@@ -1165,7 +1244,10 @@ pub const IXAudio2VoiceCallback = extern union {
         ) callconv(.winapi) void = _onVoiceError,
     };
     vtable: *const VTable,
-    pub inline fn OnVoiceProcessingPassStart(self: *IXAudio2VoiceCallback, BytesRequired: u32) void {
+    pub inline fn OnVoiceProcessingPassStart(
+        self: *IXAudio2VoiceCallback,
+        BytesRequired: u32,
+    ) void {
         return self.vtable.OnVoiceProcessingPassStart(self, BytesRequired);
     }
     pub inline fn OnVoiceProcessingPassEnd(self: *IXAudio2VoiceCallback) void {
@@ -1183,7 +1265,11 @@ pub const IXAudio2VoiceCallback = extern union {
     pub inline fn OnLoopEnd(self: *IXAudio2VoiceCallback, pBufferContext: ?*anyopaque) void {
         return self.vtable.OnLoopEnd(self, pBufferContext);
     }
-    pub inline fn OnVoiceError(self: *IXAudio2VoiceCallback, pBufferContext: ?*anyopaque, err: HRESULT) void {
+    pub inline fn OnVoiceError(
+        self: *IXAudio2VoiceCallback,
+        pBufferContext: ?*anyopaque,
+        err: HRESULT,
+    ) void {
         return self.vtable.OnVoiceError(self, pBufferContext, err);
     }
 
@@ -1193,5 +1279,9 @@ pub const IXAudio2VoiceCallback = extern union {
     fn _onBufferStart(_: *IXAudio2VoiceCallback, _: ?*anyopaque) callconv(.winapi) void {}
     fn _onBufferEnd(_: *IXAudio2VoiceCallback, _: ?*anyopaque) callconv(.winapi) void {}
     fn _onLoopEnd(_: *IXAudio2VoiceCallback, _: ?*anyopaque) callconv(.winapi) void {}
-    fn _onVoiceError(_: *IXAudio2VoiceCallback, _: ?*anyopaque, _: HRESULT) callconv(.winapi) void {}
+    fn _onVoiceError(
+        _: *IXAudio2VoiceCallback,
+        _: ?*anyopaque,
+        _: HRESULT,
+    ) callconv(.winapi) void {}
 };

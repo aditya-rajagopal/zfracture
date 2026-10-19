@@ -6,7 +6,12 @@ const Renderer = fr.Renderer;
 
 pub const max_fps = 60;
 // Round up so the frame rate does not exceed the cap.
-pub const frame_duration: std.Io.Duration = .fromNanoseconds(@divTrunc(std.time.ns_per_s + max_fps - 1, max_fps));
+pub const frame_duration: std.Io.Duration = .fromNanoseconds(
+    @divTrunc(std.time.ns_per_s + max_fps - 1, max_fps),
+);
+
+// Share the inset between window sizing and drawing to prevent framebuffer clipping.
+pub const windowed_frame_margin = 10;
 
 pub const EngineState = struct {
     io: std.Io,

@@ -1,8 +1,7 @@
 const std = @import("std");
 
-/// Enumeration of the keyboard keys and mouse buttons. The values are the same as the values in the windows API
-///
-/// Platforms other than windows will have to map the platform specific values to the Key enum values.
+/// Windows virtual-key values provide a shared keyboard code space across backends.
+/// Other platforms must map their native keys into these values.
 pub const Key = enum(u8) {
     mouse_left = 0x00,
     mouse_right = 0x01,
@@ -99,7 +98,6 @@ pub const Key = enum(u8) {
 
     apps = 0x5d,
 
-    /// put computer to sleep
     sleep = 0x5f,
 
     numpad0 = 0x60,
@@ -277,8 +275,7 @@ pub const InputState = struct {
         return self.mouse_buttons_ended_down[@backingInt(button)] == 0;
     }
 
-    // Queries cover all transitions collected during the current native frame.
-    // Two or more transitions contain both edges, even when a tap ends up released.
+    // A tap can begin and end within one frame; checking only the final state loses an edge.
     pub inline fn keyPressedThisFrame(self: *const InputState, key: Key) bool {
         const count = self.keys_half_transition_count[@backingInt(key)];
         return count >= 2 or (count == 1 and self.isKeyDown(key));
@@ -335,6 +332,9 @@ test "focus loss releases each held mouse button only once" {
     input.update();
     input.releaseAll();
     input.releaseAll();
-    for (input.mouse_buttons_half_transition_count) |count| try std.testing.expectEqual(@as(u8, 1), count);
+    for (input.mouse_buttons_half_transition_count) |count| try std.testing.expectEqual(
+        @as(u8, 1),
+        count,
+    );
     for (input.mouse_buttons_ended_down) |down| try std.testing.expectEqual(@as(u8, 0), down);
 }

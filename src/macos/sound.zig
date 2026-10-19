@@ -23,6 +23,7 @@ pub const State = struct {
 /// AudioToolbox owns any native allocations; no allocator is needed for the pool.
 pub fn init(self: *SoundSystem) InitError!void {
     self.* = .{};
+
     var description = c.AudioComponentDescription{
         .componentType = c.kAudioUnitType_Output,
         .componentSubType = c.kAudioUnitSubType_DefaultOutput,
@@ -49,25 +50,28 @@ pub fn init(self: *SoundSystem) InitError!void {
     format.mBytesPerFrame = SoundSystem.channels * @sizeOf(f32);
     format.mChannelsPerFrame = SoundSystem.channels;
     format.mBitsPerChannel = 32;
-    if (c.AudioUnitSetProperty(
+    const format_result = c.AudioUnitSetProperty(
         self.native.unit,
         c.kAudioUnitProperty_StreamFormat,
         c.kAudioUnitScope_Input,
         0,
         &format,
         @sizeOf(@TypeOf(format)),
-    ) != 0) {
+    );
+    if (format_result != 0) {
         return error.FailedToConfigureOutput;
     }
+
     var callback = c.AURenderCallbackStruct{ .inputProc = render, .inputProcRefCon = self };
-    if (c.AudioUnitSetProperty(
+    const callback_result = c.AudioUnitSetProperty(
         self.native.unit,
         c.kAudioUnitProperty_SetRenderCallback,
         c.kAudioUnitScope_Input,
         0,
         &callback,
         @sizeOf(@TypeOf(callback)),
-    ) != 0) {
+    );
+    if (callback_result != 0) {
         return error.FailedToConfigureOutput;
     }
 
@@ -106,6 +110,7 @@ fn render(
     buffers: [*c]c.AudioBufferList,
 ) callconv(.c) c.OSStatus {
     const self: *SoundSystem = @ptrCast(@alignCast(context));
+
     // We requested one interleaved stereo buffer; never cast or write an
     // unexpected native buffer layout. AudioUnit treats failure as no output.
     if (buffers == null) return c.kAudio_ParamError;
@@ -115,6 +120,7 @@ fn render(
     if (buffer.mNumberChannels != SoundSystem.channels) return c.kAudio_ParamError;
     if (buffer.mData == null) return c.kAudio_ParamError;
     if (buffer.mDataByteSize < samples * @sizeOf(f32)) return c.kAudio_ParamError;
+
     const output: [*]f32 = @ptrCast(@alignCast(buffer.mData));
     mix(self, output[0..samples]);
     return 0;
@@ -124,6 +130,7 @@ fn render(
 fn mix(self: *SoundSystem, output: []f32) void {
     std.debug.assert(output.len % SoundSystem.channels == 0);
     @memset(output, 0);
+
     for (&self.pool.slots, &self.native.cursors_bytes) |*slot, *cursor_bytes| {
         switch (slot.state.load(.acquire)) {
             .stop_requested => {
@@ -133,19 +140,24 @@ fn mix(self: *SoundSystem, output: []f32) void {
             .active => {},
             else => continue,
         }
+
         std.debug.assert(slot.data.len > 0);
         std.debug.assert(slot.data.len % SoundSystem.bytes_per_frame == 0);
         std.debug.assert(cursor_bytes.* <= slot.data.len);
         std.debug.assert(cursor_bytes.* % SoundSystem.bytes_per_frame == 0);
-        const sample_count = @min(output.len, (slot.data.len - cursor_bytes.*) / @sizeOf(i16));
+
+        const remaining_samples = (slot.data.len - cursor_bytes.*) / @sizeOf(i16);
+        const sample_count = @min(output.len, remaining_samples);
         for (output[0..sample_count], 0..) |*sample, index| {
             const offset = cursor_bytes.* + index * @sizeOf(i16);
             const pcm = std.mem.readInt(i16, slot.data[offset..][0..2], .little);
             sample.* += @as(f32, @floatFromInt(pcm)) / 32768.0;
         }
+
         cursor_bytes.* += sample_count * @sizeOf(i16);
         if (cursor_bytes.* == slot.data.len) slot.complete();
     }
+
     for (output) |*sample| sample.* = std.math.clamp(sample.*, -1, 1);
 }
 
@@ -155,20 +167,24 @@ test "mixer overlap, stereo conversion, partial completion and stop requests" {
     const data = [_]u8{ 0, 0x40, 0, 0xc0, 0, 0x20, 0, 0x80 };
     const first = try sound.play(&data);
     _ = try sound.play(&data);
+
     var frame: [2]f32 = undefined;
     mix(&sound, &frame);
     try std.testing.expectEqualSlices(f32, &.{ 1, -1 }, &frame);
+
     sound.stop(first);
     var tail: [4]f32 = undefined;
     mix(&sound, &tail);
     try std.testing.expectEqualSlices(f32, &.{ 0.25, -1, 0, 0 }, &tail);
     try std.testing.expectEqual(SoundSystem.State.free, sound.pool.slots[0].state.load(.acquire));
     try std.testing.expectEqual(SoundSystem.State.free, sound.pool.slots[1].state.load(.acquire));
+
     // A stop before the first render contributes nothing.
     const stopped = try sound.play(&data);
     sound.stop(stopped);
     mix(&sound, &tail);
     try std.testing.expectEqualSlices(f32, &.{ 0, 0, 0, 0 }, &tail);
+
     // Reused stopped/completed slots restart from the first frame; three voices saturate.
     for (0..3) |_| _ = try sound.play(&data);
     mix(&sound, &tail);

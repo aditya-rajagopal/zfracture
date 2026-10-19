@@ -10,18 +10,22 @@ const test_levels = @import("levels/level.zig").test_levels;
 // NOTE: PoE1 and 2 do not have plyaer inertia.
 
 // @TODO: Flow field for pathing?
-// @TODO: Entitiy system that allows me to spawn arbitrary entities. Maybe have a separate slot for attack hit boxes?
+// @TODO: Entitiy system that allows me to spawn arbitrary entities. Maybe have a separate slot for
+// attack hit boxes?
 // Renderer:
-//      @TODO: Triangle rendering: We might be able to speed up rendering with simd by doing checks in a 8x8 grid at once.
+//      @TODO: Triangle rendering: We might be able to speed up rendering with simd by doing checks
+//      in a 8x8 grid at once.
 //      @TODO: Start with doing 3D geometry with software rendering. Swtich to OpenGL/Vulkan later.
-//      @TODO: Premulitplied alpha blending for sprites and other geometry. Convert from sRGB to linear space and back.
+//      @TODO: Premulitplied alpha blending for sprites and other geometry. Convert from sRGB to
+//      linear space and back.
 //      @TODO: Subpixel rendering
 //      @TODO: Support normal maps
 //      @TODO: Lighting
 //      @TODO: Depth buffer and depth testing
 //      @TODO: Render command queues to allow for culling and other optimizations
 //      @TODO: Render to textures
-// @TODO: Do we want enemy behaviour that is simulated when not interacting with the player? For example patrolling or
+// @TODO: Do we want enemy behaviour that is simulated when not interacting with the player? For
+// example patrolling or
 // two groups of enemies that are fighing each other: YES
 // @TODO: Deal with window resize.
 
@@ -71,10 +75,15 @@ const player_width: f32 = tile_width;
 const player_height: f32 = tile_height;
 const player_half_width: f32 = player_width / 2.0;
 
-// Exclude outer void padding while keeping movement bounds rectangular.
+// Outer void tiles pad the maps and must not enlarge the player's movement bounds.
 const level_bounds = blk: {
     @setEvalBranchQuota(10000);
-    var bounds: [test_levels.len]struct { min_x: f32, min_y: f32, max_x: f32, max_y: f32 } = undefined;
+    var bounds: [test_levels.len]struct {
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+    } = undefined;
     for (test_levels, 0..) |level, index| {
         bounds[index] = .{
             .min_x = @as(f32, @floatFromInt(level.width)) * tile_width,
@@ -84,6 +93,7 @@ const level_bounds = blk: {
         };
         for (level.tiles, 0..) |tile, tile_index| {
             if (tile == 0) continue;
+
             const x = @as(f32, @floatFromInt(tile_index % level.width)) * tile_width;
             const y = @as(f32, @floatFromInt(tile_index / level.width)) * tile_height;
             bounds[index].min_x = @min(bounds[index].min_x, x);
@@ -105,7 +115,11 @@ pub fn init(engine: *EngineState) *anyopaque {
         engine.transient_allocator,
         .unlimited,
     ) catch unreachable;
-    game_state.impact_sound = fr.wav.decode(engine.permanent_allocator, impact_sound) catch unreachable;
+    game_state.impact_sound = fr.wav.decode(
+        engine.permanent_allocator,
+        impact_sound,
+    ) catch unreachable;
+
     const pop_sound = std.Io.Dir.cwd().readFileAlloc(
         engine.io,
         "assets/sounds/pop.wav",
@@ -115,8 +129,11 @@ pub fn init(engine: *EngineState) *anyopaque {
     game_state.pop_sound = fr.wav.decode(engine.permanent_allocator, pop_sound) catch unreachable;
 
     // TODO: Make this something like a view matrix.
-    game_state.view_half_width = @as(f32, @floatFromInt(engine.renderer.back_buffer.width)) * meters_per_pixel / 2.0;
-    game_state.view_half_height = @as(f32, @floatFromInt(engine.renderer.back_buffer.height)) * meters_per_pixel / 2.0;
+    const buffer_width: f32 = @floatFromInt(engine.renderer.back_buffer.width);
+    game_state.view_half_width = buffer_width * meters_per_pixel / 2.0;
+    const buffer_height: f32 = @floatFromInt(engine.renderer.back_buffer.height);
+    game_state.view_half_height = buffer_height * meters_per_pixel / 2.0;
+
     game_state.player = .{
         .entity_type = .player,
         .position_x = 0,
@@ -210,10 +227,12 @@ pub fn updateAndRender(
             delta_y = delta_y * magnitude_inv;
         }
 
-        var new_camera_x = state.camera_x + delta_x * state.player.stats.movement_speed * engine.delta_time;
-        var new_camera_y = state.camera_y + delta_y * state.player.stats.movement_speed * engine.delta_time;
+        var new_camera_x = state.camera_x +
+            delta_x * state.player.stats.movement_speed * engine.delta_time;
+        var new_camera_y = state.camera_y +
+            delta_y * state.player.stats.movement_speed * engine.delta_time;
 
-        // Keep the full player rectangle inside the level bounds.
+        // Position tracks the center; clamping it to the edge would leave half the player outside.
         new_camera_x = std.math.clamp(
             new_camera_x,
             bounds.min_x + player_half_width,
@@ -226,7 +245,8 @@ pub fn updateAndRender(
         );
 
         // @INCOMPLETE: Collision detection against tilemap
-        // @TODO: Spawn a collision box when the player attacks the ground. This box should have a damage value that
+        // @TODO: Spawn a collision box when the player attacks the ground. This box should have a
+        // damage value that
         // is applied to the enemies when they collide with it with corresponding on hit effects
 
         state.camera_x = new_camera_x;
@@ -235,30 +255,38 @@ pub fn updateAndRender(
         state.player.position_y = new_camera_y;
     }
 
-    { // Draw tile map
+    {
         const floor_colour: Color = .green;
         const wall_colour: Color = .brown;
 
-        // Player is at the center of the screen always so draw the player there and the camera moves with the player
+        // Player is at the center of the screen always so draw the player there and the camera
+        // moves with the player
         // Based on the player position figure out the tiles we need to draw
         // NOTE: Culling what needs to be drawn. THis becomes frusturm culling when we move to 3D
-        const top_left_tile_x_int: i32 = @intFromFloat(@floor(state.camera_x - state.view_half_width));
-        const top_left_tile_x: usize = @intCast(std.math.clamp(top_left_tile_x_int, 0, level.width - 1));
+        const view_left = state.camera_x - state.view_half_width;
+        const first_column_raw: i32 = @intFromFloat(@floor(view_left));
+        const first_column: usize = @intCast(std.math.clamp(first_column_raw, 0, level.width - 1));
 
-        const top_left_tile_y_int: i32 = @intFromFloat(@floor(state.camera_y - state.view_half_height));
-        const top_left_tile_y: usize = @intCast(std.math.clamp(top_left_tile_y_int, 0, level.height - 1));
+        const view_top = state.camera_y - state.view_half_height;
+        const first_row_raw: i32 = @intFromFloat(@floor(view_top));
+        const first_row: usize = @intCast(std.math.clamp(first_row_raw, 0, level.height - 1));
 
-        const bottom_right_tile_x_int: i32 = @intFromFloat(@ceil(state.camera_x + state.view_half_width));
-        const bottom_right_tile_x: usize = @intCast(std.math.clamp(bottom_right_tile_x_int, 0, level.width - 1));
+        const view_right = state.camera_x + state.view_half_width;
+        const last_column_raw: i32 = @intFromFloat(@ceil(view_right));
+        const last_column: usize = @intCast(std.math.clamp(last_column_raw, 0, level.width - 1));
 
-        const bottom_right_tile_y_int: i32 = @intFromFloat(@ceil(state.camera_y + state.view_half_height));
-        const bottom_right_tile_y: usize = @intCast(std.math.clamp(bottom_right_tile_y_int, 0, level.height - 1));
+        const view_bottom = state.camera_y + state.view_half_height;
+        const last_row_raw: i32 = @intFromFloat(@ceil(view_bottom));
+        const last_row: usize = @intCast(std.math.clamp(last_row_raw, 0, level.height - 1));
 
-        for (top_left_tile_y..bottom_right_tile_y + 1) |y| {
-            for (top_left_tile_x..bottom_right_tile_x + 1) |x| {
+        for (first_row..last_row + 1) |y| {
+            for (first_column..last_column + 1) |x| {
                 const tile_type = level.tiles[y * level.width + x];
-                const x_position = @as(f32, @floatFromInt(x)) - state.camera_x + state.view_half_width;
-                const y_position = @as(f32, @floatFromInt(y)) - state.camera_y + state.view_half_height;
+                const tile_x: f32 = @floatFromInt(x);
+                const x_position = tile_x - state.camera_x + state.view_half_width;
+                const tile_y: f32 = @floatFromInt(y);
+                const y_position = tile_y - state.camera_y + state.view_half_height;
+
                 switch (tile_type) {
                     1 => { // Floor.
                         renderer.drawRectangle(
@@ -284,8 +312,8 @@ pub fn updateAndRender(
         }
     }
 
-    { // Draw player at the center of the screen always
-        // The player position is the center of its one-tile rectangle.
+    {
+        // The camera follows the player's center; the renderer takes the rectangle's corner.
         renderer.drawRectangle(
             state.view_half_width - player_half_width,
             state.view_half_height - player_height / 2,
@@ -300,7 +328,12 @@ pub fn updateAndRender(
 
 fn playSound(engine: *EngineState, data: []const u8) ?fr.PlaybackHandle {
     return engine.sound.play(data) catch |err| {
-        if (err != error.NoFreeVoices) std.log.err("Sound playback failed: {s}", .{@errorName(err)});
+        if (err != error.NoFreeVoices) {
+            std.log.err(
+                "Sound playback failed: {s}",
+                .{@errorName(err)},
+            );
+        }
         return null;
     };
 }

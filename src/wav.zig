@@ -34,10 +34,11 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) std.mem.Allocator.
             }
         },
         .parse_format_chunk => {
-            // TODO(adi): We cant have more than one format chunks in the file. Should we return an error instead?
+            // TODO(adi): We cant have more than one format chunks in the file. Should we return an
+            // error instead?
             assert(!found_format_chunk);
             found_format_chunk = true;
-            const format_chunk_header: *align(1) const ChunkHeader = @ptrCast(@alignCast(read_head.ptr));
+            const format_header: *align(1) const ChunkHeader = @ptrCast(@alignCast(read_head.ptr));
             read_head = read_head[@sizeOf(ChunkHeader)..];
             const format_chunk: *align(1) const FormatChunk = @ptrCast(@alignCast(read_head.ptr));
 
@@ -52,7 +53,7 @@ pub fn decode(allocator: std.mem.Allocator, data: []const u8) std.mem.Allocator.
             assert(format_chunk.byte_per_block == 4);
             assert(format_chunk.byte_per_second == 44100 * 4);
 
-            read_head = read_head[format_chunk_header.block_size..];
+            read_head = read_head[format_header.block_size..];
 
             continue :loop .parse_next_chunk_header;
         },
@@ -123,7 +124,12 @@ const ReaderState = enum(u8) {
 };
 
 test "wav decode" {
-    const wav_data = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "assets/sounds/pop.wav", std.testing.allocator, .unlimited);
+    const wav_data = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        "assets/sounds/pop.wav",
+        std.testing.allocator,
+        .unlimited,
+    );
     defer std.testing.allocator.free(wav_data);
 
     const wav_data_decoded = try decode(std.testing.allocator, wav_data);

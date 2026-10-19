@@ -79,6 +79,7 @@ pub const Pool = struct {
         if (data.len == 0) return error.InvalidData;
         if (data.len % bytes_per_frame != 0) return error.InvalidData;
         if (data.len > max_buffer_bytes) return error.InvalidData;
+
         for (&self.slots, 0..) |*slot, index| {
             if (slot.state.load(.acquire) != .free) continue;
             std.debug.assert(slot.generation <= max_generation);
@@ -86,9 +87,11 @@ pub const Pool = struct {
                 slot.state.store(.retired, .monotonic);
                 continue;
             }
+
             slot.generation += 1;
             slot.data = data;
             slot.state.store(.reserved, .monotonic);
+
             const generation_bits = slot.generation << index_bits;
             const slot_index: u64 = @intCast(index);
             const handle_bits = generation_bits | slot_index;
@@ -108,6 +111,7 @@ pub const Pool = struct {
         const slot = &self.slots[index];
         if (generation == 0) return null;
         if (generation != slot.generation) return null;
+
         if (slot.state.cmpxchgStrong(.active, .stop_requested, .acq_rel, .acquire) != null) {
             return null;
         }
@@ -121,6 +125,7 @@ test "pool exhaustion, completion, stop identity and generation retirement" {
     const data = [_]u8{ 0, 0, 0, 0 };
     try std.testing.expectError(error.InvalidData, pool.reserve(&.{}));
     try std.testing.expectError(error.InvalidData, pool.reserve(&.{0}));
+
     var handles: [voice_capacity]PlaybackHandle = undefined;
     for (&handles) |*handle| {
         const reservation = try pool.reserve(&data);
@@ -128,9 +133,11 @@ test "pool exhaustion, completion, stop identity and generation retirement" {
         pool.slots[reservation.index].state.store(.active, .release);
     }
     try std.testing.expectError(error.NoFreeVoices, pool.reserve(&data));
+
     try std.testing.expectEqual(@as(?usize, 0), pool.requestStop(handles[0]));
     try std.testing.expectEqual(null, pool.requestStop(handles[0]));
     try std.testing.expectError(error.NoFreeVoices, pool.reserve(&data));
+
     pool.slots[0].complete();
     const replacement = try pool.reserve(&data);
     pool.slots[0].state.store(.active, .release);
@@ -138,10 +145,12 @@ test "pool exhaustion, completion, stop identity and generation retirement" {
     try std.testing.expectEqual(null, pool.requestStop(handles[0]));
     try std.testing.expectEqual(State.active, pool.slots[0].state.load(.acquire));
     try std.testing.expectEqual(State.active, pool.slots[1].state.load(.acquire));
+
     pool.slots[0].complete();
     pool.slots[0].generation = max_generation;
     try std.testing.expectError(error.NoFreeVoices, pool.reserve(&data));
     try std.testing.expectEqual(State.retired, pool.slots[0].state.load(.acquire));
+
     pool.slots[1].complete();
     pool.slots[1].generation = std.math.maxInt(u32);
     const wide_handle = try pool.reserve(&data);
@@ -150,6 +159,7 @@ test "pool exhaustion, completion, stop identity and generation retirement" {
     pool.slots[1].state.store(.active, .release);
     try std.testing.expectEqual(null, pool.requestStop(handles[1]));
     try std.testing.expectEqual(@as(?usize, 1), pool.requestStop(wide_handle.handle));
+
     pool.slots[1].state.store(.failed, .release);
     pool.slots[1].complete();
     try std.testing.expectEqual(State.failed, pool.slots[1].state.load(.acquire));

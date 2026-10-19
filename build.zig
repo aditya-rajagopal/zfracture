@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) !void {
     // }).artifact("shader_compiler");
 
     // ================================== MODULES ==================================/
-    const fracture = b.createModule(.{
+    const fracture = b.addModule("fracture", .{
         .root_source_file = b.path("src/fracture.zig"),
         .target = target,
         .optimize = optimize,
@@ -46,8 +46,12 @@ pub fn build(b: *std.Build) !void {
     // });
 
     // ==================================== GAME ==================================/
+    const entrypoint_path = if (is_macos)
+        "testbed/entrypoint_macos.zig"
+    else
+        "testbed/entrypoint_win32.zig";
     const entrypoint = b.createModule(.{
-        .root_source_file = b.path(if (is_macos) "testbed/entrypoint_macos.zig" else "testbed/entrypoint_win32.zig"),
+        .root_source_file = b.path(entrypoint_path),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -63,7 +67,11 @@ pub fn build(b: *std.Build) !void {
         // zig-objc supplies the runtime bindings and SDK paths for linking.
         // Our CoreGraphics C calls and modifier masks need separate header
         // translation; translate-c does not inherit the imported module's paths.
-        const sdk_path = std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result) orelse return error.MacOSSDKNotFound;
+        const sdk_path = std.zig.system.darwin.getSdk(
+            b.allocator,
+            b.graph.io,
+            &target.result,
+        ) orelse return error.MacOSSDKNotFound;
         const sdk_include = b.pathJoin(&.{ sdk_path, "usr/include" });
         const sdk_frameworks = b.pathJoin(&.{ sdk_path, "System/Library/Frameworks" });
         const headers = b.addWriteFiles();
@@ -71,18 +79,20 @@ pub fn build(b: *std.Build) !void {
             \\#include <CoreGraphics/CoreGraphics.h>
             \\#include <IOKit/hidsystem/IOLLEvent.h>
         );
-        const cg = b.addTranslateC(.{ .root_source_file = cg_header, .target = target, .optimize = optimize });
+        const cg = b.addTranslateC(.{
+            .root_source_file = cg_header,
+            .target = target,
+            .optimize = optimize,
+        });
         cg.addSystemIncludePath(.{ .cwd_relative = sdk_include });
         cg.addSystemFrameworkPath(.{ .cwd_relative = sdk_frameworks });
         entrypoint.addImport("macos-c", cg.createModule());
     }
 
-    const exe = b.addExecutable(
-        .{
-            .name = "game",
-            .root_module = entrypoint,
-        },
-    );
+    const exe = b.addExecutable(.{
+        .name = "game",
+        .root_module = entrypoint,
+    });
 
     if (optimize == .fast and target.result.os.tag == .windows) {
         // NOTE(adi): Disables debug console on windows
@@ -125,9 +135,11 @@ pub fn build(b: *std.Build) !void {
     if (optimize == .debug) run_cmd.step.dependOn(&dll_step.step);
     if (is_macos) {
         const options = b.addOptions();
-        // Follow the install directory, including -p/--prefix overrides.
         // Track only the path so game rebuilds do not invalidate the executable.
-        options.addOptionPathUntracked("game_library_path", .{ .relative = .{ .base = .install_lib, .sub_path = "libdynamic_game.dylib" } });
+        options.addOptionPathUntracked(
+            "game_library_path",
+            .{ .relative = .{ .base = .install_lib, .sub_path = "libdynamic_game.dylib" } },
+        );
         entrypoint.addOptions("build_options", options);
     }
     const game_step = b.step("game", "Build the reloadable game library");
@@ -143,12 +155,18 @@ pub fn build(b: *std.Build) !void {
         .linkage = .dynamic,
         .root_module = dll_module,
     });
-    const check = b.step("check", "Check the selected app and game library without emitting binaries");
+    const check = b.step(
+        "check",
+        "Check the selected app and game library without emitting binaries",
+    );
     check.dependOn(&exe_check.step);
     check.dependOn(&dll_check.step);
 
     // ==================================== TESTS ==================================/
-    const test_step = b.step("test", "Run portable and native platform tests; check Windows audio tests");
+    const test_step = b.step(
+        "test",
+        "Run portable and native platform tests; check Windows audio tests",
+    );
     const host_fracture = b.createModule(.{
         .root_source_file = b.path("src/fracture.zig"),
         .target = b.graph.host,
@@ -163,19 +181,23 @@ pub fn build(b: *std.Build) !void {
     try addAudioDependencies(b, host_sound);
     const sound_tests = b.addTest(.{ .name = "sound-tests", .root_module = host_sound });
     test_step.dependOn(&b.addRunArtifact(sound_tests).step);
-    for ([_][]const u8{ "src/software_renderer.zig", "src/windows/win32.zig", "src/input.zig" }) |path| {
-        const host_tests = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(path),
-                .target = b.graph.host,
-                .optimize = optimize,
-                .imports = &.{.{ .name = "fracture", .module = host_fracture }},
-            }),
+    for ([_][]const u8{
+        "src/software_renderer.zig",
+        "src/windows/win32.zig",
+        "src/input.zig",
+    }) |path| {
+        const test_module = b.createModule(.{
+            .root_source_file = b.path(path),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "fracture", .module = host_fracture }},
         });
+        const host_tests = b.addTest(.{ .root_module = test_module });
         test_step.dependOn(&b.addRunArtifact(host_tests).step);
     }
 
-    const windows_target = b.resolveTargetQuery(try std.Target.Query.parse(.{ .arch_os_abi = "x86_64-windows" }));
+    const windows_query = try std.Target.Query.parse(.{ .arch_os_abi = "x86_64-windows" });
+    const windows_target = b.resolveTargetQuery(windows_query);
     const windows_sound = b.createModule(.{
         .root_source_file = b.path("src/sound.zig"),
         .target = windows_target,
@@ -186,9 +208,17 @@ pub fn build(b: *std.Build) !void {
         .root_module = windows_sound,
     });
     check.dependOn(&audio_tests.step);
-    if (is_macos and b.graph.host.result.os.tag == .macos and b.graph.host.result.cpu.arch == target.result.cpu.arch) {
+    if (is_macos and b.graph.host.result.os.tag == .macos and
+        b.graph.host.result.cpu.arch == target.result.cpu.arch)
+    {
         const test_options = b.addOptions();
-        test_options.addOption(bool, "window_smoke", b.option(bool, "macos-window-smoke", "Test native input routing, queue limits, focus loss, resize suspension, and quit (requires a desktop session)") orelse false);
+        const window_smoke = b.option(
+            bool,
+            "macos-window-smoke",
+            "Test native input routing, queue limits, focus loss, resize suspension, " ++
+                "and quit (requires a desktop session)",
+        ) orelse false;
+        test_options.addOption(bool, "window_smoke", window_smoke);
         const test_module = b.createModule(.{
             .root_source_file = b.path("testbed/entrypoint_macos.zig"),
             .target = target,
@@ -214,13 +244,21 @@ pub fn build(b: *std.Build) !void {
 fn addAudioDependencies(b: *std.Build, module: *std.Build.Module) !void {
     const target = module.resolved_target.?;
     if (target.result.os.tag != .macos) return;
-    const sdk_path = std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result) orelse return error.MacOSSDKNotFound;
+    const sdk_path = std.zig.system.darwin.getSdk(
+        b.allocator,
+        b.graph.io,
+        &target.result,
+    ) orelse return error.MacOSSDKNotFound;
     const sdk_frameworks = b.pathJoin(&.{ sdk_path, "System/Library/Frameworks" });
     const header = b.addWriteFiles().add("audio-c.h",
         \\#include <AudioToolbox/AudioComponent.h>
         \\#include <AudioToolbox/AudioUnit.h>
     );
-    const audio = b.addTranslateC(.{ .root_source_file = header, .target = target, .optimize = module.optimize.? });
+    const audio = b.addTranslateC(.{
+        .root_source_file = header,
+        .target = target,
+        .optimize = module.optimize.?,
+    });
     audio.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk_path, "usr/include" }) });
     audio.addSystemFrameworkPath(.{ .cwd_relative = sdk_frameworks });
     module.addImport("audio-c", audio.createModule());

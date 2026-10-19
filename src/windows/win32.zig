@@ -545,7 +545,8 @@ pub const XButtonWParam = packed struct(usize) {
     _upper: MessageParamUpperBits = 0,
 };
 
-// ----------------------------------------- CONSTANTS ---------------------------------------------/
+// ----------------------------------------- CONSTANTS
+// ---------------------------------------------/
 
 pub const IDI_APPLICATION = typedConst([*:0]align(1) const u8, @as(u32, 32512));
 pub const IDC_ARROW = typedConst([*:0]align(1) const u8, @as(i32, 32512));
@@ -869,7 +870,8 @@ pub const WM_USER = @as(u32, 1024);
 
 pub const MAPVK_VSC_TO_VK_EX = @as(u32, 3);
 pub const MAPVK_VK_TO_VSC_EX = @as(u32, 4);
-//------------------------------------------------ FUNCTIONS ------------------------------------------/
+//------------------------------------------------ FUNCTIONS
+//------------------------------------------/
 
 pub extern "kernel32" fn GetModuleHandleA(
     lpModuleName: ?[*:0]const u8,
@@ -1052,7 +1054,10 @@ pub const COINIT_SPEED_OVER_MEMORY: windows.DWORD = 0x8;
 pub const S_OK: HRESULT = 0;
 pub const S_FALSE: HRESULT = 1;
 
-pub extern "ole32" fn CoInitializeEx(pvReserved: ?windows.LPVOID, dwCoInit: windows.DWORD) callconv(.winapi) HRESULT;
+pub extern "ole32" fn CoInitializeEx(
+    pvReserved: ?windows.LPVOID,
+    dwCoInit: windows.DWORD,
+) callconv(.winapi) HRESULT;
 pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
 
 pub const IID_IUnknown = Guid.parse("00000000-0000-0000-c000-000000000046");
@@ -1071,7 +1076,11 @@ pub const IUnknown = extern union {
         ) callconv(.winapi) u32,
     };
     vtable: *const VTable,
-    pub inline fn QueryInterface(self: *const IUnknown, riid: *const Guid, ppvObject: **anyopaque) HRESULT {
+    pub inline fn QueryInterface(
+        self: *const IUnknown,
+        riid: *const Guid,
+        ppvObject: **anyopaque,
+    ) HRESULT {
         return self.vtable.QueryInterface(self, riid, ppvObject);
     }
     pub inline fn AddRef(self: *const IUnknown) u32 {
@@ -1297,9 +1306,16 @@ pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);
 }
 
-pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptime value: anytype) ReturnType {
-    const target_type_error = @as([]const u8, "typedConst cannot convert to " ++ @typeName(ReturnType));
-    const value_type_error = @as([]const u8, "typedConst cannot convert " ++ @typeName(@TypeOf(value)) ++ " to " ++ @typeName(ReturnType));
+pub fn typedConst2(
+    comptime ReturnType: type,
+    comptime SwitchType: type,
+    comptime value: anytype,
+) ReturnType {
+    const target_name = @typeName(ReturnType);
+    const value_name = @typeName(@TypeOf(value));
+    const target_type_error: []const u8 = "typedConst cannot convert to " ++ target_name;
+    const value_type_error: []const u8 =
+        "typedConst cannot convert " ++ value_name ++ " to " ++ target_name;
 
     switch (@typeInfo(SwitchType)) {
         .int => |target_type_info| {
@@ -1315,7 +1331,10 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
             .one, .many, .c => {
                 switch (@typeInfo(@TypeOf(value))) {
                     .comptime_int, .int => {
-                        const usize_value = if (value >= 0) value else @as(usize, @bitCast(@as(isize, value)));
+                        const usize_value = if (value >= 0)
+                            value
+                        else
+                            @as(usize, @bitCast(@as(isize, value)));
                         return @as(ReturnType, @ptrFromInt(usize_value));
                     },
                     else => @compileError(value_type_error),
@@ -1336,8 +1355,14 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
 }
 
 test "typedConst" {
-    try testing.expectEqual(@as(usize, @bitCast(@as(isize, -1))), @intFromPtr(typedConst(?*opaque {}, -1)));
-    try testing.expectEqual(@as(usize, @bitCast(@as(isize, -12))), @intFromPtr(typedConst(?*opaque {}, -12)));
+    try testing.expectEqual(
+        @as(usize, @bitCast(@as(isize, -1))),
+        @intFromPtr(typedConst(?*opaque {}, -1)),
+    );
+    try testing.expectEqual(
+        @as(usize, @bitCast(@as(isize, -12))),
+        @intFromPtr(typedConst(?*opaque {}, -12)),
+    );
     try testing.expectEqual(@as(u32, 0xffffffff), typedConst(u32, 0xffffffff));
     try testing.expectEqual(@as(i32, @bitCast(@as(u32, 0x80000000))), typedConst(i32, 0x80000000));
 }
