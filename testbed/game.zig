@@ -39,6 +39,7 @@ pub const Controls = struct {
         @"3": bool = false,
         left_mouse: bool = false,
         right_mouse: bool = false,
+        g: bool = false,
     } = .{},
     down: struct {
         s: bool = false,
@@ -65,6 +66,7 @@ pub const Controls = struct {
                         .lcontrol, .rcontrol => self.pressed_this_frame.ctrl = true,
                         .space => self.pressed_this_frame.space = true,
                         .p => self.pressed_this_frame.p = true,
+                        .g => self.pressed_this_frame.g = true,
                         .@"1" => self.pressed_this_frame.@"1" = true,
                         .@"2" => self.pressed_this_frame.@"2" = true,
                         .@"3" => self.pressed_this_frame.@"3" = true,
@@ -116,9 +118,6 @@ pub const GameState = struct {
 
     level_index: usize,
 
-    // FIXME: In screen space currently
-    camera_x: f32,
-    camera_y: f32,
     view_half_width: f32,
     view_half_height: f32,
 
@@ -146,13 +145,13 @@ const Stats = struct {
     max_health: u16,
 };
 
-const tile_width: f32 = 1.0;
-const tile_height: f32 = 1.0;
+const tile_width_meters: f32 = 1.0;
+const tile_height_meters: f32 = 1.0;
 
 const meters_per_pixel: f32 = 1.0 / 48.0;
 
-const player_width: f32 = tile_width;
-const player_height: f32 = tile_height;
+const player_width: f32 = tile_width_meters;
+const player_height: f32 = tile_height_meters;
 const player_half_width: f32 = player_width / 2.0;
 
 // Outer void tiles pad the maps and must not enlarge the player's movement bounds.
@@ -166,20 +165,20 @@ const level_bounds = blk: {
     } = undefined;
     for (test_levels, 0..) |level, index| {
         bounds[index] = .{
-            .min_x = @as(f32, @floatFromInt(level.width)) * tile_width,
-            .min_y = @as(f32, @floatFromInt(level.height)) * tile_height,
+            .min_x = @as(f32, @floatFromInt(level.width)) * tile_width_meters,
+            .min_y = @as(f32, @floatFromInt(level.height)) * tile_height_meters,
             .max_x = 0,
             .max_y = 0,
         };
         for (level.tiles, 0..) |tile, tile_index| {
             if (tile == 0) continue;
 
-            const x = @as(f32, @floatFromInt(tile_index % level.width)) * tile_width;
-            const y = @as(f32, @floatFromInt(tile_index / level.width)) * tile_height;
+            const x = @as(f32, @floatFromInt(tile_index % level.width)) * tile_width_meters;
+            const y = @as(f32, @floatFromInt(tile_index / level.width)) * tile_height_meters;
             bounds[index].min_x = @min(bounds[index].min_x, x);
             bounds[index].min_y = @min(bounds[index].min_y, y);
-            bounds[index].max_x = @max(bounds[index].max_x, x + tile_width);
-            bounds[index].max_y = @max(bounds[index].max_y, y + tile_height);
+            bounds[index].max_x = @max(bounds[index].max_x, x + tile_width_meters);
+            bounds[index].max_y = @max(bounds[index].max_y, y + tile_height_meters);
         }
     }
     break :blk bounds;
@@ -187,6 +186,8 @@ const level_bounds = blk: {
 
 pub fn init(engine: *EngineState) *anyopaque {
     const game_state = engine.permanent_allocator.create(GameState) catch unreachable;
+    engine.renderer.setMetersPerPixel(meters_per_pixel);
+
     game_state.controls = .{};
     game_state.latest_pop = null;
 
@@ -223,8 +224,7 @@ pub fn init(engine: *EngineState) *anyopaque {
         .render_colour = .red,
     };
     enterLevel(game_state, 0);
-
-    engine.renderer.setMetersPerPixel(meters_per_pixel);
+    engine.renderer.updateCameraTo(game_state.player.position_x, game_state.player.position_y);
 
     return @ptrCast(game_state);
 }
@@ -235,10 +235,8 @@ fn enterLevel(state: *GameState, index: usize) void {
     std.debug.assert(index < test_levels.len);
     const level = test_levels[index];
     state.level_index = index;
-    state.player.position_x = (@as(f32, @floatFromInt(level.start.x)) + 0.5) * tile_width;
-    state.player.position_y = (@as(f32, @floatFromInt(level.start.y)) + 0.5) * tile_height;
-    state.camera_x = state.player.position_x;
-    state.camera_y = state.player.position_y;
+    state.player.position_x = (@as(f32, @floatFromInt(level.start.x)) + 0.5) * tile_width_meters;
+    state.player.position_y = (@as(f32, @floatFromInt(level.start.y)) + 0.5) * tile_height_meters;
 }
 
 pub fn updateAndRender(
@@ -246,6 +244,7 @@ pub fn updateAndRender(
     game_state: *anyopaque,
     events: []const fr.event.Event,
 ) bool {
+    engine.renderer.setMetersPerPixel(meters_per_pixel);
     const renderer: *Renderer = &engine.renderer;
     const state: *GameState = @ptrCast(@alignCast(game_state));
     state.controls.consumeFrame(events);
@@ -275,7 +274,7 @@ pub fn updateAndRender(
     if (controls.pressed_this_frame.p) {
         // The host measures frame intervals including pacing; held keys do not repeat this log.
         if (engine.delta_time > 0) {
-            std.log.info("FPS: {d:.1} | frame: {d:.2} ms", .{
+            std.log.err("FPS: {d:.1} | frame: {d:.2} ms", .{
                 1.0 / engine.delta_time,
                 engine.delta_time * 1000.0,
             });
@@ -290,6 +289,7 @@ pub fn updateAndRender(
     for (level_presses, 0..) |pressed, index| {
         if (control and pressed) {
             enterLevel(state, index);
+            renderer.updateCameraTo(state.player.position_x, state.player.position_y);
             entered_level = true;
             break;
         }
@@ -322,19 +322,19 @@ pub fn updateAndRender(
             delta_y = delta_y * magnitude_inv;
         }
 
-        var new_camera_x = state.camera_x +
+        var new_player_x = state.player.position_x +
             delta_x * state.player.stats.movement_speed * engine.delta_time;
-        var new_camera_y = state.camera_y +
+        var new_player_y = state.player.position_y +
             delta_y * state.player.stats.movement_speed * engine.delta_time;
 
         // Position tracks the center; clamping it to the edge would leave half the player outside.
-        new_camera_x = std.math.clamp(
-            new_camera_x,
+        new_player_x = std.math.clamp(
+            new_player_x,
             bounds.min_x + player_half_width,
             bounds.max_x - player_half_width,
         );
-        new_camera_y = std.math.clamp(
-            new_camera_y,
+        new_player_y = std.math.clamp(
+            new_player_y,
             bounds.min_y + player_height / 2,
             bounds.max_y - player_height / 2,
         );
@@ -343,61 +343,60 @@ pub fn updateAndRender(
         // @TODO: Spawn a collision box when the player attacks the ground. This box should have a
         // damage value that
         // is applied to the enemies when they collide with it with corresponding on hit effects
-
-        state.camera_x = new_camera_x;
-        state.camera_y = new_camera_y;
-        state.player.position_x = new_camera_x;
-        state.player.position_y = new_camera_y;
+        state.player.position_x = new_player_x;
+        state.player.position_y = new_player_y;
+        renderer.updateCameraTo(new_player_x, new_player_y);
     }
 
-    {
+    { // NOTE: Culling what needs to be drawn. THis becomes frusturm culling when we move to 3D
         const floor_colour: Color = .green;
         const wall_colour: Color = .brown;
+
+        const visible_bounds = renderer.visibleWorldBounds();
 
         // Player is at the center of the screen always so draw the player there and the camera
         // moves with the player
         // Based on the player position figure out the tiles we need to draw
-        // NOTE: Culling what needs to be drawn. THis becomes frusturm culling when we move to 3D
-        const view_left = state.camera_x - state.view_half_width;
-        const first_column_raw: i32 = @intFromFloat(@floor(view_left));
-        const first_column: usize = @intCast(std.math.clamp(first_column_raw, 0, level.width - 1));
 
-        const view_top = state.camera_y - state.view_half_height;
-        const first_row_raw: i32 = @intFromFloat(@floor(view_top));
-        const first_row: usize = @intCast(std.math.clamp(first_row_raw, 0, level.height - 1));
+        const first_column_raw: i32 = @intFromFloat(@floor(visible_bounds.min_x));
+        const first_column: u64 = @intCast(std.math.clamp(first_column_raw, 0, level.width - 1));
 
-        const view_right = state.camera_x + state.view_half_width;
-        const last_column_raw: i32 = @intFromFloat(@ceil(view_right));
-        const last_column: usize = @intCast(std.math.clamp(last_column_raw, 0, level.width - 1));
+        const first_row_raw: i32 = @intFromFloat(@floor(visible_bounds.min_y));
+        const first_row: u64 = @intCast(std.math.clamp(first_row_raw, 0, level.height - 1));
 
-        const view_bottom = state.camera_y + state.view_half_height;
-        const last_row_raw: i32 = @intFromFloat(@ceil(view_bottom));
-        const last_row: usize = @intCast(std.math.clamp(last_row_raw, 0, level.height - 1));
+        const last_column_raw: i32 = @intFromFloat(@ceil(visible_bounds.max_x));
+        const last_column: u64 = @intCast(std.math.clamp(last_column_raw, 0, level.width - 1));
+
+        const last_row_raw: i32 = @intFromFloat(@ceil(visible_bounds.max_y));
+        const last_row: u64 = @intCast(std.math.clamp(last_row_raw, 0, level.height - 1));
 
         for (first_row..last_row + 1) |y| {
             for (first_column..last_column + 1) |x| {
                 const tile_type = level.tiles[y * level.width + x];
-                const tile_x: f32 = @floatFromInt(x);
-                const x_position = tile_x - state.camera_x + state.view_half_width;
-                const tile_y: f32 = @floatFromInt(y);
-                const y_position = tile_y - state.camera_y + state.view_half_height;
+                const tile_x: f32 = @as(f32, @floatFromInt(x)) * tile_width_meters;
+                const tile_y: f32 = @as(f32, @floatFromInt(y)) * tile_height_meters;
+                const screen_position = renderer.screenFromWorld(tile_x, tile_y);
+                if (state.controls.pressed_this_frame.g) {
+                    std.log.info("Tile at {d}, {d}: {d}", .{ x, y, tile_type });
+                    std.log.info("Screen position: {d}, {d}", .{ screen_position.x, screen_position.y });
+                }
 
                 switch (tile_type) {
                     1 => { // Floor.
                         renderer.drawRectangle(
-                            x_position,
-                            y_position,
-                            tile_width,
-                            tile_height,
+                            screen_position.x,
+                            screen_position.y,
+                            tile_width_meters,
+                            tile_height_meters,
                             floor_colour,
                         );
                     },
                     2 => { // Wall.
                         renderer.drawRectangle(
-                            x_position,
-                            y_position,
-                            tile_width,
-                            tile_height,
+                            screen_position.x,
+                            screen_position.y,
+                            tile_width_meters,
+                            tile_height_meters,
                             wall_colour,
                         );
                     },
@@ -431,4 +430,85 @@ fn playSound(engine: *EngineState, data: []const u8) ?fr.PlaybackHandle {
         }
         return null;
     };
+}
+
+test "press flags survive same-frame releases and expire while holds persist" {
+    var controls: Controls = .{};
+    controls.consumeFrame(&.{
+        .{ .key_pressed = .s },
+        .{ .key_pressed = .space },
+        .{ .key_released = .space },
+        .{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 1, .y = 2 } } },
+        .{ .mouse_released = .{ .button = .left, .pos = .{ .x = 1, .y = 2 } } },
+    });
+    try std.testing.expect(controls.pressed_this_frame.space);
+    try std.testing.expect(controls.pressed_this_frame.left_mouse);
+    controls.consumeFrame(&.{});
+    try std.testing.expect(controls.down.s);
+    try std.testing.expect(!controls.pressed_this_frame.space);
+    try std.testing.expect(!controls.pressed_this_frame.left_mouse);
+    controls.consumeFrame(&.{.{ .key_released = .s }});
+    try std.testing.expect(!controls.down.s);
+}
+
+test "resets affect only their scope and preserve this frame's presses" {
+    const cases = [_]struct { reset: fr.event.Event, keyboard_down: bool }{
+        .{ .reset = .reset_keyboard, .keyboard_down = false },
+        .{ .reset = .reset_mouse, .keyboard_down = true },
+        .{ .reset = .reset_all, .keyboard_down = false },
+    };
+    for (cases) |case| {
+        var controls: Controls = .{};
+        controls.consumeFrame(&.{
+            .{ .key_pressed = .s },
+            .{ .key_pressed = .lcontrol },
+            .{ .key_pressed = .space },
+            .{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 1, .y = 2 } } },
+            case.reset,
+        });
+        try std.testing.expectEqual(case.keyboard_down, controls.down.s);
+        try std.testing.expectEqual(case.keyboard_down, controls.down.ctrl);
+        try std.testing.expect(controls.pressed_this_frame.ctrl);
+        try std.testing.expect(controls.pressed_this_frame.space);
+        try std.testing.expect(controls.pressed_this_frame.left_mouse);
+    }
+}
+
+test "repeats restore held state without presses" {
+    var controls: Controls = .{};
+    controls.consumeFrame(&.{ .reset_keyboard, .{ .key_repeat = .s }, .{ .key_repeat = .space }, .{ .key_repeat = .lcontrol } });
+    try std.testing.expect(controls.down.s);
+    try std.testing.expect(controls.down.ctrl);
+    try std.testing.expect(!controls.pressed_this_frame.space);
+    try std.testing.expect(!controls.pressed_this_frame.ctrl);
+}
+
+test "control stays held until both sides are released" {
+    var controls: Controls = .{};
+    controls.consumeFrame(&.{
+        .{ .key_pressed = .lcontrol },
+        .{ .key_pressed = .rcontrol },
+        .{ .key_pressed = .lcontrol },
+        .{ .key_repeat = .lcontrol },
+        .{ .key_released = .rcontrol },
+    });
+    try std.testing.expect(controls.down.ctrl);
+    try std.testing.expect(controls.pressed_this_frame.ctrl);
+    controls.consumeFrame(&.{.{ .key_released = .lcontrol }});
+    try std.testing.expect(!controls.down.ctrl);
+    try std.testing.expect(!controls.pressed_this_frame.ctrl);
+}
+
+test "reset forgets control sides before repeats restore them" {
+    for ([_]fr.event.Event{ .reset_keyboard, .reset_all }) |reset| {
+        var controls: Controls = .{};
+        controls.consumeFrame(&.{ .{ .key_pressed = .lcontrol }, reset });
+        try std.testing.expect(!controls.down.ctrl);
+        try std.testing.expect(controls.pressed_this_frame.ctrl);
+        controls.consumeFrame(&.{.{ .key_repeat = .rcontrol }});
+        try std.testing.expect(controls.down.ctrl);
+        try std.testing.expect(!controls.pressed_this_frame.ctrl);
+        controls.consumeFrame(&.{.{ .key_released = .rcontrol }});
+        try std.testing.expect(!controls.down.ctrl);
+    }
 }

@@ -36,4 +36,3 @@ Debug builds load the game dynamically. In another terminal, run `zig build game
 Use `zig build run -Doptimize=fast` for a statically linked game without hot reload.
 
 The macOS-only `zig-objc` dependency is pinned to [our fork's Zig compatibility commit](https://github.com/aditya-rajagopal/zig-objc/commit/9c968a1eaf15a98fa79c1e84c4e6e7ec3ac67499). 
-
