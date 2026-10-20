@@ -114,6 +114,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var running = true;
+    var pacing_error: ?fr.Platform.PaceFrameError = null;
     var cursor_hidden = true;
     var host_controls: common.HostControls = .{};
     var frame_timestamp = std.Io.Clock.awake.now(io);
@@ -124,8 +125,9 @@ pub fn main(init: std.process.Init) !void {
         const frame_start = std.Io.Clock.awake.now(io);
         defer {
             if (running) {
-                fr.paceFrame(io, frame_start, common.frame_duration) catch {
+                platform.paceFrame(io, frame_start, common.frame_duration) catch |err| {
                     running = false;
+                    if (err != error.Canceled) pacing_error = err;
                 };
             }
         }
@@ -200,6 +202,7 @@ pub fn main(init: std.process.Init) !void {
             }
         }
     }
+    if (pacing_error) |err| return err;
 }
 
 fn reloadLibrary(io: std.Io, debug_game: *DebugGame, library_path: []const u8) !bool {

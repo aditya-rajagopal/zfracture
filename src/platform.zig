@@ -31,6 +31,7 @@ pub const WindowStatus = struct {
 };
 
 pub const InitError = backend.InitError;
+pub const PaceFrameError = std.Io.Cancelable || backend.WaitError || error{InvalidFrameDuration};
 pub const CreateWindowError = backend.CreateWindowError || error{InvalidFramebuffer};
 pub const DynamicLibrary = backend.DynamicLibrary;
 pub const processId = backend.processId;
@@ -86,6 +87,28 @@ pub fn endFrame(self: *Platform) void {
     self.frame_active = false;
 }
 
+/// Caps this frame at frame_start + frame_duration on Clock.awake.
+/// Call on this platform's owning thread, including after endFrame. No window is required.
+/// Windows cancellation is checked at wait boundaries; it does not interrupt a native wait.
+pub fn paceFrame(
+    self: *Platform,
+    io: std.Io,
+    frame_start: std.Io.Timestamp,
+    frame_duration: std.Io.Duration,
+) PaceFrameError!void {
+    std.debug.assert(self.initialized);
+    try io.checkCancel();
+    if (frame_duration.nanoseconds <= 0) return;
+    const deadline_ns = std.math.add(i96, frame_start.nanoseconds, frame_duration.nanoseconds) catch
+        return error.InvalidFrameDuration;
+    const deadline = std.Io.Timestamp.fromNanoseconds(deadline_ns);
+    // A backend may wake early. Keep the original per-frame deadline on every retry.
+    while (std.Io.Clock.awake.now(io).nanoseconds < deadline_ns) {
+        try self.native.waitUntil(io, deadline);
+        try io.checkCancel();
+    }
+}
+
 pub fn pollEvents(self: *Platform) WindowStatus {
     self.assertWindow();
     std.debug.assert(self.frame_active);
@@ -135,4 +158,35 @@ test "invalid framebuffer dimensions and storage are rejected" {
 
 test {
     std.testing.refAllDecls(backend);
+}
+
+test "frame pacing rejects deadline overflow" {
+    var platform: Platform = .{};
+    try platform.init();
+    defer platform.deinit();
+    try std.testing.expectError(error.InvalidFrameDuration, platform.paceFrame(
+        std.testing.io,
+        .fromNanoseconds(std.math.maxInt(i96)),
+        .fromNanoseconds(1),
+    ));
+}
+
+test "independent platforms pace without a live window and release their timers" {
+    var first: Platform = .{};
+    try first.init();
+    defer first.deinit();
+    var second: Platform = .{};
+    try second.init();
+    if (builtin.os.tag == .windows) {
+        try std.testing.expect(first.native.frame_timer != second.native.frame_timer);
+    }
+    second.deinit();
+    if (builtin.os.tag == .windows) try std.testing.expect(second.native.frame_timer == null);
+    const io = std.testing.io;
+    const duration: std.Io.Duration = .fromMilliseconds(2);
+    first.beginFrame();
+    first.endFrame();
+    const start = std.Io.Clock.awake.now(io);
+    try first.paceFrame(io, start, duration);
+    try std.testing.expect(std.Io.Clock.awake.now(io).nanoseconds >= start.nanoseconds + duration.nanoseconds);
 }

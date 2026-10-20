@@ -27,7 +27,7 @@
 
 A 3D Game engine in Zig for learning and also for making my own game focused on performance, control, and data-oriented architecture.
 
-Supports Windows x86_64 and macOS Apple Silicon.
+Supports Windows x86_64 (Windows 10 version 1803 or later) and macOS Apple Silicon.
 
 Developed with Zig `0.18.0-dev.349+d924f83bf`. On macOS, install Xcode Command Line Tools so the Apple SDK is available (`xcode-select --install`).
 

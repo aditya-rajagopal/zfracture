@@ -8,6 +8,7 @@ const Key = event_types.Key;
 const Event = event_types.Event;
 const MouseButton = event_types.MouseButton;
 const max_messages_per_frame = 4096;
+const frame_spin_margin_ns = 500_000;
 
 pub const State = struct {
     instance: windows.HINSTANCE = undefined,
@@ -31,15 +32,75 @@ pub const State = struct {
     windowed_frame_margin: u16 = 10,
     cursor: ?windows.HCURSOR = null,
     cursor_hidden: bool = true,
+    frame_timer: ?windows.HANDLE = null,
 
     const Self = @This();
 
     pub fn init(self: *Self) InitError!void {
         self.* = .{};
         self.cursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse return error.FailedToLoadCursor;
+        // Last fallible step: failure leaves no owned handle to clean up.
+        self.frame_timer = win32.CreateWaitableTimerExW(
+            null,
+            null,
+            win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+            win32.TIMER_MODIFY_STATE | win32.SYNCHRONIZE,
+        ) orelse {
+            const code = windows.GetLastError();
+            std.log.err("CreateWaitableTimerExW failed (Win32 error {d})", .{@backingInt(code)});
+            return error.FailedToCreateFrameTimer;
+        };
     }
-    pub fn deinit(_: *Self) void {}
+
+    pub fn deinit(self: *Self) void {
+        windows.CloseHandle(self.frame_timer.?);
+        self.frame_timer = null;
+    }
+
+    pub fn waitUntil(self: *Self, io: std.Io, deadline: std.Io.Timestamp) WaitError!void {
+        const handle = self.frame_timer.?;
+        const now = std.Io.Clock.awake.now(io);
+        // Widen before subtraction: valid i96 timestamps can span more than i96.
+        const remaining_ns = @as(i128, deadline.nanoseconds) - now.nanoseconds;
+        if (remaining_ns <= 0) return;
+        if (remaining_ns > frame_spin_margin_ns) {
+            const due_time = try relativeDueTime(remaining_ns - frame_spin_margin_ns);
+            if (!win32.SetWaitableTimerEx(handle, &due_time, 0, null, null, null, 0).toBool()) {
+                const code = windows.GetLastError();
+                std.log.err("SetWaitableTimerEx failed (Win32 error {d})", .{@backingInt(code)});
+                return error.FailedToSetFrameTimer;
+            }
+            // Precision comes from the armed timer, not the wait function's timeout.
+            const status = win32.WaitForSingleObject(handle, win32.INFINITE);
+            if (status != win32.WAIT_OBJECT_0) {
+                if (status == win32.WAIT_FAILED) {
+                    const code = windows.GetLastError();
+                    std.log.err("WaitForSingleObject failed (Win32 error {d})", .{@backingInt(code)});
+                } else {
+                    std.log.err("WaitForSingleObject returned unexpected status 0x{x}", .{status});
+                }
+                return error.FailedToWaitForFrameTimer;
+            }
+            return;
+        }
+
+        // Only the final <=500 us uses CPU; native failures never fall back to spinning.
+        while (std.Io.Clock.awake.now(io).nanoseconds < deadline.nanoseconds) {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    fn relativeDueTime(nanoseconds: i128) error{InvalidFrameDuration}!i64 {
+        std.debug.assert(nanoseconds > 0);
+        const maximum_ns = @as(i128, std.math.maxInt(i64)) * 100;
+        if (nanoseconds > maximum_ns) return error.InvalidFrameDuration;
+        // Negative values are relative. Round up so conversion cannot shorten the wait.
+        const units: i64 = @intCast(@divTrunc(nanoseconds + 99, 100));
+        return -units;
+    }
+
     pub fn beginFrame(_: *Self) void {}
+
     pub fn endFrame(_: *Self) void {}
 
     pub fn pollEvents(self: *Self) Platform.WindowStatus {
@@ -672,7 +733,17 @@ test "capture release distinguishes completion from cancellation" {
     try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
 }
 
-pub const InitError = error{FailedToLoadCursor};
+test "frame timer rounds relative due times up and rejects overflow" {
+    try std.testing.expectEqual(-1, try relativeDueTime(1));
+    try std.testing.expectEqual(-1, try relativeDueTime(100));
+    try std.testing.expectEqual(-2, try relativeDueTime(101));
+    const maximum_ns = @as(i128, std.math.maxInt(i64)) * 100;
+    try std.testing.expectEqual(-std.math.maxInt(i64), try relativeDueTime(maximum_ns));
+    try std.testing.expectError(error.InvalidFrameDuration, relativeDueTime(maximum_ns + 1));
+}
+
+pub const InitError = error{ FailedToLoadCursor, FailedToCreateFrameTimer };
+pub const WaitError = error{ InvalidFrameDuration, FailedToSetFrameTimer, FailedToWaitForFrameTimer };
 pub fn processId() u32 {
     return std.os.windows.GetCurrentProcessId();
 }

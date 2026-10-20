@@ -877,6 +877,38 @@ pub extern "kernel32" fn GetModuleHandleA(
     lpModuleName: ?[*:0]const u8,
 ) callconv(.winapi) ?windows.HINSTANCE;
 
+pub const CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: u32 = 0x00000002;
+pub const TIMER_MODIFY_STATE: u32 = 0x00000002;
+pub const SYNCHRONIZE: u32 = 0x00100000;
+pub const INFINITE: u32 = 0xFFFFFFFF;
+pub const WAIT_OBJECT_0: u32 = 0;
+pub const WAIT_FAILED: u32 = 0xFFFFFFFF;
+// Only used behind a nullable pointer; the pacer never requests a system wake.
+pub const REASON_CONTEXT = opaque {};
+pub const TIMERAPCROUTINE = *const fn (?*anyopaque, u32, u32) callconv(.winapi) void;
+
+pub extern "kernel32" fn CreateWaitableTimerExW(
+    attributes: ?*windows.SECURITY_ATTRIBUTES,
+    name: ?[*:0]const u16,
+    flags: u32,
+    desired_access: u32,
+) callconv(.winapi) ?windows.HANDLE;
+
+pub extern "kernel32" fn SetWaitableTimerEx(
+    timer: windows.HANDLE,
+    due_time: *const i64,
+    period_ms: i32,
+    completion: ?TIMERAPCROUTINE,
+    completion_argument: ?*anyopaque,
+    wake_context: ?*REASON_CONTEXT,
+    tolerable_delay_ms: u32,
+) callconv(.winapi) windows.BOOL;
+
+pub extern "kernel32" fn WaitForSingleObject(
+    handle: windows.HANDLE,
+    timeout_ms: u32,
+) callconv(.winapi) u32;
+
 pub extern "user32" fn LoadIconA(
     proccess_handle: ?windows.HINSTANCE,
     lpIconName: ?[*:0]const u8,

@@ -80,6 +80,10 @@ pub const State = struct {
         self.frame_pool = null;
     }
 
+    pub fn waitUntil(_: *Self, io: std.Io, deadline: std.Io.Timestamp) WaitError!void {
+        try deadline.withClock(.awake).wait(io);
+    }
+
     pub fn pollEvents(self: *Self) Platform.WindowStatus {
         pumpMessages(self, max_messages_per_frame);
         self.updateCursor();
@@ -1417,6 +1421,7 @@ test "client click focuses the window and its drag releases outside the view" {
 }
 
 pub const InitError = error{};
+pub const WaitError = std.Io.Cancelable;
 pub const CreateWindowError = error{
     FailedToRegisterClass,
     FailedToRegisterIvar,
