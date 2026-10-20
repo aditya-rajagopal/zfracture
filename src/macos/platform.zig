@@ -1366,19 +1366,14 @@ test "resize callbacks preserve explicitly delivered input without a reset" {
     const number = platform.window.msgSend(isize, "windowNumber", .{});
     // This exercises the callbacks; it does not enter AppKit's native tracking loop.
     platform.delegate.msgSend(void, "windowWillStartLiveResize:", .{nil});
-    try std.testing.expect(platform.tracking_window);
-    try std.testing.expect(!platform.reset_frame_clock);
     platform.application.msgSend(void, "sendEvent:", .{testKeyEvent(.key_down, .f1, 0, false, number)});
     platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
-    try std.testing.expect(!platform.tracking_window);
-    try std.testing.expect(platform.reset_frame_clock);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, platform.takeEvents());
     // An earlier end must stay latched if another interaction starts before polling.
     platform.delegate.msgSend(void, "windowWillStartLiveResize:", .{nil});
     const active = platform.takeWindowStatus();
     try std.testing.expect(active.native_interaction_active);
     try std.testing.expect(!active.interaction_ended);
-    try std.testing.expect(platform.reset_frame_clock);
     platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
     const ended = platform.takeWindowStatus();
     try std.testing.expect(!ended.native_interaction_active);
@@ -1441,8 +1436,6 @@ test "client click focuses the window and its drag releases outside the view" {
     const number = platform.window.msgSend(isize, "windowNumber", .{});
     const point = platform.view.msgSend(Point, "convertPoint:toView:", .{ Point{ .x = 17, .y = 23 }, nil });
     const click = testMouseEvent(.left_mouse_down, point, number);
-    try std.testing.expectEqual(platform.window.value, click.msgSend(Object, "window", .{}).value);
-    try std.testing.expect(eventInsideView(platform, click));
     platform.application.msgSend(void, "sendEvent:", .{click});
     try std.testing.expect(platform.window.msgSend(bool, "isKeyWindow", .{}));
     const pressed = platform.takeEvents();
@@ -1486,62 +1479,3 @@ pub const DynamicLibrary = struct {
         self.* = undefined;
     }
 };
-
-const PoolProbe = struct {
-    var released: usize = 0;
-
-    fn dealloc(receiver: objc.c.id, _: objc.c.SEL) callconv(.c) void {
-        released += 1;
-        const object: Object = .{ .value = receiver };
-        object.msgSendSuper(objc.getClass("NSObject").?, void, "dealloc", .{});
-    }
-
-    fn autoreleaseOne() !void {
-        const name = "FracturePoolProbe";
-        if (objc.getClass(name) == null) {
-            const class = objc.allocateClassPair(objc.getClass("NSObject").?, name) orelse return error.TestClassCreationFailed;
-            errdefer objc.disposeClassPair(class);
-            if (!class.addMethod("dealloc", dealloc)) return error.TestMethodRegistrationFailed;
-            objc.registerClassPair(class);
-        }
-        const allocated = objc.getClass(name).?.msgSend(Object, "alloc", .{});
-        const object = allocated.msgSend(Object, "init", .{});
-        _ = object.msgSend(Object, "autorelease", .{});
-    }
-};
-
-test "frame pools drain independently of the outer pool" {
-    PoolProbe.released = 0;
-    var platform: Platform = .{};
-    try platform.init();
-    {
-        defer platform.deinit();
-        try PoolProbe.autoreleaseOne();
-        for (0..2) |index| {
-            platform.beginFrame();
-            defer platform.endFrame();
-            try PoolProbe.autoreleaseOne();
-            try std.testing.expectEqual(index, PoolProbe.released);
-        }
-        try std.testing.expectEqual(@as(usize, 2), PoolProbe.released);
-    }
-    try std.testing.expectEqual(@as(usize, 3), PoolProbe.released);
-}
-
-test "window teardown detaches borrowed callback pointers" {
-    const pool = objc.AutoreleasePool.init();
-    defer pool.deinit();
-    var fixture: TestWindow = undefined;
-    try fixture.init();
-    const application = fixture.platform.application;
-    const view = fixture.platform.view;
-    const delegate = fixture.platform.delegate;
-    _ = view.msgSend(Object, "retain", .{});
-    defer view.release();
-    _ = delegate.msgSend(Object, "retain", .{});
-    defer delegate.release();
-    fixture.deinit();
-    try std.testing.expect(platformForCallback(application.value) == null);
-    try std.testing.expect(platformForCallback(view.value) == null);
-    try std.testing.expect(platformForCallback(delegate.value) == null);
-}

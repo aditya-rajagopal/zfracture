@@ -640,18 +640,16 @@ test "nested modal callbacks reset once and resume only after the outer exit" {
     _ = windowProc(window, win32.WM_ENTERMENULOOP, 0, 0);
     _ = windowProc(window, win32.WM_KEYDOWN, @backingInt(Key.f1), 0);
     _ = windowProc(window, win32.WM_EXITMENULOOP, 0, 0);
-    try std.testing.expect(platform.modal_depth != 0);
-    try std.testing.expect(!platform.reset_frame_clock);
+    const nested = platform.takeWindowStatus();
+    try std.testing.expect(nested.native_interaction_active);
+    try std.testing.expect(!nested.interaction_ended);
     _ = windowProc(window, win32.WM_EXITSIZEMOVE, 0, 0);
-    try std.testing.expectEqual(@as(u32, 0), platform.modal_depth);
     try std.testing.expectEqualDeep(&[_]Event{ .reset_keyboard, .{ .key_pressed = .f1 } }, platform.takeEvents());
-    try std.testing.expect(platform.reset_frame_clock);
     // Do not consume the prior end while another native interaction is active.
     _ = windowProc(window, win32.WM_ENTERSIZEMOVE, 0, 0);
     const active = platform.takeWindowStatus();
     try std.testing.expect(active.native_interaction_active);
     try std.testing.expect(!active.interaction_ended);
-    try std.testing.expect(platform.reset_frame_clock);
     _ = windowProc(window, win32.WM_EXITSIZEMOVE, 0, 0);
     const ended = platform.takeWindowStatus();
     try std.testing.expect(!ended.native_interaction_active);

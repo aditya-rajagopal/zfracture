@@ -173,7 +173,8 @@ pub fn main(init: std.process.Init) !void {
             platform.setCursorHidden(cursor_hidden);
         }
 
-        const toggle_fullscreen = host_controls.down.alt and host_controls.pressed_this_frame.enter;
+        const alt = host_controls.down.alt or host_controls.pressed_this_frame.alt;
+        const toggle_fullscreen = alt and host_controls.pressed_this_frame.enter;
         if (toggle_fullscreen) {
             platform.toggleFullscreen();
         }

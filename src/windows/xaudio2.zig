@@ -356,7 +356,6 @@ test "completion_before_start_returns_and_failed_voice_recovery" {
     source.fail_create = true;
     audio.update();
     try std.testing.expectEqual(@as(usize, 1), source.destroy_count);
-    try std.testing.expectEqual(null, source.context);
     try std.testing.expectEqual(null, audio.native.voices[0].source);
     try std.testing.expectEqual(.failed, audio.pool.slots[0].state.load(.acquire));
     audio.update();

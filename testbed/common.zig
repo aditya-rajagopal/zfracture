@@ -15,6 +15,7 @@ pub const windowed_frame_margin = 10;
 pub const HostControls = struct {
     pressed_this_frame: struct {
         ctrl: bool = false,
+        alt: bool = false,
         enter: bool = false,
         @"3": bool = false,
     } = .{},
@@ -39,6 +40,7 @@ pub const HostControls = struct {
                     self.setHeld(key, true);
                     switch (key) {
                         .lcontrol, .rcontrol => self.pressed_this_frame.ctrl = true,
+                        .lalt, .ralt => self.pressed_this_frame.alt = true,
                         .enter => self.pressed_this_frame.enter = true,
                         .@"3" => self.pressed_this_frame.@"3" = true,
                         else => {},
