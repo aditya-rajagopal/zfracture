@@ -2,15 +2,15 @@
     .fingerprint = 0x83dd75e65d5ab678,
     .name = .fracture,
     .version = "0.0.1",
-    .minimum_zig_version = "0.17.0",
+    .minimum_zig_version = "0.18.0-dev.349+d924f83bf",
     .dependencies = .{
         .stdx = .{
             .url = "git+https://github.com/aditya-rajagopal/stdx.git#df2b1f4d99164a61706cd25a4e6b09725651e3cc",
             .hash = "stdx-0.0.0-JEHEYeErAgBDqPKnwCZB3CVVXC6xC94hNN0DtEpfd1je",
         },
         .zig_objc = .{
-            .url = "git+https://github.com/aditya-rajagopal/zig-objc.git#7471b14f56ecf525cd8eea47422b6ad558f73e30",
-            .hash = "zig_objc-0.0.0-Ir_SpwEuAQBRlWE-NF40iff_CtdDmD-rsMyGLPM3JsfQ",
+            .url = "git+https://github.com/aditya-rajagopal/zig-objc.git#9c968a1eaf15a98fa79c1e84c4e6e7ec3ac67499",
+            .hash = "zig_objc-0.0.0-Ir_Sp3cuAQBEw6niRMD_9kBhyBdzMYrpHKLo10Jsex7J",
             .lazy = true,
         },
     },

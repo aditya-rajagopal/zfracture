@@ -24,6 +24,38 @@ pub fn setMetersPerPixel(renderer: *Renderer, meters_per_pixel: f32) void {
     renderer.pixels_per_meter = 1.0 / meters_per_pixel;
 }
 
+pub fn screenFromWorld(self: *Renderer, x: f32, y: f32) struct { x: f32, y: f32 } {
+    assert(self.pixels_per_meter > 0);
+    return .{
+        .x = x - self.camera_position.x + @as(f32, @floatFromInt(self.back_buffer.width)) / self.pixels_per_meter / 2.0,
+        .y = y - self.camera_position.y + @as(f32, @floatFromInt(self.back_buffer.height)) / self.pixels_per_meter / 2.0,
+    };
+}
+
+pub fn worldFromScreen(self: *Renderer, x: f32, y: f32) struct { x: f32, y: f32 } {
+    assert(self.pixels_per_meter > 0);
+    return .{
+        .x = x + self.camera_position.x - @as(f32, @floatFromInt(self.back_buffer.width)) / self.pixels_per_meter / 2.0,
+        .y = y + self.camera_position.y - @as(f32, @floatFromInt(self.back_buffer.height)) / self.pixels_per_meter / 2.0,
+    };
+}
+
+pub fn updateCameraTo(renderer: *Renderer, x: f32, y: f32) void {
+    renderer.camera_position = .{ .x = x, .y = y };
+}
+
+pub fn visibleWorldBounds(self: *Renderer) struct { min_x: f32, min_y: f32, max_x: f32, max_y: f32 } {
+    assert(self.pixels_per_meter > 0);
+    const half_width: f32 = @as(f32, @floatFromInt(self.back_buffer.width)) / self.pixels_per_meter / 2.0;
+    const half_height: f32 = @as(f32, @floatFromInt(self.back_buffer.height)) / self.pixels_per_meter / 2.0;
+    return .{
+        .min_x = self.camera_position.x - half_width,
+        .min_y = self.camera_position.y - half_height,
+        .max_x = self.camera_position.x + half_width,
+        .max_y = self.camera_position.y + half_height,
+    };
+}
+
 pub fn clearScreen(renderer: *Renderer, r: f32, g: f32, b: f32) void {
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
 
