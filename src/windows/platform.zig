@@ -75,7 +75,57 @@ pub const State = struct {
 
         var rect: win32.RECT = undefined;
         if (!win32.GetClientRect(self.window, &rect).toBool()) return;
-        stretchBlitBits(self.device_context, 0, 0, rect.right - rect.left, rect.bottom - rect.top, 0, 0, self.back_buffer.width, self.back_buffer.height, self.back_buffer.data.ptr, &self.buffer_info, self.fullscreen, self.windowed_frame_margin);
+        const client_width = rect.right - rect.left;
+        const client_height = rect.bottom - rect.top;
+        const source_width: i32 = buffer.width;
+        const source_height: i32 = buffer.height;
+        var dest_x: i32 = 0;
+        var dest_y: i32 = 0;
+        var dest_width = client_width;
+        var dest_height = client_height;
+
+        if (!self.fullscreen) {
+            // Windowed presentation keeps the framebuffer unscaled and clears its margins.
+            const margin: i32 = self.windowed_frame_margin;
+            dest_x = margin;
+            dest_y = margin;
+            dest_width = source_width;
+            dest_height = source_height;
+            _ = win32.PatBlt(self.device_context, 0, 0, client_width, margin, @bitCast(win32.BLACKNESS));
+            _ = win32.PatBlt(self.device_context, 0, margin, margin, source_height, @bitCast(win32.BLACKNESS));
+            _ = win32.PatBlt(
+                self.device_context,
+                0,
+                margin + source_height,
+                client_width,
+                client_height - margin - source_height,
+                @bitCast(win32.BLACKNESS),
+            );
+            _ = win32.PatBlt(
+                self.device_context,
+                margin + source_width,
+                margin,
+                client_width - margin - source_width,
+                source_height,
+                @bitCast(win32.BLACKNESS),
+            );
+        }
+
+        _ = win32.StretchDIBits(
+            self.device_context,
+            dest_x,
+            dest_y,
+            dest_width,
+            dest_height,
+            0,
+            0,
+            source_width,
+            source_height,
+            buffer.data.ptr,
+            &self.buffer_info,
+            @backingInt(win32.DIB_RGB_COLORS),
+            @bitCast(win32.SRCCOPY),
+        );
     }
 
     // The slice stays immutable until the next handoff. Native callbacks append to the other list.
@@ -296,87 +346,6 @@ pub const CreateWindowError = error{
     FailedToGetDeviceContext,
     FailedToSetWindowUserData,
 };
-
-// @TODO: Thsis needs to be moved to the renderer
-inline fn stretchBlitBits(
-    device_context: windows.HDC,
-    dest_x: i32,
-    dest_y: i32,
-    dest_width: i32,
-    dest_height: i32,
-    src_x: i32,
-    src_y: i32,
-    src_width: i32,
-    src_height: i32,
-    frame_data: [*]const u8,
-    frame_buffer_info: *const win32.BITMAPINFO,
-    fullscreen: bool,
-    margin: u16,
-) void {
-    // TODO: We might want to blit to a zone that maintains the aspect ration of the rendered image.
-    // NOTE: When we are in full screen mode we want to blit to the entire screen. But
-    // when we are in windowed mode we only want to blit to the exact size of the frame buffer.
-
-    const blit_result = if (fullscreen) blk: {
-        break :blk win32.StretchDIBits(
-            device_context,
-            dest_x,
-            dest_y,
-            dest_width,
-            dest_height,
-            src_x,
-            src_y,
-            src_width,
-            src_height,
-            @ptrCast(frame_data),
-            frame_buffer_info,
-            @backingInt(win32.DIB_RGB_COLORS),
-            @bitCast(win32.SRCCOPY),
-        );
-    } else blk: {
-        const top: i32 = margin;
-        const left: i32 = margin;
-
-        _ = win32.PatBlt(device_context, 0, 0, dest_width, top, @bitCast(win32.BLACKNESS));
-        _ = win32.PatBlt(device_context, 0, top, left, src_height, @bitCast(win32.BLACKNESS));
-        _ = win32.PatBlt(
-            device_context,
-            0,
-            top + src_height,
-            dest_width,
-            dest_height - top - src_height,
-            @bitCast(win32.BLACKNESS),
-        );
-        _ = win32.PatBlt(
-            device_context,
-            left + src_width,
-            top,
-            dest_width - left - src_width,
-            src_height,
-            @bitCast(win32.BLACKNESS),
-        );
-
-        break :blk win32.StretchDIBits(
-            device_context,
-            top,
-            left,
-            src_width,
-            src_height,
-            0,
-            0,
-            src_width,
-            src_height,
-            @ptrCast(frame_data),
-            frame_buffer_info,
-            @backingInt(win32.DIB_RGB_COLORS),
-            @bitCast(win32.SRCCOPY),
-        );
-    };
-
-    if (blit_result == 0) {
-        // TODO: Log or return error. But we dont need to stop the program.
-    }
-}
 
 fn pumpMessages(platform: *State) void {
     if (platform.quit_requested) return;
@@ -657,18 +626,21 @@ test "nested modal callbacks reset once and resume only after the outer exit" {
     try std.testing.expect(!platform.takeWindowStatus().interaction_ended);
 }
 
-test "focus loss emits one reset_all" {
+test "either focus-loss notification resets input once per focus interval" {
     var fixture: TestWindow = undefined;
     try fixture.init();
     defer fixture.deinit();
     const platform = &fixture.platform;
     const window = platform.window.?;
     _ = windowProc(window, win32.WM_KILLFOCUS, 0, 0);
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    _ = windowProc(window, win32.WM_ACTIVATEAPP, 0, 0);
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    _ = windowProc(window, win32.WM_SETFOCUS, 0, 0);
     _ = windowProc(window, win32.WM_ACTIVATEAPP, 0, 0);
     try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
-    _ = windowProc(window, win32.WM_SETFOCUS, 0, 0);
     _ = windowProc(window, win32.WM_KILLFOCUS, 0, 0);
-    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
 }
 
 test "capture release distinguishes completion from cancellation" {

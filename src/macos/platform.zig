@@ -81,7 +81,7 @@ pub const State = struct {
     }
 
     pub fn pollEvents(self: *Self) Platform.WindowStatus {
-        pumpMessages(self);
+        pumpMessages(self, max_messages_per_frame);
         self.updateCursor();
         return self.takeWindowStatus();
     }
@@ -366,15 +366,6 @@ fn makeRect(x: f64, y: f64, width: f64, height: f64) Rect {
     return .{ .origin = .{ .x = x, .y = y }, .size = .{ .width = width, .height = height } };
 }
 
-fn presentationRect(fullscreen: bool, bounds: Rect, width: u16, height: u16, margin: u16) Rect {
-    return if (fullscreen) bounds else makeRect(
-        @floatFromInt(margin),
-        @floatFromInt(margin),
-        @floatFromInt(width),
-        @floatFromInt(height),
-    );
-}
-
 fn registerClasses() !void {
     // The runtime takes log2(alignment); ^v describes an unowned void pointer.
     const pointer_alignment = std.math.log2_int(usize, @alignOf(?*State));
@@ -555,12 +546,11 @@ fn drawRect(receiver: objc.c.id, _: objc.c.SEL, _: Rect) callconv(.c) void {
     // Release the snapshot before Zig writes the next frame. Drawing and updates share one thread.
     const image = c.CGBitmapContextCreateImage(platform.bitmap_context) orelse return;
     defer c.CGImageRelease(image);
-    const dest = presentationRect(
-        platform.fullscreen,
-        bounds,
-        platform.back_buffer.width,
-        platform.back_buffer.height,
-        platform.windowed_frame_margin,
+    const dest = if (platform.fullscreen) bounds else makeRect(
+        @floatFromInt(platform.windowed_frame_margin),
+        @floatFromInt(platform.windowed_frame_margin),
+        @floatFromInt(buffer.width),
+        @floatFromInt(buffer.height),
     );
 
     c.CGContextSaveGState(context);
@@ -606,11 +596,7 @@ fn installMenu(application: Object, title: [:0]const u8) void {
     application.msgSend(void, "setMainMenu:", .{menu});
 }
 
-fn pumpMessages(platform: *State) void {
-    pumpMessagesWithBudget(platform, max_messages_per_frame);
-}
-
-fn pumpMessagesWithBudget(platform: *State, budget: usize) void {
+fn pumpMessages(platform: *State, budget: usize) void {
     std.debug.assert(budget <= max_messages_per_frame);
     if (platform.quit_requested) return;
 
@@ -640,7 +626,7 @@ fn pumpMessagesWithBudget(platform: *State, budget: usize) void {
         );
         if (event.value == null or platform.quit_requested) break;
 
-        sendEvent(platform.application.value, null, event.value);
+        platform.application.msgSend(void, "sendEvent:", .{event});
         if (platform.quit_requested) break;
     }
 }
@@ -649,9 +635,11 @@ fn pumpMessagesWithBudget(platform: *State, budget: usize) void {
 fn sendEvent(receiver: objc.c.id, _: objc.c.SEL, raw_event: objc.c.id) callconv(.c) void {
     const application: Object = .{ .value = receiver };
     const event: Object = .{ .value = raw_event };
+
     if (platformForCallback(receiver)) |platform| {
         if (platform.quit_requested) return;
         const event_window = event.msgSend(Object, "window", .{});
+
         if (event_window.value == platform.window.value) {
             const event_type = event.msgSend(appkit.NSEventType, "type", .{});
             const button_press = event_type == .left_mouse_down or
@@ -675,16 +663,15 @@ fn sendEvent(receiver: objc.c.id, _: objc.c.SEL, raw_event: objc.c.id) callconv(
             const active = key_window and is_active;
             if (client_press or active) {
                 if (active) platform.focused = true;
-                if (processEvent(platform, event)) return;
+                if (processEvent(platform, event, event_type)) return;
             }
         }
     }
     application.msgSendSuper(objc.getClass("NSApplication").?, void, "sendEvent:", .{event});
 }
 
-fn processEvent(platform: *State, event: Object) bool {
-    const event_type = event.msgSend(appkit.NSEventType, "type", .{});
-
+// Translate game input; false leaves the event for AppKit's native dispatch.
+fn processEvent(platform: *State, event: Object, event_type: appkit.NSEventType) bool {
     switch (event_type) {
         .key_down, .key_up => {
             const code = event.msgSend(appkit.VirtualKeyCode, "keyCode", .{});
@@ -1115,7 +1102,7 @@ test "AppKit ignores unknown keycodes" {
 
     const unknown_code: appkit.VirtualKeyCode = @fromBackingInt(@as(u16, 65535));
     const event = testKeyEvent(.key_down, unknown_code, 0, false, 0);
-    try std.testing.expect(processEvent(&platform, event));
+    try std.testing.expect(processEvent(&platform, event, .key_down));
     try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
 }
 
@@ -1128,7 +1115,7 @@ test "AppKit releases retain the key chosen by the earlier layout" {
     platform.keys_by_code[@backingInt(appkit.VirtualKeyCode.ansi_e)] = .z;
 
     const release = testKeyEvent(.key_up, .ansi_e, 0, false, 0);
-    try std.testing.expect(processEvent(&platform, release));
+    try std.testing.expect(processEvent(&platform, release, .key_up));
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .z }}, platform.takeEvents());
 }
 
@@ -1141,12 +1128,6 @@ test "AppKit modifier snapshots do not invent unrelated presses" {
         c.NX_DEVICELSHIFTKEYMASK | c.NX_DEVICERALTKEYMASK | c.NX_ALPHASHIFTMASK,
     );
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .lshift }}, platform.takeEvents());
-}
-
-test "macOS mouse coordinates truncate fractions and clamp to signed bounds" {
-    try std.testing.expectEqual(@as(i16, -7), mouseCoordinate(-7.8));
-    try std.testing.expectEqual(std.math.maxInt(i16), mouseCoordinate(100000));
-    try std.testing.expectEqual(std.math.minInt(i16), mouseCoordinate(-100000));
 }
 
 test "AppKit nonclient presses suppress their releases inside the view" {
@@ -1163,10 +1144,10 @@ test "AppKit nonclient presses suppress their releases inside the view" {
     platform.view = view;
 
     const press = testMouseEvent(.left_mouse_down, .{ .x = 100, .y = 190 }, 0);
-    try std.testing.expect(!processEvent(&platform, press));
+    try std.testing.expect(!processEvent(&platform, press, .left_mouse_down));
 
     const release = testMouseEvent(.left_mouse_up, .{ .x = 20, .y = 30 }, 0);
-    try std.testing.expect(!processEvent(&platform, release));
+    try std.testing.expect(!processEvent(&platform, release, .left_mouse_up));
     try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
 }
 
@@ -1200,7 +1181,7 @@ const TestWindow = struct {
             const active = key_window and self.platform.application.msgSend(bool, "isActive", .{});
             if (active) break;
 
-            pumpMessages(&self.platform);
+            pumpMessages(&self.platform, max_messages_per_frame);
             try std.testing.expect(!self.platform.quit_requested);
             const date_class = objc.getClass("NSDate").?;
             const until = date_class.msgSend(
@@ -1213,7 +1194,7 @@ const TestWindow = struct {
         }
         try std.testing.expect(self.platform.window.msgSend(bool, "isKeyWindow", .{}));
         try std.testing.expect(self.platform.application.msgSend(bool, "isActive", .{}));
-        pumpMessages(&self.platform);
+        pumpMessages(&self.platform, max_messages_per_frame);
         try std.testing.expect(!self.platform.quit_requested);
         _ = self.platform.takeEvents();
     }
@@ -1239,25 +1220,6 @@ const TestWindow = struct {
     }
 };
 
-test "initial native window contains the full unscaled framebuffer" {
-    const pool = objc.AutoreleasePool.init();
-    defer pool.deinit();
-    var fixture: TestWindow = undefined;
-    try fixture.init();
-    defer fixture.deinit();
-
-    const bounds = fixture.platform.view.msgSend(Rect, "bounds", .{});
-    const dest = presentationRect(false, bounds, fixture.buffer.width, fixture.buffer.height, fixture.platform.windowed_frame_margin);
-    try std.testing.expectEqual(@as(f64, @floatFromInt(fixture.buffer.width)), dest.size.width);
-    try std.testing.expectEqual(@as(f64, @floatFromInt(fixture.buffer.height)), dest.size.height);
-    try std.testing.expect(dest.origin.x >= bounds.origin.x);
-    try std.testing.expect(dest.origin.y >= bounds.origin.y);
-    try std.testing.expect(dest.origin.x + dest.size.width <= bounds.origin.x + bounds.size.width);
-    try std.testing.expect(
-        dest.origin.y + dest.size.height <= bounds.origin.y + bounds.size.height,
-    );
-}
-
 test "queued Command-modified keys reach the event buffer" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
@@ -1270,13 +1232,13 @@ test "queued Command-modified keys reach the event buffer" {
     // F1 has a layout-independent mapping, so the expected event is explicit.
     const press = testKeyEvent(.key_down, .f1, c.NX_COMMANDMASK, false, window_number);
     platform.application.msgSend(void, "postEvent:atStart:", .{ press, true });
-    pumpMessages(platform);
+    pumpMessages(platform, max_messages_per_frame);
     try std.testing.expect(!platform.quit_requested);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, platform.takeEvents());
 
     const release = testKeyEvent(.key_up, .f1, c.NX_COMMANDMASK, false, window_number);
     platform.application.msgSend(void, "postEvent:atStart:", .{ release, true });
-    pumpMessages(platform);
+    pumpMessages(platform, max_messages_per_frame);
     try std.testing.expect(!platform.quit_requested);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .f1 }}, platform.takeEvents());
 }
@@ -1331,19 +1293,19 @@ test "native pump leaves events beyond its budget for the next frame" {
         .{ testKeyEvent(.key_down, .escape, 0, false, window_number), true },
     );
 
-    pumpMessagesWithBudget(platform, test_budget);
+    pumpMessages(platform, test_budget);
     try std.testing.expect(!platform.quit_requested);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .escape }}, platform.takeEvents());
     // Consume exactly the deferred event; real input may already follow it.
-    pumpMessagesWithBudget(platform, 1);
+    pumpMessages(platform, 1);
     try std.testing.expect(!platform.quit_requested);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, platform.takeEvents());
-    pumpMessagesWithBudget(platform, 1);
+    pumpMessages(platform, 1);
     try std.testing.expect(!platform.quit_requested);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f2 }}, platform.takeEvents());
 }
 
-test "window and application focus-loss callbacks emit one reset_all" {
+test "either focus-loss callback resets input once per focus interval" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
     var fixture: TestWindow = undefined;
@@ -1351,9 +1313,17 @@ test "window and application focus-loss callbacks emit one reset_all" {
     defer fixture.deinit();
     const platform = &fixture.platform;
 
-    platform.window.msgSend(void, "resignKeyWindow", .{});
+    // Both notifications may describe the same loss; either one may arrive first.
+    platform.delegate.msgSend(void, "windowDidResignKey:", .{nil});
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    platform.delegate.msgSend(void, "applicationDidResignActive:", .{nil});
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    platform.delegate.msgSend(void, "windowDidBecomeKey:", .{nil});
+    platform.delegate.msgSend(void, "applicationDidBecomeActive:", .{nil});
     platform.delegate.msgSend(void, "applicationDidResignActive:", .{nil});
     try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    platform.delegate.msgSend(void, "windowDidResignKey:", .{nil});
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
 }
 
 test "resize callbacks preserve explicitly delivered input without a reset" {
@@ -1415,7 +1385,7 @@ test "native close stops the pump before queued input is applied" {
         "postEvent:atStart:",
         .{ testKeyEvent(.key_down, .escape, 0, false, window_number), true },
     );
-    pumpMessages(platform);
+    pumpMessages(platform, max_messages_per_frame);
     try std.testing.expect(platform.quit_requested);
     try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
 }

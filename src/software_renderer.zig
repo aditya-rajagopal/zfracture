@@ -85,7 +85,7 @@ pub fn drawRectangle(
     }
 }
 
-test "rectangle_clipping" {
+test "offscreen rectangles clip without overwriting the framebuffer boundary" {
     const Case = struct {
         x: f32,
         y: f32,
@@ -118,6 +118,9 @@ test "rectangle_clipping" {
         .{ .x = 0, .y = -2, .width = 10, .height = 2 },
         .{ .x = 4, .y = 4, .width = 0, .height = 4 },
         .{ .x = 4, .y = 4, .width = 4, .height = -1 },
+        // Each operand fits i32, but their sum does not. Offscreen geometry must
+        // remain a no-op rather than overflow before clipping.
+        .{ .x = 1073741824, .y = 1073741824, .width = 1073741824, .height = 1073741824 },
     };
 
     for (cases) |case| {

@@ -119,7 +119,7 @@ fn assertWindow(self: *const Platform) void {
     std.debug.assert(self.window_live);
 }
 
-test "invalid framebuffer does not create a native window" {
+test "invalid framebuffer dimensions and storage are rejected" {
     var platform: Platform = .{};
     try platform.init();
     defer platform.deinit();

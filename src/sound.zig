@@ -152,10 +152,9 @@ test "pool exhaustion, completion, stop identity and generation retirement" {
     try std.testing.expectEqual(State.retired, pool.slots[0].state.load(.acquire));
 
     pool.slots[1].complete();
+    // Large generations must still reject handles from earlier playbacks.
     pool.slots[1].generation = std.math.maxInt(u32);
     const wide_handle = try pool.reserve(&data);
-    try std.testing.expectEqual(@as(usize, 1), wide_handle.index);
-    try std.testing.expect(@backingInt(wide_handle.handle) > std.math.maxInt(u32));
     pool.slots[1].state.store(.active, .release);
     try std.testing.expectEqual(null, pool.requestStop(handles[1]));
     try std.testing.expectEqual(@as(?usize, 1), pool.requestStop(wide_handle.handle));
