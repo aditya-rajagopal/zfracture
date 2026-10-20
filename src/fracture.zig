@@ -7,8 +7,7 @@ pub const win32 = @import("windows/win32.zig");
 pub const appkit = @import("macos/appkit.zig");
 pub const XAudio2 = @import("windows/xaudio2.zig");
 
-// pub const Platform = switch (builtin.target.os.tag) {
-// };
+pub const Platform = @import("platform.zig");
 
 const Types = @import("types.zig");
 pub const Color = Types.Color;

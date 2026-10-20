@@ -1,31 +1,23 @@
-// @TODO: Move most things into fracture.
 const std = @import("std");
 const windows = std.os.windows;
-const builtin = @import("builtin");
-
-const fr = @import("fracture");
-const Renderer = fr.Renderer;
-const KB = fr.KB;
-const MB = fr.MB;
-const GB = fr.GB;
-const win32 = fr.win32;
-const game = @import("game.zig");
-const common = @import("common.zig");
-const EngineState = common.EngineState;
-const Key = fr.event.Key;
-const Event = fr.event.Event;
+const Platform = @import("../platform.zig");
+const Renderer = @import("../software_renderer.zig");
+const win32 = @import("win32.zig");
+const event_types = @import("../event.zig");
+const Key = event_types.Key;
+const Event = event_types.Event;
+const MouseButton = event_types.MouseButton;
 const max_messages_per_frame = 4096;
-const MouseButton = fr.event.MouseButton;
 
-const Win32Platform = struct {
-    instance: windows.HINSTANCE,
-    window: ?windows.HWND,
-    device_context: windows.HDC,
-    window_placement: win32.WINDOWPLACEMENT,
+pub const State = struct {
+    instance: windows.HINSTANCE = undefined,
+    window: ?windows.HWND = null,
+    device_context: windows.HDC = undefined,
+    window_placement: win32.WINDOWPLACEMENT = undefined,
     fullscreen: bool = false,
     event_storage: [2][1024]Event = undefined,
     event_lists: [2]std.ArrayList(Event) = undefined,
-    pending_event_buffer: usize = 0,
+    pending_event_buffer: u1 = 0,
     focused: bool = false,
     quit_requested: bool = false,
     modal_depth: u32 = 0,
@@ -33,10 +25,61 @@ const Win32Platform = struct {
     owns_mouse_capture: bool = false,
     reset_frame_clock: bool = false,
 
+    back_buffer: *Renderer.FrameBuffer = undefined,
+
+    buffer_info: win32.BITMAPINFO = undefined,
+    windowed_frame_margin: u16 = 10,
+    cursor: ?windows.HCURSOR = null,
+    cursor_hidden: bool = true,
+
     const Self = @This();
 
+    pub fn init(self: *Self) InitError!void {
+        self.* = .{};
+        self.cursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse return error.FailedToLoadCursor;
+    }
+    pub fn deinit(_: *Self) void {}
+    pub fn beginFrame(_: *Self) void {}
+    pub fn endFrame(_: *Self) void {}
+
+    pub fn pollEvents(self: *Self) Platform.WindowStatus {
+        pumpMessages(self);
+        return self.takeWindowStatus();
+    }
+
+    fn takeWindowStatus(self: *Self) Platform.WindowStatus {
+        const active = self.modal_depth != 0;
+        var ended = false;
+        if (!active) {
+            ended = self.reset_frame_clock;
+            self.reset_frame_clock = false;
+        }
+        return .{
+            .quit_requested = self.quit_requested,
+            .native_interaction_active = active,
+            .interaction_ended = ended,
+        };
+    }
+
+    pub fn setCursorHidden(self: *Self, hidden: bool) void {
+        self.cursor_hidden = hidden;
+    }
+
+    pub fn present(self: *Self) void {
+        // Presentation dimensions must match the cached top-down bitmap header.
+        const buffer = self.back_buffer;
+        std.debug.assert(@as(i32, buffer.width) == self.buffer_info.bmiHeader.biWidth);
+        std.debug.assert(-@as(i32, buffer.height) == self.buffer_info.bmiHeader.biHeight);
+        const required_bytes = @as(usize, buffer.width) * buffer.height * Renderer.bytes_per_pixel;
+        std.debug.assert(buffer.data.len >= required_bytes);
+
+        var rect: win32.RECT = undefined;
+        if (!win32.GetClientRect(self.window, &rect).toBool()) return;
+        stretchBlitBits(self.device_context, 0, 0, rect.right - rect.left, rect.bottom - rect.top, 0, 0, self.back_buffer.width, self.back_buffer.height, self.back_buffer.data.ptr, &self.buffer_info, self.fullscreen, self.windowed_frame_margin);
+    }
+
     // The slice stays immutable until the next handoff. Native callbacks append to the other list.
-    fn takeEvents(self: *Self) []const Event {
+    pub fn takeEvents(self: *Self) []const Event {
         const ready = self.pending_event_buffer;
         const next = ready ^ 1;
         self.event_lists[next].clearRetainingCapacity();
@@ -45,12 +88,26 @@ const Win32Platform = struct {
     }
 
     // Initialize in place: GWLP_USERDATA retains this address until destruction.
-    fn createWindow(
-        platform_state: *Win32Platform,
-        window_title: [*:0]const u8,
-        window_width: i32,
-        window_height: i32,
-    ) WindowCreateError!void {
+    pub fn createWindow(platform_state: *State, config: Platform.WindowConfig) CreateWindowError!void {
+        const window_title = config.title.ptr;
+        const window_width = @as(i32, config.frame_buffer.width) + 2 * @as(i32, config.windowed_frame_margin);
+        const window_height = @as(i32, config.frame_buffer.height) + 2 * @as(i32, config.windowed_frame_margin);
+        platform_state.back_buffer = config.frame_buffer;
+        platform_state.windowed_frame_margin = config.windowed_frame_margin;
+        platform_state.buffer_info = std.mem.zeroes(win32.BITMAPINFO);
+        platform_state.buffer_info.bmiHeader = .{
+            .biSize = @sizeOf(win32.BITMAPINFOHEADER),
+            .biWidth = config.frame_buffer.width,
+            .biHeight = -@as(i32, config.frame_buffer.height),
+            .biPlanes = 1,
+            .biBitCount = 32,
+            .biCompression = win32.BI_RGB,
+            .biSizeImage = 0,
+            .biXPelsPerMeter = 0,
+            .biYPelsPerMeter = 0,
+            .biClrUsed = 0,
+            .biClrImportant = 0,
+        };
         const engine_name: [*:0]const u8 = "zfracture";
 
         platform_state.instance = win32.GetModuleHandleA(null) orelse
@@ -123,10 +180,15 @@ const Win32Platform = struct {
             );
             return error.FailedToCreateWindow;
         };
-        errdefer _ = win32.DestroyWindow(platform_state.window);
+        errdefer {
+            _ = win32.SetWindowLongPtrA(platform_state.window.?, win32.GWLP_USERDATA, 0);
+            _ = win32.DestroyWindow(platform_state.window);
+            platform_state.window = null;
+        }
 
         platform_state.device_context = win32.GetDC(platform_state.window) orelse
             return error.FailedToGetDeviceContext;
+        errdefer _ = win32.ReleaseDC(platform_state.window, platform_state.device_context);
         platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
         platform_state.fullscreen = false;
         platform_state.focused = false;
@@ -149,19 +211,20 @@ const Win32Platform = struct {
         }
     }
 
-    fn destroyWindow(self: *Win32Platform) void {
+    pub fn destroyWindow(self: *State) void {
         const window = self.window orelse return;
         _ = win32.SetWindowLongPtrA(window, win32.GWLP_USERDATA, 0);
+        _ = win32.ReleaseDC(window, self.device_context);
         self.window = null;
         _ = win32.DestroyWindow(window);
     }
 
-    fn showWindow(self: *Win32Platform) void {
+    pub fn showWindow(self: *State) void {
         const show_window_command_flags: u32 = win32.SW_SHOW;
         _ = win32.ShowWindow(self.window, @bitCast(show_window_command_flags));
     }
 
-    fn toggleFullscreen(self: *Self) void {
+    pub fn toggleFullscreen(self: *Self) void {
         const window_style = win32.GetWindowLongA(self.window, win32.GWL_STYLE);
         const WS_OVERLAPPEDWINDOW = @as(i32, @bitCast(win32.WS_OVERLAPPEDWINDOW));
 
@@ -226,368 +289,13 @@ const Win32Platform = struct {
     }
 };
 
-const WindowCreateError = error{
+pub const CreateWindowError = error{
     FailedToCreateWindow,
     FailedToGetModuleHandle,
     FailedToRegisterWindowClass,
     FailedToGetDeviceContext,
-    FailedToLoadCursor,
     FailedToSetWindowUserData,
-} || std.mem.Allocator.Error;
-
-/// Indirect calls let debug builds replace game code without restarting the engine.
-pub const DebugGameDLLApi = struct {
-    pub const InitFn = *const fn (engine: *EngineState) callconv(.c) ?*anyopaque;
-    pub const DeinitFn = *const fn (engine: *EngineState, game_state: *anyopaque) callconv(.c) void;
-    pub const UpdateAndRenderFn = *const fn (
-        engine: *EngineState,
-        game_state: *anyopaque,
-        events: [*]const Event,
-        event_count: usize,
-    ) callconv(.c) bool;
-
-    init: InitFn,
-    deinit: DeinitFn,
-    updateAndRender: UpdateAndRenderFn,
 };
-
-const DebugGame = switch (builtin.mode) {
-    .debug => struct {
-        instance: windows.HINSTANCE,
-        is_loaded: bool = false,
-        temp_index: u1 = 0,
-        time_stamp: i96 align(8),
-        game_api: DebugGameDLLApi,
-    },
-    else => void,
-};
-
-pub const AppState = struct {
-    engine: EngineState,
-    debug_game: DebugGame,
-};
-
-const dll_name = "./zig-out/bin/dynamic_game.dll";
-
-// TODO: Only have these in internal builds
-var DBG_cursor: ?windows.HCURSOR = null;
-var DBG_show_cursor: bool = false;
-
-// LEFTOFF: Implement WAV file loading and decoding. Complete audio system
-// TODO: We currently have 2 arenas. One is for permanent allocations which is the static lifetime
-// arena.
-// The ther is the transient arena which has the lifetime of a frame. We probably want more arenas
-// with potentially
-// different lifetimes such as a scene or game level arena. It is possible the renderer will need to
-// allocate stuff
-// when it is performing the rendering pass. We could also have fixed size arena pools for each
-// thread/task that can be
-// requested when one is run out.
-pub fn main(init: std.process.Init) void {
-    // TODO: Figure out the correct io for the platform
-    const io = init.io;
-    DBG_cursor = win32.LoadCursorA(null, win32.IDC_ARROW) orelse {
-        _ = win32.MessageBoxA(null, "Failed to load cursor", "Error", win32.MB_ICONEXCLAMATION);
-        return;
-    };
-
-    var running: bool = false;
-
-    // TODO: What do we do about the back buffer? This is a renderer specific thing
-    var buffer_info: win32.BITMAPINFO = undefined;
-
-    // TODO: We need to figure out if I want to use the debug allocator since we are using fixed buffer arenas
-    const allocator = std.heap.page_allocator;
-
-    // NOTE: We want to gaurantee that the game can run in a fixed amount of memory. We can bump this up
-    // dpeneding on if we ever see us running out of memory.
-    const permanenent_memory_size = MB(128);
-    const transient_memory_size = MB(128);
-    const total_game_memory_size = permanenent_memory_size + transient_memory_size;
-
-    // TODO: We may need more arenas depending on how the game goes.
-    // TODO: We can just use VirtualAlloc to allocate a large virtual address space and then map parts of it
-    // into the different arenas so they can potentially grow? Maybe we want this sometimes. Especially if we want
-    // to allocate new arenas when some run out.
-    // TODO: Create an arena allocator that we can use everywhere instead of passing the Allocator struct around
-    // since we only need alloc/push/pop and not free/realloc and stuff. We can create a allocator if we really need it.
-    // out of this one.
-    const game_memory: []u8 = allocator.alloc(u8, total_game_memory_size) catch {
-        _ = win32.MessageBoxA(null, "Failed to allocate game memory", "Error", win32.MB_ICONEXCLAMATION);
-        return;
-    };
-
-    var permanent_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[0..permanenent_memory_size]);
-    const permanent_allocator = permanent_fixed_buffer.allocator();
-
-    var transient_fixed_buffer = std.heap.FixedBufferAllocator.init(game_memory[permanenent_memory_size .. permanenent_memory_size + transient_memory_size]);
-    const transient_allocator = transient_fixed_buffer.allocator();
-
-    const app_state: *AppState = permanent_allocator.create(AppState) catch {
-        _ = win32.MessageBoxA(null, "Failed to allocate engine state", "Error", win32.MB_ICONEXCLAMATION);
-        return;
-    };
-
-    // TODO: Figure out why the engine pointer does not showup in raddebugger when allocated directly vs
-    // making a new type AppState and then allocating it.
-    const engine_state: *EngineState = &app_state.engine;
-    engine_state.io = io;
-
-    engine_state.sound.init() catch |err| {
-        var buffer: [1024]u8 = undefined;
-        const msg = std.mem.printSentinel(&buffer, "Failed to initialize sound system: {s}", .{@errorName(err)}, 0) catch unreachable;
-        _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
-        return;
-    };
-
-    engine_state.permanent_allocator = permanent_allocator;
-    engine_state.transient_allocator = transient_allocator;
-
-    // NOTE: We allocate a large enough back buffer such that we do not need to reallocate it. If
-    // the window
-    // size becomes larger than this we will just throw an error and disallow it. Especially if we
-    // are rendering to a
-    // smaller back buffer and stretching it to fit the window.
-    // TODO: We need to make this configurable globally by the game.
-    // TODO: We might lower this if we want a smaller memory footprint
-    const max_window_width = 4096;
-    const max_window_height = 2048;
-    const window_buffer_max_size = max_window_width * max_window_height * Renderer.bytes_per_pixel;
-
-    // TODO: Move to the renderer
-    engine_state.renderer.back_buffer.width = 1280;
-    engine_state.renderer.back_buffer.height = 720;
-    engine_state.renderer.back_buffer.data = permanent_allocator.alignedAlloc(
-        u8,
-        .fromByteUnits(4096),
-        window_buffer_max_size,
-    ) catch {
-        _ = win32.MessageBoxA(
-            null,
-            "Out of memory for back buffer allocation",
-            "Error",
-            win32.MB_ICONEXCLAMATION,
-        );
-        return;
-    };
-    engine_state.renderer.clearScreen(0, 0, 0);
-
-    buffer_info = .{
-        .bmiHeader = .{
-            .biSize = @sizeOf(win32.BITMAPINFOHEADER),
-            .biWidth = @intCast(engine_state.renderer.back_buffer.width),
-            .biHeight = -@as(i32, @intCast(engine_state.renderer.back_buffer.height)),
-            .biPlanes = 1,
-            .biBitCount = 32,
-            .biCompression = win32.BI_RGB,
-            .biSizeImage = 0,
-            .biXPelsPerMeter = 0,
-            .biYPelsPerMeter = 0,
-            .biClrUsed = 0,
-            .biClrImportant = 0,
-        },
-        .bmiColors = .{
-            .{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 },
-        },
-    };
-
-    var platform_state: Win32Platform = undefined;
-    const buffer_width: i32 = engine_state.renderer.back_buffer.width;
-    const initial_window_width = buffer_width + 2 * common.windowed_frame_margin;
-    const buffer_height: i32 = engine_state.renderer.back_buffer.height;
-    const initial_window_height = buffer_height + 2 * common.windowed_frame_margin;
-
-    platform_state.createWindow(
-        "Testbed",
-        initial_window_width,
-        initial_window_height,
-    ) catch |err| {
-        var buffer: [1024]u8 = undefined;
-        const msg = std.mem.printSentinel(
-            &buffer,
-            "Failed to initialize window: {s}",
-            .{@errorName(err)},
-            0,
-        ) catch unreachable;
-        _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
-        return;
-    };
-
-    defer platform_state.destroyWindow();
-    platform_state.showWindow();
-
-    switch (builtin.mode) {
-        .debug => {
-            app_state.debug_game.is_loaded = false;
-            app_state.debug_game.temp_index = 0;
-            app_state.debug_game.time_stamp = 0;
-            const loaded = reloadLibrary(io, &app_state.debug_game) catch |err| {
-                var buffer: [1024]u8 = undefined;
-                const msg = std.mem.printSentinel(
-                    &buffer,
-                    "Failed to reload dynamic game library: {s}",
-                    .{@errorName(err)},
-                    0,
-                ) catch unreachable;
-                _ = win32.MessageBoxA(null, msg.ptr, "Error", win32.MB_ICONEXCLAMATION);
-                return;
-            };
-            if (!loaded) {
-                _ = win32.MessageBoxA(
-                    null,
-                    "Failed to reload dynamic game library",
-                    "Error",
-                    win32.MB_ICONEXCLAMATION,
-                );
-                return;
-            }
-        },
-        else => {},
-    }
-
-    const game_state: *anyopaque = switch (builtin.mode) {
-        .debug => app_state.debug_game.game_api.init(engine_state) orelse {
-            _ = win32.MessageBoxA(
-                null,
-                "Failed to initialize game",
-                "Error",
-                win32.MB_ICONEXCLAMATION,
-            );
-            return;
-        },
-        else => game.init(engine_state),
-    };
-
-    running = true;
-
-    var host_controls: common.HostControls = .{};
-    var frame_timestamp = std.Io.Clock.awake.now(io);
-    const s_per_ns: f32 = 1.0 / @as(f32, std.time.ns_per_s);
-
-    var dll_timestamp = frame_timestamp;
-
-    while (running) {
-        const frame_start = std.Io.Clock.awake.now(io);
-        defer {
-            if (running and !platform_state.quit_requested) {
-                fr.paceFrame(io, frame_start, common.frame_duration) catch {
-                    running = false;
-                };
-            }
-        }
-
-        defer transient_fixed_buffer.reset();
-
-        if (!pumpMessages(&platform_state)) {
-            running = false;
-            break;
-        }
-        engine_state.sound.update();
-
-        // The pump can spend an arbitrary amount of time in native window tracking.
-        const now = std.Io.Clock.awake.now(io);
-        if (platform_state.modal_depth != 0) {
-            frame_timestamp = now;
-            continue;
-        }
-
-        if (platform_state.reset_frame_clock) {
-            engine_state.delta_time = 0;
-        } else {
-            const elapsed = frame_timestamp.durationTo(now);
-            const elapsed_ns: f32 = @floatFromInt(elapsed.toNanoseconds());
-            engine_state.delta_time = elapsed_ns * s_per_ns;
-        }
-        platform_state.reset_frame_clock = false;
-        frame_timestamp = now;
-
-        const events = platform_state.takeEvents();
-        host_controls.consumeFrame(events);
-        running = switch (builtin.mode) {
-            .debug => app_state.debug_game.game_api.updateAndRender(engine_state, game_state, events.ptr, events.len),
-            else => game.updateAndRender(engine_state, game_state, events),
-        };
-
-        // TODO: this should be done in the renderer
-        var rect: win32.RECT = undefined;
-        _ = win32.GetClientRect(platform_state.window, &rect);
-        const window_width = rect.right - rect.left;
-        const window_height = rect.bottom - rect.top;
-
-        stretchBlitBits(
-            platform_state.device_context,
-            0,
-            0,
-            window_width,
-            window_height,
-            0,
-            0,
-            engine_state.renderer.back_buffer.width,
-            engine_state.renderer.back_buffer.height,
-            engine_state.renderer.back_buffer.data.ptr,
-            &buffer_info,
-            platform_state.fullscreen,
-        );
-
-        const control = host_controls.down.ctrl or host_controls.pressed_this_frame.ctrl;
-        if (host_controls.pressed_this_frame.@"3" and !control) {
-            DBG_show_cursor = !DBG_show_cursor;
-        }
-
-        // @HACK:
-        // @TODO: We need allow the game to decide when it wants to toggle full screen
-        if (host_controls.down.alt and host_controls.pressed_this_frame.enter) {
-            std.log.info("Toggle fullscreen", .{});
-            platform_state.toggleFullscreen();
-        }
-
-        // TODO: Reload library every X seconds instead of on every frame
-        // TODO: Build in a fail-safe stub functions for when the reload fails so the game can still
-        // run
-        // without crashing and we can try to recover.
-        switch (builtin.mode) {
-            .debug => {
-                // Replace this with rdtsc maybe? Since this is for internal builds only
-                if (dll_timestamp.durationTo(now).toNanoseconds() > std.time.ns_per_s / 30) {
-                    dll_timestamp = now;
-                    _ = reloadLibrary(io, &app_state.debug_game) catch |err| {
-                        std.log.err(
-                            "Failed to reload dynamic game library: {s}",
-                            .{@errorName(err)},
-                        );
-                    };
-                }
-            },
-            else => {},
-        }
-    }
-
-    switch (builtin.mode) {
-        .debug => {
-            app_state.debug_game.game_api.deinit(engine_state, game_state);
-            _ = win32.FreeLibrary(app_state.debug_game.instance);
-        },
-        else => game.deinit(engine_state, game_state),
-    }
-
-    platform_state.destroyWindow();
-
-    // NOTE: Destroy the sound system after the window is destroyed for some reason there seeems to
-    // be an exception thrown
-    // when destroying the window after the sound system has been deinitialized. This is probably
-    // some intercation with
-    // the COM being deinitialized before the window is destroyed?
-    // TODO: We need to figure out why this is happening and if this is the intended behavior.
-    engine_state.sound.deinit();
-
-    // NOTE: Technically this free is not really needed as the OS will clean up after the
-    // application exits.
-    // But it is nice to do it anyway.
-    allocator.free(game_memory);
-
-    // const alloc_result = debug_allocator.deinit();
-    // if (alloc_result != .ok) return error.MemoryLeak;
-}
 
 // @TODO: Thsis needs to be moved to the renderer
 inline fn stretchBlitBits(
@@ -603,6 +311,7 @@ inline fn stretchBlitBits(
     frame_data: [*]const u8,
     frame_buffer_info: *const win32.BITMAPINFO,
     fullscreen: bool,
+    margin: u16,
 ) void {
     // TODO: We might want to blit to a zone that maintains the aspect ration of the rendered image.
     // NOTE: When we are in full screen mode we want to blit to the entire screen. But
@@ -625,8 +334,8 @@ inline fn stretchBlitBits(
             @bitCast(win32.SRCCOPY),
         );
     } else blk: {
-        const top: i32 = common.windowed_frame_margin;
-        const left: i32 = common.windowed_frame_margin;
+        const top: i32 = margin;
+        const left: i32 = margin;
 
         _ = win32.PatBlt(device_context, 0, 0, dest_width, top, @bitCast(win32.BLACKNESS));
         _ = win32.PatBlt(device_context, 0, top, left, src_height, @bitCast(win32.BLACKNESS));
@@ -669,16 +378,19 @@ inline fn stretchBlitBits(
     }
 }
 
-fn pumpMessages(platform: *Win32Platform) bool {
-    if (platform.quit_requested) return false;
+fn pumpMessages(platform: *State) void {
+    if (platform.quit_requested) return;
     var msg: win32.MSG = undefined;
     for (0..max_messages_per_frame) |_| {
         if (!win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE).toBool()) break;
-        if (platform.quit_requested or msg.message == win32.WM_QUIT) return false;
+        if (platform.quit_requested) return;
+        if (msg.message == win32.WM_QUIT) {
+            platform.quit_requested = true;
+            return;
+        }
         _ = win32.DispatchMessageA(&msg);
-        if (platform.quit_requested) return false;
+        if (platform.quit_requested) return;
     }
-    return !platform.quit_requested;
 }
 
 fn windowProc(
@@ -689,7 +401,7 @@ fn windowProc(
 ) callconv(.winapi) win32.LRESULT {
     const user_data: usize = @bitCast(win32.GetWindowLongPtrA(window, win32.GWLP_USERDATA));
     // Creation/teardown callbacks can arrive without an attached platform.
-    const platform: *Win32Platform = @as(?*Win32Platform, @ptrFromInt(user_data)) orelse
+    const platform: *State = @as(?*State, @ptrFromInt(user_data)) orelse
         return win32.DefWindowProcA(window, message, w_param, l_param);
 
     switch (message) {
@@ -842,8 +554,8 @@ fn windowProc(
         },
         win32.WM_ERASEBKGND => return 1,
         win32.WM_DESTROY, win32.WM_CLOSE => {
+            // The application decides whether to exit or create another window.
             platform.quit_requested = true;
-            win32.PostQuitMessage(0);
             return 0;
         },
         win32.WM_NCDESTROY => {
@@ -851,79 +563,188 @@ fn windowProc(
             platform.window = null;
         },
         win32.WM_SETCURSOR => {
-            if (DBG_show_cursor) {
-                _ = win32.SetCursor(DBG_cursor);
+            if (!platform.cursor_hidden) {
+                _ = win32.SetCursor(platform.cursor);
             } else {
                 _ = win32.SetCursor(null);
             }
             return 0;
         },
-        // TODO: We might not want to resize the back buffer every time the window is resized.
-        // We might want the backbuffer to stay at a fixed resolution and just rely on stretchDIBits
-        // to scale it.
-        // We could figure out a way to keep the aspect ration the same, but that might be tricky.
-        // win32.WM_SIZE => {
-        // var rect: win32.RECT = undefined;
-        // _ = win32.GetClientRect(app_state.window, &rect);
-        // app_state.back_buffer.width = @intCast(rect.right - rect.left);
-        // app_state.back_buffer.height = @intCast(rect.bottom - rect.top);
-        //
-        // app_state.back_buffer.info.bmiHeader.biWidth = @intCast(app_state.back_buffer.width);
-        // app_state.back_buffer.info.bmiHeader.biHeight = -@as(i32,
-        // @intCast(app_state.back_buffer.height));
-        //
-        // const bytes_per_pixel: usize = 4;
-        // const new_bitmap_size: usize = @as(usize, app_state.back_buffer.width) * @as(usize,
-        // app_state.back_buffer.height) * bytes_per_pixel;
-        // app_state.back_buffer.data = app_state.allocator.realloc(app_state.back_buffer.data,
-        // new_bitmap_size) catch unreachable;
-        // },
-
         else => {},
     }
 
     return win32.DefWindowProcA(window, message, w_param, l_param);
 }
 
-fn reloadLibrary(io: std.Io, debug_game: *DebugGame) !bool {
-    const stats = try std.Io.Dir.cwd().statFile(io, dll_name, .{});
-    if (debug_game.is_loaded and debug_game.time_stamp == stats.mtime.nanoseconds) {
-        return false;
+const TestWindow = struct {
+    platform: State,
+    buffer: Renderer.FrameBuffer,
+    pixels: [320 * 180 * 4]u8 align(4096),
+
+    fn init(self: *TestWindow) !void {
+        self.buffer = .{ .width = 320, .height = 180, .data = &self.pixels };
+        try self.platform.init();
+        errdefer self.platform.deinit();
+        try self.platform.createWindow(.{ .title = "Fracture event test", .frame_buffer = &self.buffer });
+        self.platform.focused = true;
     }
 
-    // Keep the current DLL loaded until its replacement and all symbols are ready.
-    const next_index = debug_game.temp_index ^ 1;
-    const temp_names = [_][:0]const u8{ dll_name ++ "_tmp0", dll_name ++ "_tmp1" };
-    const new_name = temp_names[next_index];
-
-    if (!win32.CopyFileA(dll_name.ptr, new_name.ptr, .FALSE).toBool()) {
-        return error.FailedToCopyFile;
+    fn deinit(self: *TestWindow) void {
+        defer self.platform.deinit();
+        self.platform.destroyWindow();
+        var message: win32.MSG = undefined;
+        for (0..max_messages_per_frame) |_| {
+            if (!win32.PeekMessageA(&message, null, 0, 0, win32.PM_REMOVE).toBool()) break;
+        }
     }
+};
 
-    const new_instance = win32.LoadLibraryA(new_name.ptr) orelse return error.FailedToLoadLibrary;
-    errdefer _ = win32.FreeLibrary(new_instance);
+test "WndProc records outside the pump exactly once" {
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const window = platform.window.?;
+    _ = windowProc(window, win32.WM_KEYDOWN, @backingInt(Key.space), 0);
+    const first = platform.takeEvents();
+    _ = windowProc(window, win32.WM_KEYUP, @backingInt(Key.space), 0);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .space }}, first);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .space }}, platform.takeEvents());
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+}
 
-    const init_address = win32.GetProcAddress(new_instance, "init") orelse
-        return error.FailedToLookupInitFn;
-    const init_fn: DebugGameDLLApi.InitFn = @ptrCast(init_address);
-    const deinit_address = win32.GetProcAddress(new_instance, "deinit") orelse
-        return error.FailedToLookupDeinitFn;
-    const deinit_fn: DebugGameDLLApi.DeinitFn = @ptrCast(deinit_address);
-    const update_address = win32.GetProcAddress(new_instance, "updateAndRender") orelse
-        return error.FailedToLookupUpdateAndRenderFn;
-    const update_and_render: DebugGameDLLApi.UpdateAndRenderFn = @ptrCast(update_address);
+test "closing a window does not quit a recreated window" {
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    _ = windowProc(platform.window.?, win32.WM_CLOSE, 0, 0);
+    try std.testing.expect(platform.pollEvents().quit_requested);
+    platform.destroyWindow();
+    try platform.createWindow(.{ .title = "Recreated window", .frame_buffer = &fixture.buffer });
+    try std.testing.expect(!platform.pollEvents().quit_requested);
+    // A real thread quit still stops this window and remains latched.
+    win32.PostQuitMessage(0);
+    try std.testing.expect(platform.pollEvents().quit_requested);
+    try std.testing.expect(platform.pollEvents().quit_requested);
+}
 
-    if (debug_game.is_loaded) {
-        _ = win32.FreeLibrary(debug_game.instance);
+test "nested modal callbacks reset once and resume only after the outer exit" {
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const window = platform.window.?;
+    // Injected callbacks test our nesting policy, not OS input delivery in a modal loop.
+    _ = windowProc(window, win32.WM_ENTERSIZEMOVE, 0, 0);
+    _ = windowProc(window, win32.WM_ENTERMENULOOP, 0, 0);
+    _ = windowProc(window, win32.WM_KEYDOWN, @backingInt(Key.f1), 0);
+    _ = windowProc(window, win32.WM_EXITMENULOOP, 0, 0);
+    try std.testing.expect(platform.modal_depth != 0);
+    try std.testing.expect(!platform.reset_frame_clock);
+    _ = windowProc(window, win32.WM_EXITSIZEMOVE, 0, 0);
+    try std.testing.expectEqual(@as(u32, 0), platform.modal_depth);
+    try std.testing.expectEqualDeep(&[_]Event{ .reset_keyboard, .{ .key_pressed = .f1 } }, platform.takeEvents());
+    try std.testing.expect(platform.reset_frame_clock);
+    // Do not consume the prior end while another native interaction is active.
+    _ = windowProc(window, win32.WM_ENTERSIZEMOVE, 0, 0);
+    const active = platform.takeWindowStatus();
+    try std.testing.expect(active.native_interaction_active);
+    try std.testing.expect(!active.interaction_ended);
+    try std.testing.expect(platform.reset_frame_clock);
+    _ = windowProc(window, win32.WM_EXITSIZEMOVE, 0, 0);
+    const ended = platform.takeWindowStatus();
+    try std.testing.expect(!ended.native_interaction_active);
+    try std.testing.expect(ended.interaction_ended);
+    try std.testing.expect(!platform.takeWindowStatus().interaction_ended);
+}
+
+test "focus loss emits one reset_all" {
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const window = platform.window.?;
+    _ = windowProc(window, win32.WM_KILLFOCUS, 0, 0);
+    _ = windowProc(window, win32.WM_ACTIVATEAPP, 0, 0);
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    _ = windowProc(window, win32.WM_SETFOCUS, 0, 0);
+    _ = windowProc(window, win32.WM_KILLFOCUS, 0, 0);
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+}
+
+test "capture release distinguishes completion from cancellation" {
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const window = platform.window.?;
+    _ = windowProc(window, win32.WM_LBUTTONDOWN, 0, 0);
+    _ = windowProc(window, win32.WM_RBUTTONDOWN, 0, 0);
+    _ = platform.takeEvents();
+    _ = windowProc(window, win32.WM_LBUTTONUP, 0, 0);
+    try std.testing.expectEqual(window, win32.GetCapture().?);
+    _ = windowProc(window, win32.WM_RBUTTONUP, 0, 0);
+    try std.testing.expect(win32.GetCapture() != window);
+    const released = platform.takeEvents();
+    try std.testing.expectEqual(@as(usize, 2), released.len);
+    try std.testing.expectEqual(MouseButton.left, released[0].mouse_released.button);
+    try std.testing.expectEqual(MouseButton.right, released[1].mouse_released.button);
+    _ = windowProc(window, win32.WM_LBUTTONDOWN, 0, 0);
+    _ = platform.takeEvents();
+    _ = win32.ReleaseCapture(); // Simulates unexpected loss while a client button is still held.
+    try std.testing.expectEqualDeep(&[_]Event{.reset_mouse}, platform.takeEvents());
+    _ = windowProc(window, win32.WM_CAPTURECHANGED, 0, 0);
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    _ = windowProc(window, win32.WM_LBUTTONDOWN, 0, 0);
+    _ = platform.takeEvents();
+    _ = windowProc(window, win32.WM_KILLFOCUS, 0, 0);
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+}
+
+pub const InitError = error{FailedToLoadCursor};
+pub fn processId() u32 {
+    return std.os.windows.GetCurrentProcessId();
+}
+
+pub const DynamicLibrary = struct {
+    handle: windows.HINSTANCE,
+    pub fn open(path: [:0]const u8) error{FailedToLoadLibrary}!DynamicLibrary {
+        var path_buffer: [windows.PATH_MAX_WIDE + 1]u16 = undefined;
+        const wide_path = try libraryPathW(&path_buffer, path);
+        const handle = win32.LoadLibraryW(wide_path.ptr) orelse return error.FailedToLoadLibrary;
+        return .{ .handle = handle };
     }
+    pub fn lookup(self: *DynamicLibrary, comptime T: type, name: [:0]const u8) ?T {
+        const address = win32.GetProcAddress(self.handle, name.ptr) orelse return null;
+        return @ptrCast(address);
+    }
+    pub fn close(self: *DynamicLibrary) void {
+        _ = win32.FreeLibrary(self.handle);
+        self.* = undefined;
+    }
+};
 
-    debug_game.instance = new_instance;
-    debug_game.game_api.init = init_fn;
-    debug_game.game_api.deinit = deinit_fn;
-    debug_game.game_api.updateAndRender = update_and_render;
-    debug_game.is_loaded = true;
-    debug_game.temp_index = next_index;
-    debug_game.time_stamp = stats.mtime.nanoseconds;
+// Windows file APIs use WTF-8 at the Zig boundary and UTF-16 at the OS boundary.
+fn libraryPathW(buffer: []u16, path: [:0]const u8) error{FailedToLoadLibrary}![:0]u16 {
+    const length = std.unicode.calcWtf16LeLen(path) catch return error.FailedToLoadLibrary;
+    if (length >= buffer.len) return error.FailedToLoadLibrary;
+    const written = std.unicode.wtf8ToWtf16Le(buffer[0..length], path) catch return error.FailedToLoadLibrary;
+    std.debug.assert(written == length);
+    buffer[length] = 0;
+    return buffer[0..length :0];
+}
 
-    return true;
+test "Windows library paths preserve Unicode and bound UTF-16 storage" {
+    var buffer: [64]u16 = undefined;
+    const path = try libraryPathW(&buffer, "C:\\d\xc3\xa9v\\\xf0\x9f\x8e\xae.dll");
+    const expected = [_]u16{ 'C', ':', '\\', 'd', 0xe9, 'v', '\\', 0xd83c, 0xdfae, '.', 'd', 'l', 'l' };
+    try std.testing.expectEqualSlices(u16, &expected, path);
+    try std.testing.expectEqual(@as(u16, 0), path.ptr[path.len]);
+    const surrogate = try libraryPathW(&buffer, "\xed\xa0\x80");
+    try std.testing.expectEqualSlices(u16, &.{0xd800}, surrogate);
+    var exact: [2]u16 = undefined;
+    try std.testing.expectEqualSlices(u16, &.{0xe9}, try libraryPathW(&exact, "\xc3\xa9"));
+    try std.testing.expectError(error.FailedToLoadLibrary, libraryPathW(exact[0..1], "\xc3\xa9"));
+    try std.testing.expectError(error.FailedToLoadLibrary, libraryPathW(&buffer, "\xff"));
 }

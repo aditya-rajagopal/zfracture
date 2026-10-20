@@ -1,20 +1,14 @@
-///! Keep this entrypoint parallel to entrypoint_win32.zig until the platform boundaries settle.
 const std = @import("std");
-const builtin = @import("builtin");
 const objc = @import("objc");
 const c = @import("macos-c");
-const options = @import("build_options");
-
-const fr = @import("fracture");
-const appkit = fr.appkit;
-const game = @import("game.zig");
-const common = @import("common.zig");
-const EngineState = common.EngineState;
-const Renderer = fr.Renderer;
-const Key = fr.event.Key;
-const Event = fr.event.Event;
+const Platform = @import("../platform.zig");
+const appkit = @import("appkit.zig");
+const Renderer = @import("../software_renderer.zig");
+const event_types = @import("../event.zig");
+const Key = event_types.Key;
+const Event = event_types.Event;
+const MouseButton = event_types.MouseButton;
 const max_messages_per_frame = 4096;
-const MouseButton = fr.event.MouseButton;
 const Object = objc.Object;
 const Rect = c.CGRect;
 const Point = c.CGPoint;
@@ -29,16 +23,19 @@ const nil: objc.c.id = null;
 
 const platform_ivar = "_fracturePlatform";
 
-const MacOSPlatform = struct {
-    application: Object,
-    window: Object,
-    view: Object,
-    delegate: Object,
-    bitmap_context: c.CGContextRef,
+pub const State = struct {
+    application: Object = undefined,
+    window: Object = undefined,
+    view: Object = undefined,
+    delegate: Object = undefined,
+    bitmap_context: c.CGContextRef = undefined,
     event_storage: [2][1024]Event = undefined,
     event_lists: [2]std.ArrayList(Event) = undefined,
-    pending_event_buffer: usize = 0,
-    back_buffer: *Renderer.FrameBuffer,
+    pending_event_buffer: u1 = 0,
+    back_buffer: *Renderer.FrameBuffer = undefined,
+    // NOTE(adi): We store a snapshot of the framebuffer that was bound when the CGBitmapContext was created.
+    // If the back buffer changes we need to reflect that in the bound_frame_buffer.
+    bound_frame_buffer: Renderer.FrameBuffer = undefined,
     window_placement: Rect = std.mem.zeroes(Rect),
     presentation_options: appkit.NSApplicationPresentationOptions = .{},
     fullscreen: bool = false,
@@ -47,16 +44,69 @@ const MacOSPlatform = struct {
     focused: bool = false,
     moving_window: bool = false,
     reset_frame_clock: bool = false,
-    debug_show_cursor: bool = false,
+    cursor_requested_hidden: bool = true,
     cursor_hidden: bool = false,
     native_mouse_buttons: [5]bool = @splat(false),
     client_mouse_buttons: [5]bool = @splat(false),
     keys_by_code: [128]?Key = @splat(null),
 
+    outer_pool: ?*objc.AutoreleasePool = null,
+    frame_pool: ?*objc.AutoreleasePool = null,
+    windowed_frame_margin: u16 = 10,
+
     const Self = @This();
 
+    pub fn init(self: *Self) InitError!void {
+        std.debug.assert(objc.getClass("NSThread").?.msgSend(bool, "isMainThread", .{}));
+        self.* = .{};
+        self.outer_pool = objc.AutoreleasePool.init();
+    }
+
+    pub fn deinit(self: *Self) void {
+        std.debug.assert(self.frame_pool == null);
+        self.outer_pool.?.deinit();
+        self.outer_pool = null;
+    }
+
+    pub fn beginFrame(self: *Self) void {
+        std.debug.assert(self.outer_pool != null);
+        std.debug.assert(self.frame_pool == null);
+        self.frame_pool = objc.AutoreleasePool.init();
+    }
+
+    pub fn endFrame(self: *Self) void {
+        std.debug.assert(self.outer_pool != null);
+        self.frame_pool.?.deinit();
+        self.frame_pool = null;
+    }
+
+    pub fn pollEvents(self: *Self) Platform.WindowStatus {
+        pumpMessages(self);
+        self.updateCursor();
+        return self.takeWindowStatus();
+    }
+
+    fn takeWindowStatus(self: *Self) Platform.WindowStatus {
+        const active = self.tracking_window;
+        var ended = false;
+        if (!active) {
+            ended = self.reset_frame_clock;
+            self.reset_frame_clock = false;
+        }
+        return .{
+            .quit_requested = self.quit_requested,
+            .native_interaction_active = active,
+            .interaction_ended = ended,
+        };
+    }
+
+    pub fn setCursorHidden(self: *Self, hidden: bool) void {
+        self.cursor_requested_hidden = hidden;
+        self.updateCursor();
+    }
+
     // The slice stays immutable until the next handoff. Native callbacks append to the other list.
-    fn takeEvents(self: *Self) []const Event {
+    pub fn takeEvents(self: *Self) []const Event {
         const ready = self.pending_event_buffer;
         const next = ready ^ 1;
         self.event_lists[next].clearRetainingCapacity();
@@ -65,11 +115,9 @@ const MacOSPlatform = struct {
     }
 
     // Initialize in place: the view and delegate borrow this address until teardown.
-    fn createWindow(
-        self: *Self,
-        title: [:0]const u8,
-        back_buffer: *Renderer.FrameBuffer,
-    ) !void {
+    pub fn createWindow(self: *Self, config: Platform.WindowConfig) CreateWindowError!void {
+        const title = config.title;
+        const back_buffer = config.frame_buffer;
         try registerClasses();
         const application_class = objc.getClass("FractureApplication").?;
         const application = application_class.msgSend(Object, "sharedApplication", .{});
@@ -90,9 +138,9 @@ const MacOSPlatform = struct {
             if (!activated) return error.FailedToActivateApplication;
         }
         const buffer_width: f64 = @floatFromInt(back_buffer.width);
-        const window_width = buffer_width + 2 * common.windowed_frame_margin;
+        const window_width = buffer_width + 2 * @as(f64, @floatFromInt(config.windowed_frame_margin));
         const buffer_height: f64 = @floatFromInt(back_buffer.height);
-        const window_height = buffer_height + 2 * common.windowed_frame_margin;
+        const window_height = buffer_height + 2 * @as(f64, @floatFromInt(config.windowed_frame_margin));
         const frame = makeRect(0, 0, window_width, window_height);
 
         const window_allocated = objc.getClass("FractureWindow").?.msgSend(Object, "alloc", .{});
@@ -149,7 +197,7 @@ const MacOSPlatform = struct {
             window.msgSend(void, "setDelegate:", .{nil});
             application.msgSend(void, "setDelegate:", .{nil});
         }
-        installMenu(application);
+        installMenu(application, title);
 
         const color_space = c.CGColorSpaceCreateWithName(c.kCGColorSpaceSRGB) orelse
             return error.FailedToCreateColorSpace;
@@ -171,6 +219,10 @@ const MacOSPlatform = struct {
             .delegate = delegate,
             .bitmap_context = bitmap_context,
             .back_buffer = back_buffer,
+            .bound_frame_buffer = back_buffer.*,
+            .outer_pool = self.outer_pool,
+            .frame_pool = self.frame_pool,
+            .windowed_frame_margin = config.windowed_frame_margin,
         };
 
         for (&self.event_lists, &self.event_storage) |*list, *storage| {
@@ -185,19 +237,19 @@ const MacOSPlatform = struct {
         application.msgSend(void, "finishLaunching", .{});
     }
 
-    fn showWindow(self: *Self) void {
+    pub fn showWindow(self: *Self) void {
         self.window.msgSend(void, "makeKeyAndOrderFront:", .{nil});
         self.application.msgSend(void, "activateIgnoringOtherApps:", .{true});
     }
 
-    fn destroyWindow(self: *Self) void {
+    pub fn destroyWindow(self: *Self) void {
         // AppKit may retain these objects or call them while closing the window.
         // Detach before any native teardown can reenter callbacks.
         _ = objc.c.object_setInstanceVariable(self.application.value, platform_ivar, null);
         _ = objc.c.object_setInstanceVariable(self.view.value, platform_ivar, null);
         _ = objc.c.object_setInstanceVariable(self.delegate.value, platform_ivar, null);
 
-        self.setCursorHidden(false);
+        self.applyCursorHidden(false);
         if (self.fullscreen) {
             self.application.msgSend(
                 void,
@@ -218,7 +270,7 @@ const MacOSPlatform = struct {
         c.CGContextRelease(self.bitmap_context);
     }
 
-    fn toggleFullscreen(self: *Self) void {
+    pub fn toggleFullscreen(self: *Self) void {
         if (!self.fullscreen) {
             const screen = self.window.msgSend(Object, "screen", .{});
             if (screen.value == null) return;
@@ -265,7 +317,7 @@ const MacOSPlatform = struct {
         _ = self.window.msgSend(bool, "makeFirstResponder:", .{self.view});
     }
 
-    fn present(self: *Self) void {
+    pub fn present(self: *Self) void {
         if (self.window.msgSend(bool, "isMiniaturized", .{})) return;
 
         self.view.msgSend(void, "setNeedsDisplay:", .{true});
@@ -275,7 +327,7 @@ const MacOSPlatform = struct {
 
     fn beginWindowTracking(self: *Self) void {
         self.tracking_window = true;
-        self.setCursorHidden(false);
+        self.applyCursorHidden(false);
     }
 
     fn endWindowTracking(self: *Self) void {
@@ -284,7 +336,7 @@ const MacOSPlatform = struct {
         self.reset_frame_clock = true;
     }
 
-    fn setCursorHidden(self: *Self, hidden: bool) void {
+    fn applyCursorHidden(self: *Self, hidden: bool) void {
         if (self.cursor_hidden == hidden) return;
 
         const cursor = objc.getClass("NSCursor").?;
@@ -299,200 +351,12 @@ const MacOSPlatform = struct {
         const inside = point.x >= 0 and point.y >= 0 and
             point.x < bounds.size.width and point.y < bounds.size.height;
 
-        const capture_cursor = !self.tracking_window and !self.debug_show_cursor and inside;
+        const capture_cursor = !self.tracking_window and self.cursor_requested_hidden and inside;
         const focused = capture_cursor and self.window.msgSend(bool, "isKeyWindow", .{});
         const hide_cursor = focused and self.application.msgSend(bool, "isActive", .{});
-        self.setCursorHidden(hide_cursor);
+        self.applyCursorHidden(hide_cursor);
     }
 };
-
-pub const DebugGameDLLApi = struct {
-    pub const InitFn = *const fn (*EngineState) callconv(.c) ?*anyopaque;
-    pub const DeinitFn = *const fn (*EngineState, *anyopaque) callconv(.c) void;
-    pub const UpdateAndRenderFn = *const fn (*EngineState, *anyopaque, [*]const Event, usize) callconv(.c) bool;
-    init: InitFn,
-    deinit: DeinitFn,
-    updateAndRender: UpdateAndRenderFn,
-};
-
-const DebugGame = struct {
-    instance: ?*anyopaque = null,
-    generation: u64 = 0,
-    time_stamp: i96 = 0,
-    file_size: u64 = 0,
-    temp_name: [4096]u8 = undefined,
-    temp_name_len: usize = 0,
-    game_api: DebugGameDLLApi = undefined,
-
-    fn unload(self: *DebugGame, io: std.Io) void {
-        if (self.instance) |instance| _ = std.c.dlclose(instance);
-        if (self.temp_name_len != 0) {
-            std.Io.Dir.cwd().deleteFile(
-                io,
-                self.temp_name[0..self.temp_name_len],
-            ) catch {};
-        }
-        self.instance = null;
-        self.temp_name_len = 0;
-    }
-};
-
-pub const AppState = struct {
-    engine: EngineState,
-    debug_game: if (builtin.mode == .debug) DebugGame else void,
-};
-
-pub fn main(init: std.process.Init) !void {
-    const io = init.io;
-    const pool = objc.AutoreleasePool.init();
-    defer pool.deinit();
-
-    const allocator = std.heap.page_allocator;
-    const permanent_memory_size = fr.MB(128);
-    const transient_memory_size = fr.MB(128);
-    const game_memory = try allocator.alloc(u8, permanent_memory_size + transient_memory_size);
-    defer allocator.free(game_memory);
-
-    const permanent_memory = game_memory[0..permanent_memory_size];
-    var permanent_fixed_buffer = std.heap.FixedBufferAllocator.init(permanent_memory);
-    const transient_memory = game_memory[permanent_memory_size..];
-    var transient_fixed_buffer = std.heap.FixedBufferAllocator.init(transient_memory);
-    const permanent_allocator = permanent_fixed_buffer.allocator();
-
-    const app_state = try permanent_allocator.create(AppState);
-    const engine_state = &app_state.engine;
-    engine_state.io = io;
-    engine_state.permanent_allocator = permanent_allocator;
-    engine_state.transient_allocator = transient_fixed_buffer.allocator();
-    engine_state.delta_time = 0;
-
-    try engine_state.sound.init();
-    defer engine_state.sound.deinit();
-
-    engine_state.renderer.back_buffer = .{
-        .width = 1280,
-        .height = 720,
-        .data = try permanent_allocator.alignedAlloc(
-            u8,
-            .fromByteUnits(4096),
-            4096 * 2048 * Renderer.bytes_per_pixel,
-        ),
-    };
-    engine_state.renderer.clearScreen(0, 0, 0);
-
-    var platform_state: MacOSPlatform = undefined;
-    try platform_state.createWindow(
-        "Testbed",
-        &engine_state.renderer.back_buffer,
-    );
-    defer platform_state.destroyWindow();
-    platform_state.showWindow();
-
-    if (builtin.mode == .debug) {
-        app_state.debug_game = .{};
-        _ = try reloadLibrary(io, &app_state.debug_game, options.game_library_path);
-    }
-    defer if (builtin.mode == .debug) app_state.debug_game.unload(io);
-
-    const game_state = if (builtin.mode == .debug)
-        app_state.debug_game.game_api.init(engine_state) orelse
-            return error.GameInitializationFailed
-    else
-        game.init(engine_state);
-    defer {
-        if (builtin.mode == .debug) {
-            app_state.debug_game.game_api.deinit(engine_state, game_state);
-        } else {
-            game.deinit(engine_state, game_state);
-        }
-    }
-
-    var running = true;
-    var host_controls: common.HostControls = .{};
-    var frame_timestamp = std.Io.Clock.awake.now(io);
-    var dll_timestamp = frame_timestamp;
-    var last_reload_error: ?anyerror = null;
-
-    while (running) {
-        const frame_start = std.Io.Clock.awake.now(io);
-        defer {
-            if (running and !platform_state.quit_requested) {
-                fr.paceFrame(io, frame_start, common.frame_duration) catch {
-                    running = false;
-                };
-            }
-        }
-
-        const frame_pool = objc.AutoreleasePool.init();
-        defer frame_pool.deinit();
-        defer transient_fixed_buffer.reset();
-
-        if (!pumpMessages(&platform_state)) {
-            running = false;
-            break;
-        }
-        engine_state.sound.update();
-
-        // Native window tracking can stall the pump; exclude that time to avoid movement jumps.
-        const now = std.Io.Clock.awake.now(io);
-        if (platform_state.tracking_window) {
-            frame_timestamp = now;
-            continue;
-        }
-
-        if (platform_state.reset_frame_clock) {
-            engine_state.delta_time = 0;
-        } else {
-            const elapsed = frame_timestamp.durationTo(now);
-            const elapsed_ns: f32 = @floatFromInt(elapsed.toNanoseconds());
-            engine_state.delta_time = elapsed_ns / std.time.ns_per_s;
-        }
-        platform_state.reset_frame_clock = false;
-        frame_timestamp = now;
-
-        const events = platform_state.takeEvents();
-        host_controls.consumeFrame(events);
-        running = if (builtin.mode == .debug)
-            app_state.debug_game.game_api.updateAndRender(engine_state, game_state, events.ptr, events.len)
-        else
-            game.updateAndRender(engine_state, game_state, events);
-
-        platform_state.present();
-
-        const control = host_controls.down.ctrl or host_controls.pressed_this_frame.ctrl;
-        if (host_controls.pressed_this_frame.@"3" and !control) {
-            platform_state.debug_show_cursor = !platform_state.debug_show_cursor;
-        }
-
-        const toggle_fullscreen = host_controls.down.alt and host_controls.pressed_this_frame.enter;
-        if (toggle_fullscreen) {
-            platform_state.toggleFullscreen();
-        }
-
-        platform_state.updateCursor();
-
-        if (builtin.mode == .debug) {
-            if (dll_timestamp.durationTo(now).toNanoseconds() > std.time.ns_per_s / 30) {
-                dll_timestamp = now;
-                _ = reloadLibrary(
-                    io,
-                    &app_state.debug_game,
-                    options.game_library_path,
-                ) catch |err| {
-                    if (last_reload_error == null or last_reload_error.? != err) {
-                        std.log.err(
-                            "Failed to reload game library: {s}",
-                            .{@errorName(err)},
-                        );
-                    }
-                    last_reload_error = err;
-                    continue;
-                };
-                last_reload_error = null;
-            }
-        }
-    }
-}
 
 fn nsString(value: [:0]const u8) Object {
     return objc.getClass("NSString").?.msgSend(Object, "stringWithUTF8String:", .{value.ptr});
@@ -502,10 +366,10 @@ fn makeRect(x: f64, y: f64, width: f64, height: f64) Rect {
     return .{ .origin = .{ .x = x, .y = y }, .size = .{ .width = width, .height = height } };
 }
 
-fn presentationRect(fullscreen: bool, bounds: Rect, width: u16, height: u16) Rect {
+fn presentationRect(fullscreen: bool, bounds: Rect, width: u16, height: u16, margin: u16) Rect {
     return if (fullscreen) bounds else makeRect(
-        common.windowed_frame_margin,
-        common.windowed_frame_margin,
+        @floatFromInt(margin),
+        @floatFromInt(margin),
         @floatFromInt(width),
         @floatFromInt(height),
     );
@@ -513,13 +377,13 @@ fn presentationRect(fullscreen: bool, bounds: Rect, width: u16, height: u16) Rec
 
 fn registerClasses() !void {
     // The runtime takes log2(alignment); ^v describes an unowned void pointer.
-    const pointer_alignment = std.math.log2_int(usize, @alignOf(?*MacOSPlatform));
+    const pointer_alignment = std.math.log2_int(usize, @alignOf(?*State));
 
     if (objc.getClass("FractureApplication") == null) {
         const class = objc.allocateClassPair(objc.getClass("NSApplication").?, "FractureApplication") orelse
             return error.FailedToRegisterClass;
         errdefer objc.disposeClassPair(class);
-        const added = objc.c.class_addIvar(class.value, platform_ivar, @sizeOf(?*MacOSPlatform), pointer_alignment, "^v");
+        const added = objc.c.class_addIvar(class.value, platform_ivar, @sizeOf(?*State), pointer_alignment, "^v");
         if (added == 0) return error.FailedToRegisterIvar;
         if (!class.addMethod("sendEvent:", sendEvent)) return error.FailedToRegisterMethod;
         objc.registerClassPair(class);
@@ -546,7 +410,7 @@ fn registerClasses() !void {
         const ivar_added = objc.c.class_addIvar(
             class.value,
             platform_ivar,
-            @sizeOf(?*MacOSPlatform),
+            @sizeOf(?*State),
             pointer_alignment,
             "^v",
         );
@@ -572,7 +436,7 @@ fn registerClasses() !void {
         const ivar_added = objc.c.class_addIvar(
             class.value,
             platform_ivar,
-            @sizeOf(?*MacOSPlatform),
+            @sizeOf(?*State),
             pointer_alignment,
             "^v",
         );
@@ -612,7 +476,7 @@ fn nativeTrue(_: objc.c.id, _: objc.c.SEL) callconv(.c) bool {
     return true;
 }
 
-fn platformForCallback(receiver: objc.c.id) ?*MacOSPlatform {
+fn platformForCallback(receiver: objc.c.id) ?*State {
     var pointer: ?*anyopaque = null;
     _ = objc.c.object_getInstanceVariable(receiver, platform_ivar, &pointer);
     return @ptrCast(@alignCast(pointer));
@@ -651,7 +515,7 @@ fn didResignFocus(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c)
     platform.native_mouse_buttons = @splat(false);
     platform.client_mouse_buttons = @splat(false);
     platform.keys_by_code = @splat(null);
-    platform.setCursorHidden(false);
+    platform.applyCursorHidden(false);
 }
 
 fn windowWillMove(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c) void {
@@ -672,6 +536,14 @@ fn windowDidEndLiveResize(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) call
 
 fn drawRect(receiver: objc.c.id, _: objc.c.SEL, _: Rect) callconv(.c) void {
     const platform = platformForCallback(receiver) orelse return;
+    // AppKit can draw during event handling as well as an explicit present call.
+    const buffer = platform.back_buffer;
+    std.debug.assert(buffer.width == platform.bound_frame_buffer.width);
+    std.debug.assert(buffer.height == platform.bound_frame_buffer.height);
+    std.debug.assert(buffer.data.ptr == platform.bound_frame_buffer.data.ptr);
+    const required_bytes = @as(usize, buffer.width) * buffer.height * Renderer.bytes_per_pixel;
+    std.debug.assert(buffer.data.len >= required_bytes);
+
     const graphics = objc.getClass("NSGraphicsContext").?.msgSend(Object, "currentContext", .{});
     const context = graphics.msgSend(c.CGContextRef, "CGContext", .{});
     const bounds = platform.view.msgSend(Rect, "bounds", .{});
@@ -688,6 +560,7 @@ fn drawRect(receiver: objc.c.id, _: objc.c.SEL, _: Rect) callconv(.c) void {
         bounds,
         platform.back_buffer.width,
         platform.back_buffer.height,
+        platform.windowed_frame_margin,
     );
 
     c.CGContextSaveGState(context);
@@ -698,31 +571,31 @@ fn drawRect(receiver: objc.c.id, _: objc.c.SEL, _: Rect) callconv(.c) void {
     c.CGContextDrawImage(context, makeRect(0, 0, dest.size.width, dest.size.height), image);
 }
 
-fn installMenu(application: Object) void {
+fn installMenu(application: Object, title: [:0]const u8) void {
     const menu_class = objc.getClass("NSMenu").?;
     const item_class = objc.getClass("NSMenuItem").?;
 
     const menu_allocated = menu_class.msgSend(Object, "alloc", .{});
-    const menu = menu_allocated.msgSend(Object, "initWithTitle:", .{nsString("Testbed")});
+    const menu = menu_allocated.msgSend(Object, "initWithTitle:", .{nsString(title)});
     defer menu.release();
 
     const root_allocated = item_class.msgSend(Object, "alloc", .{});
     const root = root_allocated.msgSend(
         Object,
         "initWithTitle:action:keyEquivalent:",
-        .{ nsString("Testbed"), @as(objc.c.SEL, null), nsString("") },
+        .{ nsString(title), @as(objc.c.SEL, null), nsString("") },
     );
     defer root.release();
 
     const submenu_allocated = menu_class.msgSend(Object, "alloc", .{});
-    const submenu = submenu_allocated.msgSend(Object, "initWithTitle:", .{nsString("Testbed")});
+    const submenu = submenu_allocated.msgSend(Object, "initWithTitle:", .{nsString(title)});
     defer submenu.release();
 
     const quit_allocated = item_class.msgSend(Object, "alloc", .{});
     const quit = quit_allocated.msgSend(
         Object,
         "initWithTitle:action:keyEquivalent:",
-        .{ nsString("Quit Testbed"), objc.sel("terminate:"), nsString("") },
+        .{ nsString("Quit"), objc.sel("terminate:"), nsString("") },
     );
     defer quit.release();
     quit.msgSend(void, "setTarget:", .{application});
@@ -733,13 +606,13 @@ fn installMenu(application: Object) void {
     application.msgSend(void, "setMainMenu:", .{menu});
 }
 
-fn pumpMessages(platform: *MacOSPlatform) bool {
-    return pumpMessagesWithBudget(platform, max_messages_per_frame);
+fn pumpMessages(platform: *State) void {
+    pumpMessagesWithBudget(platform, max_messages_per_frame);
 }
 
-fn pumpMessagesWithBudget(platform: *MacOSPlatform, budget: usize) bool {
+fn pumpMessagesWithBudget(platform: *State, budget: usize) void {
     std.debug.assert(budget <= max_messages_per_frame);
-    if (platform.quit_requested) return false;
+    if (platform.quit_requested) return;
 
     const date = objc.getClass("NSDate").?.msgSend(Object, "distantPast", .{});
     const mode = nsString("kCFRunLoopDefaultMode");
@@ -770,7 +643,6 @@ fn pumpMessagesWithBudget(platform: *MacOSPlatform, budget: usize) bool {
         sendEvent(platform.application.value, null, event.value);
         if (platform.quit_requested) break;
     }
-    return !platform.quit_requested;
 }
 
 // One producer path also covers AppKit dispatch invoked outside our explicit pump.
@@ -810,7 +682,7 @@ fn sendEvent(receiver: objc.c.id, _: objc.c.SEL, raw_event: objc.c.id) callconv(
     application.msgSendSuper(objc.getClass("NSApplication").?, void, "sendEvent:", .{event});
 }
 
-fn processEvent(platform: *MacOSPlatform, event: Object) bool {
+fn processEvent(platform: *State, event: Object) bool {
     const event_type = event.msgSend(appkit.NSEventType, "type", .{});
 
     switch (event_type) {
@@ -916,7 +788,7 @@ fn processEvent(platform: *MacOSPlatform, event: Object) bool {
     }
 }
 
-fn eventInsideView(platform: *MacOSPlatform, event: Object) bool {
+fn eventInsideView(platform: *State, event: Object) bool {
     const window_point = event.msgSend(Point, "locationInWindow", .{});
     const point = platform.view.msgSend(Point, "convertPoint:fromView:", .{ window_point, nil });
     const bounds = platform.view.msgSend(Rect, "bounds", .{});
@@ -924,7 +796,7 @@ fn eventInsideView(platform: *MacOSPlatform, event: Object) bool {
         point.x < bounds.size.width and point.y < bounds.size.height;
 }
 
-fn mousePosition(platform: *MacOSPlatform, event: Object) fr.event.MousePosition {
+fn mousePosition(platform: *State, event: Object) event_types.MousePosition {
     const window_point = event.msgSend(Point, "locationInWindow", .{});
     const point = platform.view.msgSend(Point, "convertPoint:fromView:", .{ window_point, nil });
     return .{
@@ -938,7 +810,7 @@ fn mouseCoordinate(value: f64) i16 {
     return @intFromFloat(clamped);
 }
 
-fn updateModifiers(platform: *MacOSPlatform, code: appkit.VirtualKeyCode, raw_flags: usize) void {
+fn updateModifiers(platform: *State, code: appkit.VirtualKeyCode, raw_flags: usize) void {
     const flags: appkit.NSEventModifierFlags = @bitCast(raw_flags);
     // Only the key named in flagsChanged changed. Sampling every modifier here
     // invents presses for keys held while another application had focus.
@@ -1171,61 +1043,505 @@ fn keyFromCode(code: appkit.VirtualKeyCode) ?Key {
     };
 }
 
-fn reloadLibrary(io: std.Io, debug_game: *DebugGame, library_path: []const u8) !bool {
-    const dir = std.Io.Dir.cwd();
-    const stats = try dir.statFile(io, library_path, .{});
-    if (debug_game.instance != null and
-        debug_game.time_stamp == stats.mtime.nanoseconds and
-        debug_game.file_size == stats.size)
-    {
-        return false;
+fn testInputPlatform(platform: *State) void {
+    platform.* = .{
+        .application = .{ .value = null },
+        .window = .{ .value = null },
+        .view = .{ .value = null },
+        .delegate = .{ .value = null },
+        .bitmap_context = null,
+        .back_buffer = undefined,
+    };
+    for (&platform.event_lists, &platform.event_storage) |*list, *storage| {
+        list.* = std.ArrayList(Event).initBuffer(storage);
     }
+}
 
-    debug_game.generation = std.math.add(
-        u64,
-        debug_game.generation,
-        1,
-    ) catch return error.ReloadGenerationOverflow;
-    var temp_name_buffer: [4096]u8 = undefined;
-    const temp_name = try std.fmt.bufPrintSentinel(
-        &temp_name_buffer,
-        "{s}.{d}.{d}.dylib",
-        .{ library_path, std.c.getpid(), debug_game.generation },
-        0,
+fn testKeyEvent(
+    event_type: appkit.NSEventType,
+    code: appkit.VirtualKeyCode,
+    flags: usize,
+    repeat: bool,
+    window_number: isize,
+) Object {
+    const process_info = objc.getClass("NSProcessInfo").?.msgSend(Object, "processInfo", .{});
+    const timestamp = process_info.msgSend(f64, "systemUptime", .{});
+
+    const event_class = objc.getClass("NSEvent").?;
+    return event_class.msgSend(
+        Object,
+        "keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:" ++
+            "characters:charactersIgnoringModifiers:isARepeat:keyCode:",
+        .{
+            event_type,
+            Point{ .x = 0, .y = 0 },
+            flags,
+            timestamp,
+            window_number,
+            nil,
+            nsString(""),
+            nsString(""),
+            repeat,
+            code,
+        },
     );
-    try dir.copyFile(library_path, dir, temp_name, io, .{ .replace = false });
-    errdefer dir.deleteFile(io, temp_name) catch {};
+}
 
-    const copied_stats = try dir.statFile(io, library_path, .{});
-    if (stats.mtime.nanoseconds != copied_stats.mtime.nanoseconds or
-        stats.size != copied_stats.size)
-    {
-        return error.LibraryChangedDuringCopy;
+fn testMouseEvent(event_type: appkit.NSEventType, point: Point, window_number: isize) Object {
+    const event_class = objc.getClass("NSEvent").?;
+    return event_class.msgSend(
+        Object,
+        "mouseEventWithType:location:modifierFlags:timestamp:windowNumber:" ++
+            "context:eventNumber:clickCount:pressure:",
+        .{
+            event_type,
+            point,
+            @as(usize, 0),
+            @as(f64, 0),
+            window_number,
+            nil,
+            @as(isize, 1),
+            @as(isize, 1),
+            @as(f32, 1),
+        },
+    );
+}
+
+test "AppKit ignores unknown keycodes" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var platform: State = undefined;
+    testInputPlatform(&platform);
+
+    const unknown_code: appkit.VirtualKeyCode = @fromBackingInt(@as(u16, 65535));
+    const event = testKeyEvent(.key_down, unknown_code, 0, false, 0);
+    try std.testing.expect(processEvent(&platform, event));
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+}
+
+test "AppKit releases retain the key chosen by the earlier layout" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var platform: State = undefined;
+    testInputPlatform(&platform);
+
+    platform.keys_by_code[@backingInt(appkit.VirtualKeyCode.ansi_e)] = .z;
+
+    const release = testKeyEvent(.key_up, .ansi_e, 0, false, 0);
+    try std.testing.expect(processEvent(&platform, release));
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .z }}, platform.takeEvents());
+}
+
+test "AppKit modifier snapshots do not invent unrelated presses" {
+    var platform: State = undefined;
+    testInputPlatform(&platform);
+    updateModifiers(
+        &platform,
+        .shift,
+        c.NX_DEVICELSHIFTKEYMASK | c.NX_DEVICERALTKEYMASK | c.NX_ALPHASHIFTMASK,
+    );
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .lshift }}, platform.takeEvents());
+}
+
+test "macOS mouse coordinates truncate fractions and clamp to signed bounds" {
+    try std.testing.expectEqual(@as(i16, -7), mouseCoordinate(-7.8));
+    try std.testing.expectEqual(std.math.maxInt(i16), mouseCoordinate(100000));
+    try std.testing.expectEqual(std.math.minInt(i16), mouseCoordinate(-100000));
+}
+
+test "AppKit nonclient presses suppress their releases inside the view" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    try registerClasses();
+
+    const view_allocated = objc.getClass("FractureView").?.msgSend(Object, "alloc", .{});
+    const view = view_allocated.msgSend(Object, "initWithFrame:", .{makeRect(0, 0, 320, 180)});
+    defer view.release();
+
+    var platform: State = undefined;
+    testInputPlatform(&platform);
+    platform.view = view;
+
+    const press = testMouseEvent(.left_mouse_down, .{ .x = 100, .y = 190 }, 0);
+    try std.testing.expect(!processEvent(&platform, press));
+
+    const release = testMouseEvent(.left_mouse_up, .{ .x = 20, .y = 30 }, 0);
+    try std.testing.expect(!processEvent(&platform, release));
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+}
+
+// Native integration tests need a desktop session to create and activate a window.
+const TestWindow = struct {
+    buffer: Renderer.FrameBuffer,
+    platform: State,
+
+    // Initialize in place: the native callbacks retain pointers into this fixture.
+    fn init(self: *TestWindow) !void {
+        if (!@import("test_options").window_smoke) return error.SkipZigTest;
+
+        const pixels = try std.testing.allocator.alignedAlloc(
+            u8,
+            .fromByteUnits(4096),
+            320 * 180 * 4,
+        );
+        errdefer std.testing.allocator.free(pixels);
+        @memset(pixels, 0);
+
+        self.buffer = .{ .width = 320, .height = 180, .data = pixels };
+        try self.platform.init();
+        errdefer self.platform.deinit();
+        try self.platform.createWindow(.{ .title = "Fracture window test", .frame_buffer = &self.buffer });
+        errdefer self.platform.destroyWindow();
+        self.platform.showWindow();
+
+        // Activation is asynchronous. Inject only after the desktop grants focus.
+        for (0..200) |_| {
+            const key_window = self.platform.window.msgSend(bool, "isKeyWindow", .{});
+            const active = key_window and self.platform.application.msgSend(bool, "isActive", .{});
+            if (active) break;
+
+            pumpMessages(&self.platform);
+            try std.testing.expect(!self.platform.quit_requested);
+            const date_class = objc.getClass("NSDate").?;
+            const until = date_class.msgSend(
+                Object,
+                "dateWithTimeIntervalSinceNow:",
+                .{@as(f64, 0.01)},
+            );
+            const run_loop = objc.getClass("NSRunLoop").?.msgSend(Object, "currentRunLoop", .{});
+            run_loop.msgSend(void, "runUntilDate:", .{until});
+        }
+        try std.testing.expect(self.platform.window.msgSend(bool, "isKeyWindow", .{}));
+        try std.testing.expect(self.platform.application.msgSend(bool, "isActive", .{}));
+        pumpMessages(&self.platform);
+        try std.testing.expect(!self.platform.quit_requested);
+        _ = self.platform.takeEvents();
     }
 
-    const instance = std.c.dlopen(
-        temp_name.ptr,
-        .{ .NOW = true, .LOCAL = true },
-    ) orelse return error.FailedToLoadLibrary;
-    errdefer _ = std.c.dlclose(instance);
+    fn deinit(self: *TestWindow) void {
+        defer self.platform.deinit();
+        self.platform.destroyWindow();
+        std.testing.allocator.free(self.buffer.data);
 
-    const init_address = std.c.dlsym(instance, "init") orelse return error.FailedToLookupInitFn;
-    const init_fn: DebugGameDLLApi.InitFn = @ptrCast(@alignCast(init_address));
-    const deinit_address = std.c.dlsym(instance, "deinit") orelse
-        return error.FailedToLookupDeinitFn;
-    const deinit_fn: DebugGameDLLApi.DeinitFn = @ptrCast(@alignCast(deinit_address));
-    const update_address = std.c.dlsym(instance, "updateAndRender") orelse
-        return error.FailedToLookupUpdateAndRenderFn;
-    const update_fn: DebugGameDLLApi.UpdateAndRenderFn = @ptrCast(@alignCast(update_address));
+        // Tests may intentionally leave input queued after quit. Discard it so
+        // a later test cannot inherit events from this window.
+        const date = objc.getClass("NSDate").?.msgSend(Object, "distantPast", .{});
+        for (0..max_messages_per_frame) |_| {
+            const event = self.platform.application.msgSend(
+                Object,
+                "nextEventMatchingMask:untilDate:inMode:dequeue:",
+                .{
+                    appkit.NSEventMaskAny, date, nsString("kCFRunLoopDefaultMode"), true,
+                },
+            );
+            if (event.value == null) break;
+        }
+    }
+};
 
-    // A failed reload must leave the old game callable, so validate before unloading it.
-    debug_game.unload(io);
-    debug_game.instance = instance;
-    debug_game.game_api = .{ .init = init_fn, .deinit = deinit_fn, .updateAndRender = update_fn };
-    debug_game.time_stamp = stats.mtime.nanoseconds;
-    debug_game.file_size = stats.size;
-    @memcpy(debug_game.temp_name[0..temp_name.len], temp_name);
-    debug_game.temp_name_len = temp_name.len;
-    std.log.info("Loaded game library generation {d}", .{debug_game.generation});
-    return true;
+test "initial native window contains the full unscaled framebuffer" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+
+    const bounds = fixture.platform.view.msgSend(Rect, "bounds", .{});
+    const dest = presentationRect(false, bounds, fixture.buffer.width, fixture.buffer.height, fixture.platform.windowed_frame_margin);
+    try std.testing.expectEqual(@as(f64, @floatFromInt(fixture.buffer.width)), dest.size.width);
+    try std.testing.expectEqual(@as(f64, @floatFromInt(fixture.buffer.height)), dest.size.height);
+    try std.testing.expect(dest.origin.x >= bounds.origin.x);
+    try std.testing.expect(dest.origin.y >= bounds.origin.y);
+    try std.testing.expect(dest.origin.x + dest.size.width <= bounds.origin.x + bounds.size.width);
+    try std.testing.expect(
+        dest.origin.y + dest.size.height <= bounds.origin.y + bounds.size.height,
+    );
+}
+
+test "queued Command-modified keys reach the event buffer" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const window_number = platform.window.msgSend(isize, "windowNumber", .{});
+
+    // F1 has a layout-independent mapping, so the expected event is explicit.
+    const press = testKeyEvent(.key_down, .f1, c.NX_COMMANDMASK, false, window_number);
+    platform.application.msgSend(void, "postEvent:atStart:", .{ press, true });
+    pumpMessages(platform);
+    try std.testing.expect(!platform.quit_requested);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, platform.takeEvents());
+
+    const release = testKeyEvent(.key_up, .f1, c.NX_COMMANDMASK, false, window_number);
+    platform.application.msgSend(void, "postEvent:atStart:", .{ release, true });
+    pumpMessages(platform);
+    try std.testing.expect(!platform.quit_requested);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .f1 }}, platform.takeEvents());
+}
+
+test "native pump leaves events beyond its budget for the next frame" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const events = objc.getClass("NSEvent").?;
+    const window_number = platform.window.msgSend(isize, "windowNumber", .{});
+    // Deliberately leave another event after the deferred key, as native input can.
+    platform.application.msgSend(
+        void,
+        "postEvent:atStart:",
+        .{ testKeyEvent(.key_down, .f2, 0, false, window_number), true },
+    );
+    platform.application.msgSend(
+        void,
+        "postEvent:atStart:",
+        .{ testKeyEvent(.key_down, .f1, 0, false, window_number), true },
+    );
+
+    // Use distinct unhandled events to fill the queue without relying on
+    // repeat coalescing, and also exercise the native dispatch fallback.
+    const test_budget = 8;
+    for (0..test_budget - 1) |index| {
+        const unhandled = events.msgSend(
+            Object,
+            "otherEventWithType:location:modifierFlags:timestamp:windowNumber:" ++
+                "context:subtype:data1:data2:",
+            .{
+                appkit.NSEventType.application_defined,
+                Point{ .x = 0, .y = 0 },
+                @as(usize, 0),
+                @as(f64, 0),
+                window_number,
+                nil,
+                @as(i16, 0),
+                @as(isize, @intCast(index)),
+                @as(isize, 0),
+            },
+        );
+        platform.application.msgSend(void, "postEvent:atStart:", .{ unhandled, true });
+    }
+
+    platform.application.msgSend(
+        void,
+        "postEvent:atStart:",
+        .{ testKeyEvent(.key_down, .escape, 0, false, window_number), true },
+    );
+
+    pumpMessagesWithBudget(platform, test_budget);
+    try std.testing.expect(!platform.quit_requested);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .escape }}, platform.takeEvents());
+    // Consume exactly the deferred event; real input may already follow it.
+    pumpMessagesWithBudget(platform, 1);
+    try std.testing.expect(!platform.quit_requested);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, platform.takeEvents());
+    pumpMessagesWithBudget(platform, 1);
+    try std.testing.expect(!platform.quit_requested);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f2 }}, platform.takeEvents());
+}
+
+test "window and application focus-loss callbacks emit one reset_all" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+
+    platform.window.msgSend(void, "resignKeyWindow", .{});
+    platform.delegate.msgSend(void, "applicationDidResignActive:", .{nil});
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+}
+
+test "resize callbacks preserve explicitly delivered input without a reset" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const number = platform.window.msgSend(isize, "windowNumber", .{});
+    // This exercises the callbacks; it does not enter AppKit's native tracking loop.
+    platform.delegate.msgSend(void, "windowWillStartLiveResize:", .{nil});
+    try std.testing.expect(platform.tracking_window);
+    try std.testing.expect(!platform.reset_frame_clock);
+    platform.application.msgSend(void, "sendEvent:", .{testKeyEvent(.key_down, .f1, 0, false, number)});
+    platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
+    try std.testing.expect(!platform.tracking_window);
+    try std.testing.expect(platform.reset_frame_clock);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, platform.takeEvents());
+    // An earlier end must stay latched if another interaction starts before polling.
+    platform.delegate.msgSend(void, "windowWillStartLiveResize:", .{nil});
+    const active = platform.takeWindowStatus();
+    try std.testing.expect(active.native_interaction_active);
+    try std.testing.expect(!active.interaction_ended);
+    try std.testing.expect(platform.reset_frame_clock);
+    platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
+    const ended = platform.takeWindowStatus();
+    try std.testing.expect(!ended.native_interaction_active);
+    try std.testing.expect(ended.interaction_ended);
+    try std.testing.expect(!platform.takeWindowStatus().interaction_ended);
+}
+
+test "sendEvent outside pump reaches the next batch" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const number = platform.window.msgSend(isize, "windowNumber", .{});
+    platform.application.msgSend(void, "sendEvent:", .{testKeyEvent(.key_down, .f1, 0, false, number)});
+    const first = platform.takeEvents();
+    platform.application.msgSend(void, "sendEvent:", .{testKeyEvent(.key_up, .f1, 0, false, number)});
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, first);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .f1 }}, platform.takeEvents());
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+}
+
+test "native close stops the pump before queued input is applied" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const window_number = platform.window.msgSend(isize, "windowNumber", .{});
+
+    platform.window.msgSend(void, "performClose:", .{nil});
+    try std.testing.expect(platform.quit_requested);
+
+    _ = platform.takeEvents();
+    platform.application.msgSend(
+        void,
+        "postEvent:atStart:",
+        .{ testKeyEvent(.key_down, .escape, 0, false, window_number), true },
+    );
+    pumpMessages(platform);
+    try std.testing.expect(platform.quit_requested);
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+}
+
+test "client click focuses the window and its drag releases outside the view" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    // Use a real focus transition: calling resignKeyWindow directly leaves NSApp's
+    // keyWindow pointer naming a window that no longer considers itself key.
+    platform.window.msgSend(void, "orderOut:", .{nil});
+    platform.window.msgSend(void, "orderFront:", .{nil});
+    try std.testing.expect(!platform.window.msgSend(bool, "isKeyWindow", .{}));
+    _ = platform.takeEvents();
+    const number = platform.window.msgSend(isize, "windowNumber", .{});
+    const point = platform.view.msgSend(Point, "convertPoint:toView:", .{ Point{ .x = 17, .y = 23 }, nil });
+    const click = testMouseEvent(.left_mouse_down, point, number);
+    try std.testing.expectEqual(platform.window.value, click.msgSend(Object, "window", .{}).value);
+    try std.testing.expect(eventInsideView(platform, click));
+    platform.application.msgSend(void, "sendEvent:", .{click});
+    try std.testing.expect(platform.window.msgSend(bool, "isKeyWindow", .{}));
+    const pressed = platform.takeEvents();
+    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 17, .y = 23 } } }}, pressed);
+    // The release from a client drag still belongs to the game outside the view.
+    const outside = platform.view.msgSend(Point, "convertPoint:toView:", .{ Point{ .x = -11, .y = 27 }, nil });
+    platform.application.msgSend(void, "sendEvent:", .{testMouseEvent(.left_mouse_up, outside, number)});
+    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_released = .{ .button = .left, .pos = .{ .x = -11, .y = 27 } } }}, platform.takeEvents());
+}
+
+pub const InitError = error{};
+pub const CreateWindowError = error{
+    FailedToRegisterClass,
+    FailedToRegisterIvar,
+    FailedToRegisterMethod,
+    IncompatibleApplicationClass,
+    FailedToActivateApplication,
+    FailedToCreateWindow,
+    FailedToCreateView,
+    FailedToCreateDelegate,
+    FailedToCreateColorSpace,
+    FailedToCreateBitmapContext,
+};
+
+pub fn processId() u32 {
+    return @intCast(std.c.getpid());
+}
+
+pub const DynamicLibrary = struct {
+    handle: *anyopaque,
+    pub fn open(path: [:0]const u8) error{FailedToLoadLibrary}!DynamicLibrary {
+        const handle = std.c.dlopen(path.ptr, .{ .NOW = true, .LOCAL = true }) orelse return error.FailedToLoadLibrary;
+        return .{ .handle = handle };
+    }
+    pub fn lookup(self: *DynamicLibrary, comptime T: type, name: [:0]const u8) ?T {
+        const address = std.c.dlsym(self.handle, name.ptr) orelse return null;
+        return @ptrCast(@alignCast(address));
+    }
+    pub fn close(self: *DynamicLibrary) void {
+        _ = std.c.dlclose(self.handle);
+        self.* = undefined;
+    }
+};
+
+const PoolProbe = struct {
+    var released: usize = 0;
+
+    fn dealloc(receiver: objc.c.id, _: objc.c.SEL) callconv(.c) void {
+        released += 1;
+        const object: Object = .{ .value = receiver };
+        object.msgSendSuper(objc.getClass("NSObject").?, void, "dealloc", .{});
+    }
+
+    fn autoreleaseOne() !void {
+        const name = "FracturePoolProbe";
+        if (objc.getClass(name) == null) {
+            const class = objc.allocateClassPair(objc.getClass("NSObject").?, name) orelse return error.TestClassCreationFailed;
+            errdefer objc.disposeClassPair(class);
+            if (!class.addMethod("dealloc", dealloc)) return error.TestMethodRegistrationFailed;
+            objc.registerClassPair(class);
+        }
+        const allocated = objc.getClass(name).?.msgSend(Object, "alloc", .{});
+        const object = allocated.msgSend(Object, "init", .{});
+        _ = object.msgSend(Object, "autorelease", .{});
+    }
+};
+
+test "frame pools drain independently of the outer pool" {
+    PoolProbe.released = 0;
+    var platform: Platform = .{};
+    try platform.init();
+    {
+        defer platform.deinit();
+        try PoolProbe.autoreleaseOne();
+        for (0..2) |index| {
+            platform.beginFrame();
+            defer platform.endFrame();
+            try PoolProbe.autoreleaseOne();
+            try std.testing.expectEqual(index, PoolProbe.released);
+        }
+        try std.testing.expectEqual(@as(usize, 2), PoolProbe.released);
+    }
+    try std.testing.expectEqual(@as(usize, 3), PoolProbe.released);
+}
+
+test "window teardown detaches borrowed callback pointers" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    const application = fixture.platform.application;
+    const view = fixture.platform.view;
+    const delegate = fixture.platform.delegate;
+    _ = view.msgSend(Object, "retain", .{});
+    defer view.release();
+    _ = delegate.msgSend(Object, "retain", .{});
+    defer delegate.release();
+    fixture.deinit();
+    try std.testing.expect(platformForCallback(application.value) == null);
+    try std.testing.expect(platformForCallback(view.value) == null);
+    try std.testing.expect(platformForCallback(delegate.value) == null);
 }

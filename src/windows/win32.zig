@@ -978,6 +978,10 @@ pub extern "kernel32" fn LoadLibraryA(
     lpLibFileName: ?[*:0]const u8,
 ) callconv(.winapi) ?windows.HINSTANCE;
 
+pub extern "kernel32" fn LoadLibraryW(
+    lpLibFileName: ?[*:0]const u16,
+) callconv(.winapi) ?windows.HINSTANCE;
+
 pub extern "kernel32" fn GetProcAddress(
     hModule: ?windows.HINSTANCE,
     lpProcName: ?[*:0]const u8,

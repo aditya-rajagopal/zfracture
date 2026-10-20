@@ -9,10 +9,6 @@ pub fn build(b: *std.Build) !void {
         .macos => if (target.result.cpu.arch != .aarch64) return error.UnsupportedArchitecture,
         else => return error.UnsupportedOS,
     }
-    const objc_dep = if (is_macos) b.lazyDependency("zig_objc", .{
-        .target = target,
-        .optimize = optimize,
-    }) orelse return else null;
     // ==================================== VULKAN ==================================/
 
     // const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
@@ -34,60 +30,17 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     try addAudioDependencies(b, fracture);
+    try addPlatformDependencies(b, fracture);
 
-    // TODO(adi): Import the module from a build file within the game folder
-    // const game = b.createModule(.{
-    //     .root_source_file = b.path("testbed/game.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    //     .imports = &.{
-    //         .{ .name = "fracture", .module = fracture },
-    //     },
-    // });
-
-    // ==================================== GAME ==================================/
-    const entrypoint_path = if (is_macos)
-        "testbed/entrypoint_macos.zig"
-    else
-        "testbed/entrypoint_win32.zig";
+    // ==================================== TESTBED ==================================/
     const entrypoint = b.createModule(.{
-        .root_source_file = b.path(entrypoint_path),
+        .root_source_file = b.path("testbed/entrypoint.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "fracture", .module = fracture },
         },
     });
-
-    if (objc_dep) |dep| {
-        entrypoint.addImport("objc", dep.module("objc"));
-        entrypoint.linkFramework("AppKit", .{});
-        entrypoint.linkFramework("CoreGraphics", .{});
-
-        // zig-objc supplies the runtime bindings and SDK paths for linking.
-        // Our CoreGraphics C calls and modifier masks need separate header
-        // translation; translate-c does not inherit the imported module's paths.
-        const sdk_path = std.zig.system.darwin.getSdk(
-            b.allocator,
-            b.graph.io,
-            &target.result,
-        ) orelse return error.MacOSSDKNotFound;
-        const sdk_include = b.pathJoin(&.{ sdk_path, "usr/include" });
-        const sdk_frameworks = b.pathJoin(&.{ sdk_path, "System/Library/Frameworks" });
-        const headers = b.addWriteFiles();
-        const cg_header = headers.add("macos-c.h",
-            \\#include <CoreGraphics/CoreGraphics.h>
-            \\#include <IOKit/hidsystem/IOLLEvent.h>
-        );
-        const cg = b.addTranslateC(.{
-            .root_source_file = cg_header,
-            .target = target,
-            .optimize = optimize,
-        });
-        cg.addSystemIncludePath(.{ .cwd_relative = sdk_include });
-        cg.addSystemFrameworkPath(.{ .cwd_relative = sdk_frameworks });
-        entrypoint.addImport("macos-c", cg.createModule());
-    }
 
     const exe = b.addExecutable(.{
         .name = "game",
@@ -133,15 +86,13 @@ pub fn build(b: *std.Build) !void {
     // A debug executable loads the game at startup, so `zig build run` needs
     // the installed library as well as the executable (on either platform).
     if (optimize == .debug) run_cmd.step.dependOn(&dll_step.step);
-    if (is_macos) {
-        const options = b.addOptions();
-        // Track only the path so game rebuilds do not invalidate the executable.
-        options.addOptionPathUntracked(
-            "game_library_path",
-            .{ .relative = .{ .base = .install_lib, .sub_path = "libdynamic_game.dylib" } },
-        );
-        entrypoint.addOptions("build_options", options);
-    }
+    const options = b.addOptions();
+    // Track the application-owned path without making game builds rebuild the executable.
+    options.addOptionPathUntracked("game_library_path", .{ .relative = .{
+        .base = if (is_macos) .install_lib else .install_bin,
+        .sub_path = if (is_macos) "libdynamic_game.dylib" else "dynamic_game.dll",
+    } });
+    entrypoint.addOptions("build_options", options);
     const game_step = b.step("game", "Build the reloadable game library");
     game_step.dependOn(&dll_step.step);
     // ==================================== CHECK STEP ==================================/
@@ -178,6 +129,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     try addAudioDependencies(b, host_fracture);
+    try addPlatformDependencies(b, host_fracture);
     try addAudioDependencies(b, host_sound);
     const sound_tests = b.addTest(.{ .name = "sound-tests", .root_module = host_sound });
     test_step.dependOn(&b.addRunArtifact(sound_tests).step);
@@ -194,6 +146,25 @@ pub fn build(b: *std.Build) !void {
         });
         const host_tests = b.addTest(.{ .root_module = test_module });
         test_step.dependOn(&b.addRunArtifact(host_tests).step);
+    }
+
+    const window_smoke = b.option(bool, "macos-window-smoke", "Run native macOS window tests (requires a desktop)") orelse false;
+    const platform_module = b.createModule(.{
+        .root_source_file = b.path("src/platform.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    try addPlatformDependencies(b, platform_module);
+    const platform_options = b.addOptions();
+    platform_options.addOption(bool, "window_smoke", window_smoke);
+    platform_module.addOptions("test_options", platform_options);
+    const platform_tests = b.addTest(.{ .name = "platform-tests", .root_module = platform_module });
+    check.dependOn(&platform_tests.step);
+    test_step.dependOn(&platform_tests.step);
+    if (target.result.os.tag == b.graph.host.result.os.tag) {
+        if (target.result.cpu.arch == b.graph.host.result.cpu.arch) {
+            test_step.dependOn(&b.addRunArtifact(platform_tests).step);
+        }
     }
 
     const windows_query = try std.Target.Query.parse(.{ .arch_os_abi = "x86_64-windows" });
@@ -215,6 +186,42 @@ pub fn build(b: *std.Build) !void {
     } else {
         test_step.dependOn(&audio_tests.step);
     }
+}
+
+fn addPlatformDependencies(b: *std.Build, module: *std.Build.Module) !void {
+    const target = module.resolved_target.?;
+    if (target.result.os.tag != .macos) return;
+    const dep = b.lazyDependency("zig_objc", .{
+        .target = target,
+        .optimize = module.optimize.?,
+    }) orelse return;
+    module.addImport("objc", dep.module("objc"));
+    module.linkFramework("AppKit", .{});
+    module.linkFramework("CoreGraphics", .{});
+
+    // zig-objc supplies the runtime bindings and SDK paths for linking.
+    // Our CoreGraphics C calls and modifier masks need separate header
+    // translation; translate-c does not inherit the imported module's paths.
+    const sdk_path = std.zig.system.darwin.getSdk(
+        b.allocator,
+        b.graph.io,
+        &target.result,
+    ) orelse return error.MacOSSDKNotFound;
+    const sdk_include = b.pathJoin(&.{ sdk_path, "usr/include" });
+    const sdk_frameworks = b.pathJoin(&.{ sdk_path, "System/Library/Frameworks" });
+    const headers = b.addWriteFiles();
+    const cg_header = headers.add("macos-c.h",
+        \\#include <CoreGraphics/CoreGraphics.h>
+        \\#include <IOKit/hidsystem/IOLLEvent.h>
+    );
+    const cg = b.addTranslateC(.{
+        .root_source_file = cg_header,
+        .target = target,
+        .optimize = module.optimize.?,
+    });
+    cg.addSystemIncludePath(.{ .cwd_relative = sdk_include });
+    cg.addSystemFrameworkPath(.{ .cwd_relative = sdk_frameworks });
+    module.addImport("macos-c", cg.createModule());
 }
 
 fn addAudioDependencies(b: *std.Build, module: *std.Build.Module) !void {
