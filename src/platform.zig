@@ -102,7 +102,7 @@ pub fn paceFrame(
     const deadline_ns = std.math.add(i96, frame_start.nanoseconds, frame_duration.nanoseconds) catch
         return error.InvalidFrameDuration;
     const deadline = std.Io.Timestamp.fromNanoseconds(deadline_ns);
-    // A backend may wake early. Keep the original per-frame deadline on every retry.
+
     while (std.Io.Clock.awake.now(io).nanoseconds < deadline_ns) {
         try self.native.waitUntil(io, deadline);
         try io.checkCancel();

@@ -58,33 +58,41 @@ pub const State = struct {
     }
 
     pub fn waitUntil(self: *Self, io: std.Io, deadline: std.Io.Timestamp) WaitError!void {
+        std.debug.assert(deadline.nanoseconds >= 0);
+
         const handle = self.frame_timer.?;
         const now = std.Io.Clock.awake.now(io);
-        // Widen before subtraction: valid i96 timestamps can span more than i96.
-        const remaining_ns = @as(i128, deadline.nanoseconds) - now.nanoseconds;
+
+        const remaining_ns: i96 = now.durationTo(deadline).nanoseconds;
         if (remaining_ns <= 0) return;
         if (remaining_ns > frame_spin_margin_ns) {
-            const due_time = try relativeDueTime(remaining_ns - frame_spin_margin_ns);
-            if (!win32.SetWaitableTimerEx(handle, &due_time, 0, null, null, null, 0).toBool()) {
+            // NOTE(adi): In windows: Positive values indicate absolute time.
+            // Be sure to use a UTC-based absolute time, as the system uses UTC-based time internally.
+            // Negative values indicate relative time. Also the time provided to windows must be 100ns intervals not
+            // the actual time.
+            // got this from https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-setwaitabletimerex
+            const due_time: i64 = try relativeDueTime(remaining_ns - frame_spin_margin_ns);
+
+            const set_result = win32.SetWaitableTimerEx(handle, &due_time, 0, null, null, null, 0);
+            if (!set_result.toBool()) {
                 const code = windows.GetLastError();
                 std.log.err("SetWaitableTimerEx failed (Win32 error {d})", .{@backingInt(code)});
                 return error.FailedToSetFrameTimer;
             }
-            // Precision comes from the armed timer, not the wait function's timeout.
-            const status = win32.WaitForSingleObject(handle, win32.INFINITE);
-            if (status != win32.WAIT_OBJECT_0) {
-                if (status == win32.WAIT_FAILED) {
+
+            const wait_status = win32.WaitForSingleObject(handle, win32.INFINITE);
+            if (wait_status != win32.WAIT_OBJECT_0) {
+                if (wait_status == win32.WAIT_FAILED) {
                     const code = windows.GetLastError();
                     std.log.err("WaitForSingleObject failed (Win32 error {d})", .{@backingInt(code)});
                 } else {
-                    std.log.err("WaitForSingleObject returned unexpected status 0x{x}", .{status});
+                    std.log.err("WaitForSingleObject returned unexpected status 0x{x}", .{wait_status});
                 }
                 return error.FailedToWaitForFrameTimer;
             }
             return;
         }
 
-        // Only the final <=500 us uses CPU; native failures never fall back to spinning.
         while (std.Io.Clock.awake.now(io).nanoseconds < deadline.nanoseconds) {
             std.atomic.spinLoopHint();
         }
