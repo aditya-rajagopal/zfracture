@@ -101,7 +101,15 @@ pub const State = struct {
 
     pub fn pollEvents(self: *Self) Platform.WindowStatus {
         pumpMessages(self, max_messages_per_frame);
-        self.updateCursor();
+        const point = self.updateCursor();
+        // AppKit may stop sending mouse-moved events before the pointer reaches
+        // the edge. Publish the live sample after queued input, including points
+        // outside the view, without changing individual click coordinates.
+        if (self.focused and !self.tracking_window and !self.quit_requested) {
+            const position = mousePositionFromView(self, point);
+            self.event_lists[self.pending_event_buffer].appendBounded(.{ .mouse_move = position }) catch
+                @panic("event buffer overflow");
+        }
         return self.takeWindowStatus();
     }
 
@@ -121,7 +129,7 @@ pub const State = struct {
 
     pub fn setCursorHidden(self: *Self, hidden: bool) void {
         self.cursor_requested_hidden = hidden;
-        self.updateCursor();
+        _ = self.updateCursor();
     }
 
     // The slice stays immutable until the next handoff. Native callbacks append to the other list.
@@ -363,7 +371,7 @@ pub const State = struct {
         self.cursor_hidden = hidden;
     }
 
-    fn updateCursor(self: *Self) void {
+    fn updateCursor(self: *Self) Point {
         const window_point = self.window.msgSend(Point, "mouseLocationOutsideOfEventStream", .{});
         const point = self.view.msgSend(Point, "convertPoint:fromView:", .{ window_point, nil });
         const bounds = self.view.msgSend(Rect, "bounds", .{});
@@ -374,6 +382,7 @@ pub const State = struct {
         const focused = capture_cursor and self.window.msgSend(bool, "isKeyWindow", .{});
         const hide_cursor = focused and self.application.msgSend(bool, "isActive", .{});
         self.applyCursorHidden(hide_cursor);
+        return point;
     }
 };
 
@@ -663,21 +672,14 @@ fn sendEvent(receiver: objc.c.id, _: objc.c.SEL, raw_event: objc.c.id) callconv(
             const event_type = event.msgSend(appkit.NSEventType, "type", .{});
             const button_press = event_type == .left_mouse_down or
                 event_type == .right_mouse_down or event_type == .other_mouse_down;
-            var client_press = false;
-
             const key_window = platform.window.msgSend(bool, "isKeyWindow", .{});
             const is_active = application.msgSend(bool, "isActive", .{});
-
-            if (button_press) {
-                client_press = eventInsideView(platform, event);
-                if (client_press) {
-                    if (!key_window) {
-                        platform.window.msgSend(void, "makeKeyAndOrderFront:", .{nil});
-                    }
-                    if (!is_active) {
-                        application.msgSend(void, "activateIgnoringOtherApps:", .{true});
-                    }
-                }
+            const client_press = button_press and eventInsideView(platform, event);
+            if (client_press and !key_window) {
+                platform.window.msgSend(void, "makeKeyAndOrderFront:", .{nil});
+            }
+            if (client_press and !is_active) {
+                application.msgSend(void, "activateIgnoringOtherApps:", .{true});
             }
             const active = key_window and is_active;
             if (client_press or active) {
@@ -804,7 +806,12 @@ fn eventInsideView(platform: *State, event: Object) bool {
 
 fn mousePosition(platform: *State, event: Object) event_types.MousePosition {
     const window_point = event.msgSend(Point, "locationInWindow", .{});
-    var point = platform.view.msgSend(Point, "convertPoint:fromView:", .{ window_point, nil });
+    const point = platform.view.msgSend(Point, "convertPoint:fromView:", .{ window_point, nil });
+    return mousePositionFromView(platform, point);
+}
+
+fn mousePositionFromView(platform: *State, view_point: Point) event_types.MousePosition {
+    var point = view_point;
     // Invert the destination rectangle used by drawRect, in AppKit points.
     if (platform.fullscreen) {
         const bounds = platform.view.msgSend(Rect, "bounds", .{});
@@ -1250,6 +1257,23 @@ const TestWindow = struct {
         }
     }
 };
+
+test "poll samples the mouse without a queued motion event" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+
+    // A fast exit may leave the last event well inside the view. No final
+    // mouse-moved event is guaranteed, so an empty native queue must still
+    // provide the current pointer position to the game.
+    _ = platform.pollEvents();
+    const events = platform.takeEvents();
+    try std.testing.expect(events.len > 0);
+    try std.testing.expect(events[events.len - 1] == .mouse_move);
+}
 
 test "queued Command-modified keys reach the event buffer" {
     const pool = objc.AutoreleasePool.init();

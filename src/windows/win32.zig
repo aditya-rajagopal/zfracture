@@ -986,6 +986,7 @@ pub extern "user32" fn GetClientRect(
     lpRect: ?*RECT,
 ) callconv(.winapi) windows.BOOL;
 
+pub extern "user32" fn GetCursorPos(point: *POINT) callconv(.winapi) windows.BOOL;
 pub extern "user32" fn ScreenToClient(window: windows.HWND, point: *POINT) callconv(.winapi) windows.BOOL;
 
 pub extern "user32" fn SetCapture(window: windows.HWND) callconv(.winapi) ?windows.HWND;
@@ -1357,11 +1358,9 @@ pub fn typedConst2(
 
     switch (@typeInfo(SwitchType)) {
         .int => |target_type_info| {
-            if (value >= std.math.maxInt(SwitchType)) {
-                if (target_type_info.signedness == .signed) {
-                    const UnsignedT = @Int(.unsigned, target_type_info.bits);
-                    return @as(SwitchType, @bitCast(@as(UnsignedT, value)));
-                }
+            if (value >= std.math.maxInt(SwitchType) and target_type_info.signedness == .signed) {
+                const UnsignedT = @Int(.unsigned, target_type_info.bits);
+                return @as(SwitchType, @bitCast(@as(UnsignedT, value)));
             }
             return value;
         },

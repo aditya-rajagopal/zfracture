@@ -161,10 +161,10 @@ pub fn build(b: *std.Build) !void {
     const platform_tests = b.addTest(.{ .name = "platform-tests", .root_module = platform_module });
     check.dependOn(&platform_tests.step);
     test_step.dependOn(&platform_tests.step);
-    if (target.result.os.tag == b.graph.host.result.os.tag) {
-        if (target.result.cpu.arch == b.graph.host.result.cpu.arch) {
-            test_step.dependOn(&b.addRunArtifact(platform_tests).step);
-        }
+    if (target.result.os.tag == b.graph.host.result.os.tag and
+        target.result.cpu.arch == b.graph.host.result.cpu.arch)
+    {
+        test_step.dependOn(&b.addRunArtifact(platform_tests).step);
     }
 
     const windows_query = try std.Target.Query.parse(.{ .arch_os_abi = "x86_64-windows" });

@@ -208,18 +208,17 @@ pub fn main(init: std.process.Init) !void {
 fn reloadLibrary(io: std.Io, debug_game: *DebugGame, library_path: []const u8) !bool {
     const dir = std.Io.Dir.cwd();
     const stats = try dir.statFile(io, library_path, .{});
-    if (debug_game.instance != null and
-        debug_game.time_stamp == stats.mtime.nanoseconds and
-        debug_game.file_size == stats.size)
-    {
-        return false;
+    if (debug_game.instance != null) {
+        if (debug_game.time_stamp == stats.mtime.nanoseconds and debug_game.file_size == stats.size) {
+            return false;
+        }
     }
 
     // NOTE(adi): If we a dll fails because it did not have the required functions we rejected the last time and
     // if the same file exists still we dont try to read it again and just exit early
     if (debug_game.rejected_file) |rejected| {
-        if (rejected.time_stamp == stats.mtime.nanoseconds) {
-            if (rejected.file_size == stats.size) return false;
+        if (rejected.time_stamp == stats.mtime.nanoseconds and rejected.file_size == stats.size) {
+            return false;
         }
         debug_game.rejected_file = null;
     }

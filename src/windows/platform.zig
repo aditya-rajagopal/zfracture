@@ -104,7 +104,26 @@ pub const State = struct {
 
     pub fn pollEvents(self: *Self) Platform.WindowStatus {
         pumpMessages(self);
+        self.pollMousePosition();
         return self.takeWindowStatus();
+    }
+
+    fn pollMousePosition(self: *Self) void {
+        if (!self.focused) return;
+        if (self.modal_depth != 0) return;
+        if (self.quit_requested) return;
+        const window = self.window orelse return;
+
+        var client: win32.POINT = undefined;
+        if (!win32.GetCursorPos(&client).toBool()) return;
+        if (!win32.ScreenToClient(window, &client).toBool()) return;
+
+        // WM_MOUSEMOVE may stop before the pointer reaches the edge. Append
+        // the live sample after queued input, retaining out-of-bounds positions
+        // and the original coordinates of each click.
+        const position = mousePosition(self, client);
+        self.event_lists[self.pending_event_buffer].appendBounded(.{ .mouse_move = position }) catch
+            @panic("event buffer overflow");
     }
 
     fn takeWindowStatus(self: *Self) Platform.WindowStatus {
@@ -481,27 +500,25 @@ fn windowProc(
             }
         },
         win32.WM_KEYDOWN, win32.WM_SYSKEYDOWN, win32.WM_KEYUP, win32.WM_SYSKEYUP => {
-            if (platform.focused) {
-                if (w_param <= std.math.maxInt(u8)) {
-                    var key: Key = @fromBackingInt(@as(u8, @intCast(w_param)));
-                    const info: win32.KeyMessageLParam = @bitCast(l_param);
-                    key = switch (key) {
-                        .alt => if (info.is_extended) .ralt else .lalt,
-                        .control => if (info.is_extended) .rcontrol else .lcontrol,
-                        .shift => if (info.scan_code == .left_shift) .lshift else .rshift,
-                        else => key,
-                    };
-                    const down = message == win32.WM_KEYDOWN or message == win32.WM_SYSKEYDOWN;
-                    const translated: Event = if (!down)
-                        .{ .key_released = key }
-                    else if (info.was_down)
-                        .{ .key_repeat = key }
-                    else
-                        .{ .key_pressed = key };
-                    platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
-                        @panic("event buffer overflow");
-                    return 0;
-                }
+            if (platform.focused and w_param <= std.math.maxInt(u8)) {
+                var key: Key = @fromBackingInt(@as(u8, @intCast(w_param)));
+                const info: win32.KeyMessageLParam = @bitCast(l_param);
+                key = switch (key) {
+                    .alt => if (info.is_extended) .ralt else .lalt,
+                    .control => if (info.is_extended) .rcontrol else .lcontrol,
+                    .shift => if (info.scan_code == .left_shift) .lshift else .rshift,
+                    else => key,
+                };
+                const down = message == win32.WM_KEYDOWN or message == win32.WM_SYSKEYDOWN;
+                const translated: Event = if (!down)
+                    .{ .key_released = key }
+                else if (info.was_down)
+                    .{ .key_repeat = key }
+                else
+                    .{ .key_pressed = key };
+                platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
+                    @panic("event buffer overflow");
+                return 0;
             }
         },
         win32.WM_MOUSEMOVE => {
@@ -669,6 +686,20 @@ test "WndProc records outside the pump exactly once" {
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .space }}, first);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .space }}, platform.takeEvents());
     try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+}
+
+test "poll samples the mouse without a queued motion event" {
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+
+    // Leaving the client area need not produce a final WM_MOUSEMOVE.
+    // Polling must still supply a current position with no queued input.
+    _ = platform.pollEvents();
+    const events = platform.takeEvents();
+    try std.testing.expect(events.len > 0);
+    try std.testing.expect(events[events.len - 1] == .mouse_move);
 }
 
 test "closing a window does not quit a recreated window" {
