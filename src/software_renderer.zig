@@ -24,19 +24,21 @@ pub fn setMetersPerPixel(renderer: *Renderer, meters_per_pixel: f32) void {
     renderer.pixels_per_meter = 1.0 / meters_per_pixel;
 }
 
+/// Convert world meters to framebuffer pixels, with the camera at the image center.
 pub fn screenFromWorld(self: *Renderer, x: f32, y: f32) struct { x: f32, y: f32 } {
     assert(self.pixels_per_meter > 0);
     return .{
-        .x = x - self.camera_position.x + @as(f32, @floatFromInt(self.back_buffer.width)) / self.pixels_per_meter / 2.0,
-        .y = y - self.camera_position.y + @as(f32, @floatFromInt(self.back_buffer.height)) / self.pixels_per_meter / 2.0,
+        .x = (x - self.camera_position.x) * self.pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.width)) / 2.0,
+        .y = (y - self.camera_position.y) * self.pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.height)) / 2.0,
     };
 }
 
+/// Convert framebuffer pixels to world meters using the current camera and scale.
 pub fn worldFromScreen(self: *Renderer, x: f32, y: f32) struct { x: f32, y: f32 } {
     assert(self.pixels_per_meter > 0);
     return .{
-        .x = x + self.camera_position.x - @as(f32, @floatFromInt(self.back_buffer.width)) / self.pixels_per_meter / 2.0,
-        .y = y + self.camera_position.y - @as(f32, @floatFromInt(self.back_buffer.height)) / self.pixels_per_meter / 2.0,
+        .x = (x - @as(f32, @floatFromInt(self.back_buffer.width)) / 2.0) / self.pixels_per_meter + self.camera_position.x,
+        .y = (y - @as(f32, @floatFromInt(self.back_buffer.height)) / 2.0) / self.pixels_per_meter + self.camera_position.y,
     };
 }
 
@@ -73,9 +75,12 @@ pub fn clearScreen(renderer: *Renderer, r: f32, g: f32, b: f32) void {
     @memset(pixles_u32[0..total_pixels], clear_colour);
 }
 
+/// Draw in framebuffer pixels, independent of the camera and world scale.
 pub fn drawRectangle(
     renderer: *Renderer,
+    // x position in frame buffer coordinate
     x: f32,
+    // y position in frame buffer coordinate
     y: f32,
     width: f32,
     height: f32,
@@ -85,13 +90,12 @@ pub fn drawRectangle(
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
 
     // TODO: Consider blending
-    // NOTE: We are rounding here to if the position of the corner covers most of a pixel in x or y
-    // we will draw it.
-    const x_int: i32 = @intFromFloat(@round(x * renderer.pixels_per_meter));
-    const y_int: i32 = @intFromFloat(@round(y * renderer.pixels_per_meter));
+    // Round fractional pixel positions and sizes before rasterizing.
+    const x_int: i32 = @intFromFloat(@round(x));
+    const y_int: i32 = @intFromFloat(@round(y));
     // @TODO: Should we do x + width and then round it?
-    const width_int: i32 = @intFromFloat(@round(width * renderer.pixels_per_meter));
-    const height_int: i32 = @intFromFloat(@round(height * renderer.pixels_per_meter));
+    const width_int: i32 = @intFromFloat(@round(width));
+    const height_int: i32 = @intFromFloat(@round(height));
 
     // Offscreen endpoints can overflow i32 before clipping, so add them in i64.
     const left = @max(@as(i64, x_int), 0);
@@ -165,8 +169,8 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
                 .height = 16,
                 .data = std.mem.sliceAsBytes(pixels[0 .. 16 * 16]),
             },
-            .pixels_per_meter = 1,
-            .camera_position = .{ .x = 0, .y = 0 },
+            .pixels_per_meter = 48,
+            .camera_position = .{ .x = 10, .y = -4 },
         };
 
         renderer.drawRectangle(case.x, case.y, case.width, case.height, .white);

@@ -500,7 +500,7 @@ fn windowProc(
             if (platform.focused) {
                 const position: win32.MousePositionLParam = @bitCast(l_param);
                 platform.event_lists[platform.pending_event_buffer].appendBounded(.{
-                    .mouse_move = .{ .x = position.x, .y = position.y },
+                    .mouse_move = mousePosition(platform, .{ .x = position.x, .y = position.y }),
                 }) catch @panic("event buffer overflow");
                 return 0;
             }
@@ -515,10 +515,7 @@ fn windowProc(
                         platform.event_lists[platform.pending_event_buffer].appendBounded(.{
                             .mouse_scroll = .{
                                 .value = if (wheel.delta > 0) 1 else -1,
-                                .mouse_pos = .{
-                                    .x = @intCast(std.math.clamp(client.x, std.math.minInt(i16), std.math.maxInt(i16))),
-                                    .y = @intCast(std.math.clamp(client.y, std.math.minInt(i16), std.math.maxInt(i16))),
-                                },
+                                .mouse_pos = mousePosition(platform, client),
                             },
                         }) catch @panic("event buffer overflow");
                     }
@@ -555,7 +552,7 @@ fn windowProc(
                     const position: win32.MousePositionLParam = @bitCast(l_param);
                     const payload: Event.MouseButtonEvent = .{
                         .button = mapped,
-                        .pos = .{ .x = position.x, .y = position.y },
+                        .pos = mousePosition(platform, .{ .x = position.x, .y = position.y }),
                     };
                     const translated: Event = if (down) .{ .mouse_pressed = payload } else .{ .mouse_released = payload };
                     platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
@@ -604,6 +601,29 @@ fn windowProc(
     }
 
     return win32.DefWindowProcA(window, message, w_param, l_param);
+}
+
+fn mousePosition(platform: *State, client: win32.POINT) event_types.MousePosition {
+    var x: i64 = client.x;
+    var y: i64 = client.y;
+    // Invert the destination rectangle used by present.
+    if (platform.fullscreen) {
+        var rect: win32.RECT = undefined;
+        if (!win32.GetClientRect(platform.window, &rect).toBool()) return .{ .x = -1, .y = -1 };
+        const width = @as(i64, rect.right) - rect.left;
+        const height = @as(i64, rect.bottom) - rect.top;
+        if (width <= 0) return .{ .x = -1, .y = -1 };
+        if (height <= 0) return .{ .x = -1, .y = -1 };
+        x = @divFloor(x * platform.back_buffer.width, width);
+        y = @divFloor(y * platform.back_buffer.height, height);
+    } else {
+        x -= platform.windowed_frame_margin;
+        y -= platform.windowed_frame_margin;
+    }
+    return .{
+        .x = @intCast(std.math.clamp(x, std.math.minInt(i16), std.math.maxInt(i16))),
+        .y = @intCast(std.math.clamp(y, std.math.minInt(i16), std.math.maxInt(i16))),
+    };
 }
 
 const TestWindow = struct {

@@ -804,7 +804,19 @@ fn eventInsideView(platform: *State, event: Object) bool {
 
 fn mousePosition(platform: *State, event: Object) event_types.MousePosition {
     const window_point = event.msgSend(Point, "locationInWindow", .{});
-    const point = platform.view.msgSend(Point, "convertPoint:fromView:", .{ window_point, nil });
+    var point = platform.view.msgSend(Point, "convertPoint:fromView:", .{ window_point, nil });
+    // Invert the destination rectangle used by drawRect, in AppKit points.
+    if (platform.fullscreen) {
+        const bounds = platform.view.msgSend(Rect, "bounds", .{});
+        if (bounds.size.width <= 0) return .{ .x = -1, .y = -1 };
+        if (bounds.size.height <= 0) return .{ .x = -1, .y = -1 };
+        point.x = (point.x - bounds.origin.x) * @as(f64, @floatFromInt(platform.back_buffer.width)) / bounds.size.width;
+        point.y = (point.y - bounds.origin.y) * @as(f64, @floatFromInt(platform.back_buffer.height)) / bounds.size.height;
+    } else {
+        const margin: f64 = @floatFromInt(platform.windowed_frame_margin);
+        point.x -= margin;
+        point.y -= margin;
+    }
     return .{
         .x = mouseCoordinate(point.x),
         .y = mouseCoordinate(point.y),
@@ -813,7 +825,7 @@ fn mousePosition(platform: *State, event: Object) event_types.MousePosition {
 
 fn mouseCoordinate(value: f64) i16 {
     const clamped = std.math.clamp(value, std.math.minInt(i16), std.math.maxInt(i16));
-    return @intFromFloat(clamped);
+    return @intFromFloat(@floor(clamped));
 }
 
 fn updateModifiers(platform: *State, code: appkit.VirtualKeyCode, raw_flags: usize) void {
@@ -1428,11 +1440,11 @@ test "client click focuses the window and its drag releases outside the view" {
     platform.application.msgSend(void, "sendEvent:", .{click});
     try std.testing.expect(platform.window.msgSend(bool, "isKeyWindow", .{}));
     const pressed = platform.takeEvents();
-    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 17, .y = 23 } } }}, pressed);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 7, .y = 13 } } }}, pressed);
     // The release from a client drag still belongs to the game outside the view.
     const outside = platform.view.msgSend(Point, "convertPoint:toView:", .{ Point{ .x = -11, .y = 27 }, nil });
     platform.application.msgSend(void, "sendEvent:", .{testMouseEvent(.left_mouse_up, outside, number)});
-    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_released = .{ .button = .left, .pos = .{ .x = -11, .y = 27 } } }}, platform.takeEvents());
+    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_released = .{ .button = .left, .pos = .{ .x = -21, .y = 17 } } }}, platform.takeEvents());
 }
 
 pub const InitError = error{};

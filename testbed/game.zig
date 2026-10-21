@@ -37,7 +37,7 @@ pub const Controls = struct {
         @"1": bool = false,
         @"2": bool = false,
         @"3": bool = false,
-        left_mouse: bool = false,
+        left_mouse: ?fr.event.MousePosition = null,
         right_mouse: bool = false,
         g: bool = false,
     } = .{},
@@ -49,6 +49,8 @@ pub const Controls = struct {
         escape: bool = false,
         ctrl: bool = false,
     } = .{},
+
+    mouse_position: ?fr.event.MousePosition = null,
 
     // Retain each side so releasing one Ctrl does not release the other.
     modifier_down: u2 = 0,
@@ -75,16 +77,27 @@ pub const Controls = struct {
                 },
                 .key_repeat => |key| self.setHeld(key, true),
                 .key_released => |key| self.setHeld(key, false),
-                .reset_keyboard, .reset_all => {
+                .reset_keyboard => {
                     self.down = .{};
                     self.modifier_down = 0;
                 },
-                .mouse_pressed => |button| switch (button.button) {
-                    .left => self.pressed_this_frame.left_mouse = true,
-                    .right => self.pressed_this_frame.right_mouse = true,
-                    else => {},
+                .reset_mouse => self.mouse_position = null,
+                .reset_all => {
+                    self.down = .{};
+                    self.modifier_down = 0;
+                    self.mouse_position = null;
                 },
-                else => {},
+                .mouse_pressed => |button| {
+                    self.mouse_position = button.pos;
+                    switch (button.button) {
+                        .left => self.pressed_this_frame.left_mouse = button.pos,
+                        .right => self.pressed_this_frame.right_mouse = true,
+                        else => {},
+                    }
+                },
+                .mouse_released => |button| self.mouse_position = button.pos,
+                .mouse_move => |position| self.mouse_position = position,
+                .mouse_scroll => |scroll| self.mouse_position = scroll.mouse_pos,
             }
         }
     }
@@ -115,11 +128,9 @@ pub const GameState = struct {
     impact_sound: fr.wav.WavData,
     pop_sound: fr.wav.WavData,
     latest_pop: ?fr.PlaybackHandle,
+    last_click_world: ?struct { x: f32, y: f32 },
 
     level_index: usize,
-
-    view_half_width: f32,
-    view_half_height: f32,
 
     player: Entity,
 };
@@ -190,6 +201,7 @@ pub fn init(engine: *EngineState) *anyopaque {
 
     game_state.controls = .{};
     game_state.latest_pop = null;
+    game_state.last_click_world = null;
 
     const impact_sound = std.Io.Dir.cwd().readFileAlloc(
         engine.io,
@@ -209,12 +221,6 @@ pub fn init(engine: *EngineState) *anyopaque {
         .unlimited,
     ) catch unreachable;
     game_state.pop_sound = fr.wav.decode(engine.permanent_allocator, pop_sound) catch unreachable;
-
-    // TODO: Make this something like a view matrix.
-    const buffer_width: f32 = @floatFromInt(engine.renderer.back_buffer.width);
-    game_state.view_half_width = buffer_width * meters_per_pixel / 2.0;
-    const buffer_height: f32 = @floatFromInt(engine.renderer.back_buffer.height);
-    game_state.view_half_height = buffer_height * meters_per_pixel / 2.0;
 
     game_state.player = .{
         .entity_type = .player,
@@ -251,6 +257,18 @@ pub fn updateAndRender(
     const controls = &state.controls;
     var running: bool = true;
 
+    if (controls.pressed_this_frame.left_mouse) |position| click: {
+        if (position.x < 0) break :click;
+        if (position.y < 0) break :click;
+        if (position.x >= renderer.back_buffer.width) break :click;
+        if (position.y >= renderer.back_buffer.height) break :click;
+        // Use the camera that displayed the clicked frame, before this frame's movement.
+        const screen_x: f32 = @floatFromInt(position.x);
+        const screen_y: f32 = @floatFromInt(position.y);
+        const world = renderer.worldFromScreen(screen_x, screen_y);
+        state.last_click_world = .{ .x = world.x, .y = world.y };
+    }
+
     // NOTE: Clear to magenta
     renderer.clearScreen(1.0, 0.0, 1.0);
 
@@ -258,7 +276,7 @@ pub fn updateAndRender(
         running = false;
     }
 
-    if (controls.pressed_this_frame.left_mouse) {
+    if (controls.pressed_this_frame.left_mouse != null) {
         if (playSound(engine, state.pop_sound.data)) |handle| state.latest_pop = handle;
     }
 
@@ -386,8 +404,8 @@ pub fn updateAndRender(
                         renderer.drawRectangle(
                             screen_position.x,
                             screen_position.y,
-                            tile_width_meters,
-                            tile_height_meters,
+                            tile_width_meters * renderer.pixels_per_meter,
+                            tile_height_meters * renderer.pixels_per_meter,
                             floor_colour,
                         );
                     },
@@ -395,8 +413,8 @@ pub fn updateAndRender(
                         renderer.drawRectangle(
                             screen_position.x,
                             screen_position.y,
-                            tile_width_meters,
-                            tile_height_meters,
+                            tile_width_meters * renderer.pixels_per_meter,
+                            tile_height_meters * renderer.pixels_per_meter,
                             wall_colour,
                         );
                     },
@@ -408,12 +426,50 @@ pub fn updateAndRender(
 
     {
         // The camera follows the player's center; the renderer takes the rectangle's corner.
+        const screen = renderer.screenFromWorld(
+            state.player.position_x - player_half_width,
+            state.player.position_y - player_height / 2,
+        );
         renderer.drawRectangle(
-            state.view_half_width - player_half_width,
-            state.view_half_height - player_height / 2,
-            player_width,
-            player_height,
+            screen.x,
+            screen.y,
+            player_width * renderer.pixels_per_meter,
+            player_height * renderer.pixels_per_meter,
             state.player.render_colour,
+        );
+    }
+
+    if (state.last_click_world) |position| {
+        const screen = renderer.screenFromWorld(position.x, position.y);
+        renderer.drawRectangle(
+            screen.x - 5,
+            screen.y - 5,
+            10,
+            10,
+            .red,
+        );
+    }
+
+    if (controls.mouse_position) |position| crosshair: {
+        if (position.x < 0) break :crosshair;
+        if (position.y < 0) break :crosshair;
+        if (position.x >= renderer.back_buffer.width) break :crosshair;
+        if (position.y >= renderer.back_buffer.height) break :crosshair;
+        const screen_x: f32 = @floatFromInt(position.x);
+        const screen_y: f32 = @floatFromInt(position.y);
+        renderer.drawRectangle(
+            screen_x - 7,
+            screen_y,
+            15,
+            1,
+            .white,
+        );
+        renderer.drawRectangle(
+            screen_x,
+            screen_y - 7,
+            1,
+            15,
+            .white,
         );
     }
 
@@ -440,13 +496,16 @@ test "press flags survive same-frame releases and expire while holds persist" {
         .{ .key_released = .space },
         .{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 1, .y = 2 } } },
         .{ .mouse_released = .{ .button = .left, .pos = .{ .x = 1, .y = 2 } } },
+        .{ .mouse_move = .{ .x = 7, .y = 9 } },
     });
     try std.testing.expect(controls.pressed_this_frame.space);
-    try std.testing.expect(controls.pressed_this_frame.left_mouse);
+    try std.testing.expectEqual(fr.event.MousePosition{ .x = 1, .y = 2 }, controls.pressed_this_frame.left_mouse.?);
+    try std.testing.expectEqual(fr.event.MousePosition{ .x = 7, .y = 9 }, controls.mouse_position.?);
     controls.consumeFrame(&.{});
     try std.testing.expect(controls.down.s);
     try std.testing.expect(!controls.pressed_this_frame.space);
-    try std.testing.expect(!controls.pressed_this_frame.left_mouse);
+    try std.testing.expect(controls.pressed_this_frame.left_mouse == null);
+    try std.testing.expectEqual(fr.event.MousePosition{ .x = 7, .y = 9 }, controls.mouse_position.?);
     controls.consumeFrame(&.{.{ .key_released = .s }});
     try std.testing.expect(!controls.down.s);
 }
@@ -470,7 +529,7 @@ test "resets affect only their scope and preserve this frame's presses" {
         try std.testing.expectEqual(case.keyboard_down, controls.down.ctrl);
         try std.testing.expect(controls.pressed_this_frame.ctrl);
         try std.testing.expect(controls.pressed_this_frame.space);
-        try std.testing.expect(controls.pressed_this_frame.left_mouse);
+        try std.testing.expect(controls.pressed_this_frame.left_mouse != null);
     }
 }
 
