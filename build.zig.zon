@@ -9,8 +9,8 @@
             .hash = "stdx-0.0.0-JEHEYeErAgBDqPKnwCZB3CVVXC6xC94hNN0DtEpfd1je",
         },
         .zig_objc = .{
-            .url = "git+https://github.com/aditya-rajagopal/zig-objc.git#9c968a1eaf15a98fa79c1e84c4e6e7ec3ac67499",
-            .hash = "zig_objc-0.0.0-Ir_Sp3cuAQBEw6niRMD_9kBhyBdzMYrpHKLo10Jsex7J",
+            .url = "git+https://github.com/aditya-rajagopal/zig-objc.git#6693ed14324cdbf5ac443970920de0b138ba5ddb",
+            .hash = "zig_objc-0.0.0-Ir_Sp2kuAQCXK9tAbHUXe8fwY8ZTAbrWpM-BsNfz3Q6K",
             .lazy = true,
         },
     },

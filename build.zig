@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{}) orelse .debug;
+    const optimize = b.standardOptimizeOption(.{});
     const is_macos = target.result.os.tag == .macos;
     switch (target.result.os.tag) {
         .windows => if (target.result.cpu.arch != .x86_64) return error.UnsupportedArchitecture,
