@@ -22,6 +22,9 @@ const window_style: appkit.NSWindowStyleMask = .{
 const nil: objc.c.id = null;
 
 const platform_ivar = "_fracturePlatform";
+// General-purpose waits can overshoot by about 1 ms on macOS. Usually only
+// the final ~0.5 ms spins; 1.5 ms is the bound when the wait wakes on time.
+const spin_margin_ns = 1500 * std.time.ns_per_us;
 
 pub const State = struct {
     application: Object = undefined,
@@ -81,7 +84,19 @@ pub const State = struct {
     }
 
     pub fn waitUntil(_: *Self, io: std.Io, deadline: std.Io.Timestamp) WaitError!void {
-        try deadline.withClock(.awake).wait(io);
+        const now = std.Io.Clock.awake.now(io);
+        const remaining_ns = @as(i128, deadline.nanoseconds) - now.nanoseconds;
+        if (remaining_ns <= 0) return;
+        if (remaining_ns > spin_margin_ns) {
+            const wake = std.Io.Timestamp.fromNanoseconds(deadline.nanoseconds - spin_margin_ns);
+            try wake.withClock(.awake).wait(io);
+            // paceFrame rechecks the original deadline and cancellation after sleeping.
+            return;
+        }
+        // Only spin inside the final <=1.5 ms margin.
+        while (std.Io.Clock.awake.now(io).nanoseconds < deadline.nanoseconds) {
+            std.atomic.spinLoopHint();
+        }
     }
 
     pub fn pollEvents(self: *Self) Platform.WindowStatus {

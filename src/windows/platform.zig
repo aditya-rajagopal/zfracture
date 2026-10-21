@@ -90,15 +90,6 @@ pub const State = struct {
         }
     }
 
-    fn relativeDueTime(nanoseconds: i128) error{InvalidFrameDuration}!i64 {
-        std.debug.assert(nanoseconds > 0);
-        const maximum_ns = @as(i128, std.math.maxInt(i64)) * 100;
-        if (nanoseconds > maximum_ns) return error.InvalidFrameDuration;
-        // Negative values are relative. Round up so conversion cannot shorten the wait.
-        const units: i64 = @intCast(@divTrunc(nanoseconds + 99, 100));
-        return -units;
-    }
-
     pub fn beginFrame(_: *Self) void {}
 
     pub fn endFrame(_: *Self) void {}
@@ -399,6 +390,15 @@ pub const State = struct {
         }
     }
 };
+
+fn relativeDueTime(nanoseconds: i128) error{InvalidFrameDuration}!i64 {
+    std.debug.assert(nanoseconds > 0);
+    const maximum_ns = @as(i128, std.math.maxInt(i64)) * 100;
+    if (nanoseconds > maximum_ns) return error.InvalidFrameDuration;
+    // Negative values are relative. Round up so conversion cannot shorten the wait.
+    const units: i64 = @intCast(@divTrunc(nanoseconds + 99, 100));
+    return -units;
+}
 
 pub const CreateWindowError = error{
     FailedToCreateWindow,
