@@ -7,7 +7,7 @@ const event_types = @import("../event.zig");
 const Key = event_types.Key;
 const Event = event_types.Event;
 const MouseButton = event_types.MouseButton;
-const max_messages_per_frame = 4096;
+const max_messages_per_frame = 1024;
 const frame_spin_margin_ns = 500_000;
 
 pub const State = struct {
@@ -122,21 +122,17 @@ pub const State = struct {
         // the live sample after queued input, retaining out-of-bounds positions
         // and the original coordinates of each click.
         const position = mousePosition(self, client);
-        self.event_lists[self.pending_event_buffer].appendBounded(.{ .mouse_move = position }) catch
-            @panic("event buffer overflow");
+        self.enqueue(.{ .mouse_move = position }, "mouse sample");
     }
 
     fn takeWindowStatus(self: *Self) Platform.WindowStatus {
         const active = self.modal_depth != 0;
-        var ended = false;
-        if (!active) {
-            ended = self.reset_frame_clock;
-            self.reset_frame_clock = false;
-        }
+        const ended = self.reset_frame_clock;
+        self.reset_frame_clock = false;
         return .{
             .quit_requested = self.quit_requested,
             .native_interaction_active = active,
-            .interaction_ended = ended,
+            .blocking_interaction_ended = ended,
         };
     }
 
@@ -214,6 +210,22 @@ pub const State = struct {
         self.event_lists[next].clearRetainingCapacity();
         self.pending_event_buffer = next;
         return self.event_lists[ready].items;
+    }
+
+    fn enqueue(self: *Self, event: Event, comptime producer: []const u8) void {
+        if (self.modal_depth != 0) return;
+        const list = &self.event_lists[self.pending_event_buffer];
+        list.appendBounded(event) catch std.debug.panic(
+            "event buffer overflow: producer={s}, len={d}, capacity={d}, modal_depth={d}",
+            .{ producer, list.items.len, list.capacity, self.modal_depth },
+        );
+    }
+
+    // Discard the old batch; active native tracking alone suppresses new input.
+    fn cancelPendingInput(self: *Self) void {
+        const list = &self.event_lists[self.pending_event_buffer];
+        list.clearRetainingCapacity();
+        list.appendAssumeCapacity(.reset_all);
     }
 
     // Initialize in place: GWLP_USERDATA retains this address until destruction.
@@ -439,6 +451,9 @@ fn pumpMessages(platform: *State) void {
     if (platform.quit_requested) return;
     var msg: win32.MSG = undefined;
     for (0..max_messages_per_frame) |_| {
+        const pending = &platform.event_lists[platform.pending_event_buffer];
+        // Leave a slot for the final mouse sample; nested callbacks still check every append.
+        if (pending.items.len >= pending.capacity - 1) break;
         if (!win32.PeekMessageA(&msg, null, 0, 0, win32.PM_REMOVE).toBool()) break;
         if (platform.quit_requested) return;
         if (msg.message == win32.WM_QUIT) {
@@ -464,16 +479,19 @@ fn windowProc(
     switch (message) {
         win32.WM_ENTERSIZEMOVE, win32.WM_ENTERMENULOOP => {
             if (platform.modal_depth == 0) {
-                platform.event_lists[platform.pending_event_buffer].appendBounded(.reset_keyboard) catch
-                    @panic("event buffer overflow");
+                platform.cancelPendingInput();
             }
             platform.modal_depth = std.math.add(u32, platform.modal_depth, 1) catch
                 @panic("native modal nesting overflow");
             return 0;
         },
         win32.WM_EXITSIZEMOVE, win32.WM_EXITMENULOOP => {
-            if (platform.modal_depth != 0) platform.modal_depth -= 1;
-            if (platform.modal_depth == 0) platform.reset_frame_clock = true;
+            if (platform.modal_depth == 0) return 0;
+            platform.modal_depth -= 1;
+            if (platform.modal_depth == 0) {
+                platform.cancelPendingInput();
+                platform.reset_frame_clock = true;
+            }
             return 0;
         },
         win32.WM_SETFOCUS => platform.focused = true,
@@ -482,8 +500,7 @@ fn windowProc(
             if (lost_focus) {
                 if (platform.focused) {
                     platform.focused = false;
-                    platform.event_lists[platform.pending_event_buffer].appendBounded(.reset_all) catch
-                        @panic("event buffer overflow");
+                    platform.enqueue(.reset_all, "focus loss");
                 }
                 platform.client_mouse_buttons = 0;
                 // Clear ownership before ReleaseCapture reenters this procedure.
@@ -495,11 +512,12 @@ fn windowProc(
             if (platform.owns_mouse_capture) {
                 platform.owns_mouse_capture = false;
                 platform.client_mouse_buttons = 0;
-                platform.event_lists[platform.pending_event_buffer].appendBounded(.reset_mouse) catch
-                    @panic("event buffer overflow");
+                platform.enqueue(.reset_mouse, "capture loss");
             }
         },
         win32.WM_KEYDOWN, win32.WM_SYSKEYDOWN, win32.WM_KEYUP, win32.WM_SYSKEYUP => {
+            // Native menu/move keyboard handling must retain default processing.
+            if (platform.modal_depth != 0) return win32.DefWindowProcA(window, message, w_param, l_param);
             if (platform.focused and w_param <= std.math.maxInt(u8)) {
                 var key: Key = @fromBackingInt(@as(u8, @intCast(w_param)));
                 const info: win32.KeyMessageLParam = @bitCast(l_param);
@@ -516,33 +534,34 @@ fn windowProc(
                     .{ .key_repeat = key }
                 else
                     .{ .key_pressed = key };
-                platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
-                    @panic("event buffer overflow");
+                platform.enqueue(translated, "keyboard");
                 return 0;
             }
         },
         win32.WM_MOUSEMOVE => {
+            if (platform.modal_depth != 0) return win32.DefWindowProcA(window, message, w_param, l_param);
             if (platform.focused) {
                 const position: win32.MousePositionLParam = @bitCast(l_param);
-                platform.event_lists[platform.pending_event_buffer].appendBounded(.{
+                platform.enqueue(.{
                     .mouse_move = mousePosition(platform, .{ .x = position.x, .y = position.y }),
-                }) catch @panic("event buffer overflow");
+                }, "mouse motion");
                 return 0;
             }
         },
         win32.WM_MOUSEWHEEL => {
+            if (platform.modal_depth != 0) return win32.DefWindowProcA(window, message, w_param, l_param);
             if (platform.focused) {
                 const wheel: win32.MouseWheelWParam = @bitCast(w_param);
                 if (wheel.delta != 0) {
                     const position: win32.MousePositionLParam = @bitCast(l_param);
                     var client: win32.POINT = .{ .x = position.x, .y = position.y };
                     if (win32.ScreenToClient(window, &client).toBool()) {
-                        platform.event_lists[platform.pending_event_buffer].appendBounded(.{
+                        platform.enqueue(.{
                             .mouse_scroll = .{
                                 .value = if (wheel.delta > 0) 1 else -1,
                                 .mouse_pos = mousePosition(platform, client),
                             },
-                        }) catch @panic("event buffer overflow");
+                        }, "mouse wheel");
                     }
                 }
                 return 0;
@@ -574,15 +593,20 @@ fn windowProc(
                 if (button) |mapped| {
                     const down = message == win32.WM_LBUTTONDOWN or message == win32.WM_RBUTTONDOWN or
                         message == win32.WM_MBUTTONDOWN or message == win32.WM_XBUTTONDOWN;
+                    const mask = @as(u8, 1) << @as(u3, @intCast(@backingInt(mapped)));
+                    if (platform.modal_depth != 0) {
+                        // Keep cleanup for an existing client press, but never acquire new capture.
+                        if (down or (platform.client_mouse_buttons & mask) == 0) {
+                            return win32.DefWindowProcA(window, message, w_param, l_param);
+                        }
+                    }
                     const position: win32.MousePositionLParam = @bitCast(l_param);
                     const payload: Event.MouseButtonEvent = .{
                         .button = mapped,
                         .pos = mousePosition(platform, .{ .x = position.x, .y = position.y }),
                     };
                     const translated: Event = if (down) .{ .mouse_pressed = payload } else .{ .mouse_released = payload };
-                    platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
-                        @panic("event buffer overflow");
-                    const mask = @as(u8, 1) << @as(u3, @intCast(@backingInt(mapped)));
+                    platform.enqueue(translated, "mouse button");
 
                     // NOTE(adi): Tracking the clicks if they start inside the window and continueing to do so even if
                     // it is dragged outside the window till it is released.
@@ -688,18 +712,50 @@ test "WndProc records outside the pump exactly once" {
     try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
 }
 
-test "poll samples the mouse without a queued motion event" {
+test "poll samples fresh mouse coordinates without a queued motion event" {
     var fixture: TestWindow = undefined;
     try fixture.init();
     defer fixture.deinit();
     const platform = &fixture.platform;
 
-    // Leaving the client area need not produce a final WM_MOUSEMOVE.
-    // Polling must still supply a current position with no queued input.
-    _ = platform.pollEvents();
-    const events = platform.takeEvents();
-    try std.testing.expect(events.len > 0);
-    try std.testing.expect(events[events.len - 1] == .mouse_move);
+    const user32 = struct {
+        extern "user32" fn ClientToScreen(windows.HWND, *win32.POINT) callconv(.winapi) windows.BOOL;
+        extern "user32" fn SetCursorPos(i32, i32) callconv(.winapi) windows.BOOL;
+    };
+    var saved_position: win32.POINT = undefined;
+    try std.testing.expect(win32.GetCursorPos(&saved_position).toBool());
+    defer _ = user32.SetCursorPos(saved_position.x, saved_position.y);
+
+    // The fixture has 320x180 framebuffer pixels, a 10-pixel inset, and a
+    // 340x200 client area. Fullscreen stretches the framebuffer across it.
+    var client: win32.RECT = undefined;
+    try std.testing.expect(win32.GetClientRect(platform.window, &client).toBool());
+    try std.testing.expectEqual(@as(i32, 340), client.right - client.left);
+    try std.testing.expectEqual(@as(i32, 200), client.bottom - client.top);
+    const cases = [_]struct { point: win32.POINT, fullscreen: bool, expected: event_types.MousePosition }{
+        .{ .point = .{ .x = 17, .y = 23 }, .fullscreen = false, .expected = .{ .x = 7, .y = 13 } },
+        .{ .point = .{ .x = -11, .y = 27 }, .fullscreen = false, .expected = .{ .x = -21, .y = 17 } },
+        // One quarter across and three quarters down maps to (80,135).
+        .{ .point = .{ .x = 85, .y = 150 }, .fullscreen = true, .expected = .{ .x = 80, .y = 135 } },
+    };
+    defer platform.fullscreen = false;
+    for (cases) |case| {
+        platform.fullscreen = case.fullscreen;
+        var screen_point = case.point;
+        try std.testing.expect(user32.ClientToScreen(platform.window.?, &screen_point).toBool());
+        try std.testing.expect(user32.SetCursorPos(screen_point.x, screen_point.y).toBool());
+        // SetCursorPos may generate WM_MOUSEMOVE. Remove those messages without
+        // dispatch, so only live polling can supply the new position.
+        var message: win32.MSG = undefined;
+        for (0..max_messages_per_frame) |_| {
+            if (!win32.PeekMessageA(&message, platform.window, win32.WM_MOUSEMOVE, win32.WM_MOUSEMOVE, win32.PM_REMOVE).toBool()) break;
+        }
+        platform.enqueue(.{ .mouse_move = .{ .x = 123, .y = 124 } }, "test setup");
+        _ = platform.pollEvents();
+        const events = platform.takeEvents();
+        try std.testing.expect(events.len >= 2);
+        try std.testing.expectEqualDeep(Event{ .mouse_move = case.expected }, events[events.len - 1]);
+    }
 }
 
 test "closing a window does not quit a recreated window" {
@@ -731,19 +787,82 @@ test "nested modal callbacks reset once and resume only after the outer exit" {
     _ = windowProc(window, win32.WM_EXITMENULOOP, 0, 0);
     const nested = platform.takeWindowStatus();
     try std.testing.expect(nested.native_interaction_active);
-    try std.testing.expect(!nested.interaction_ended);
+    try std.testing.expect(!nested.blocking_interaction_ended);
     _ = windowProc(window, win32.WM_EXITSIZEMOVE, 0, 0);
-    try std.testing.expectEqualDeep(&[_]Event{ .reset_keyboard, .{ .key_pressed = .f1 } }, platform.takeEvents());
-    // Do not consume the prior end while another native interaction is active.
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    // Consume prior recovery even while another native interaction is active.
     _ = windowProc(window, win32.WM_ENTERSIZEMOVE, 0, 0);
     const active = platform.takeWindowStatus();
     try std.testing.expect(active.native_interaction_active);
-    try std.testing.expect(!active.interaction_ended);
+    try std.testing.expect(active.blocking_interaction_ended);
     _ = windowProc(window, win32.WM_EXITSIZEMOVE, 0, 0);
     const ended = platform.takeWindowStatus();
     try std.testing.expect(!ended.native_interaction_active);
-    try std.testing.expect(ended.interaction_ended);
-    try std.testing.expect(!platform.takeWindowStatus().interaction_ended);
+    try std.testing.expect(ended.blocking_interaction_ended);
+    try std.testing.expect(!platform.takeWindowStatus().blocking_interaction_ended);
+    _ = platform.takeEvents();
+    _ = windowProc(window, win32.WM_EXITSIZEMOVE, 0, 0);
+    try std.testing.expect(!platform.takeWindowStatus().blocking_interaction_ended);
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+}
+
+test "modal tracking cleans up capture and accepts new presses on exit" {
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    const window = platform.window.?;
+    _ = windowProc(window, win32.WM_LBUTTONDOWN, 0, 0);
+    _ = platform.takeEvents();
+    _ = windowProc(window, win32.WM_ENTERSIZEMOVE, 0, 0);
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    // This checks injected dispatch, not which messages Windows physically delivers.
+    _ = windowProc(window, win32.WM_KEYDOWN, @backingInt(Key.f1), 0);
+    _ = windowProc(window, win32.WM_RBUTTONDOWN, 0, 0);
+    try std.testing.expectEqual(@as(u8, 1), platform.client_mouse_buttons);
+    _ = windowProc(window, win32.WM_LBUTTONUP, 0, 0);
+    try std.testing.expectEqual(@as(u8, 0), platform.client_mouse_buttons);
+    try std.testing.expect(!platform.owns_mouse_capture);
+    try std.testing.expect(win32.GetCapture() != window);
+    // A second cancelled press cannot acquire capture after cleanup either.
+    _ = windowProc(window, win32.WM_RBUTTONDOWN, 0, 0);
+    try std.testing.expectEqual(@as(u8, 0), platform.client_mouse_buttons);
+    try std.testing.expect(!platform.owns_mouse_capture);
+    try std.testing.expect(win32.GetCapture() != window);
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    _ = windowProc(window, win32.WM_EXITSIZEMOVE, 0, 0);
+    _ = windowProc(window, win32.WM_KEYDOWN, @backingInt(Key.f1), 0);
+    _ = windowProc(window, win32.WM_RBUTTONDOWN, 0, 0);
+    try std.testing.expect(platform.owns_mouse_capture);
+    const events = platform.takeEvents();
+    try std.testing.expectEqual(@as(usize, 3), events.len);
+    try std.testing.expectEqualDeep(&[_]Event{ .reset_all, .{ .key_pressed = .f1 } }, events[0..2]);
+    try std.testing.expect(events[2] == .mouse_pressed);
+    try std.testing.expectEqual(MouseButton.right, events[2].mouse_pressed.button);
+    _ = windowProc(window, win32.WM_RBUTTONUP, 0, 0);
+}
+
+test "pump reserves the final mouse sample and defers queued input" {
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    for (0..1023) |_| platform.enqueue(.{ .key_repeat = .s }, "test setup");
+    const user32 = struct {
+        extern "user32" fn PostMessageA(windows.HWND, u32, win32.WPARAM, windows.LPARAM) callconv(.winapi) windows.BOOL;
+    };
+    try std.testing.expect(user32.PostMessageA(platform.window.?, win32.WM_KEYDOWN, @backingInt(Key.f1), 0).toBool());
+    _ = platform.pollEvents();
+    const full = platform.takeEvents();
+    try std.testing.expectEqual(@as(usize, 1024), full.len);
+    try std.testing.expect(full[1023] == .mouse_move);
+    _ = platform.pollEvents();
+    const next = platform.takeEvents();
+    var found = false;
+    for (next) |event| {
+        if (event == .key_pressed and event.key_pressed == .f1) found = true;
+    }
+    try std.testing.expect(found);
 }
 
 test "either focus-loss notification resets input once per focus interval" {
@@ -752,15 +871,17 @@ test "either focus-loss notification resets input once per focus interval" {
     defer fixture.deinit();
     const platform = &fixture.platform;
     const window = platform.window.?;
-    _ = windowProc(window, win32.WM_KILLFOCUS, 0, 0);
-    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
-    _ = windowProc(window, win32.WM_ACTIVATEAPP, 0, 0);
-    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
-    _ = windowProc(window, win32.WM_SETFOCUS, 0, 0);
-    _ = windowProc(window, win32.WM_ACTIVATEAPP, 0, 0);
-    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
-    _ = windowProc(window, win32.WM_KILLFOCUS, 0, 0);
-    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    const cases = [_][2]u32{
+        .{ win32.WM_KILLFOCUS, win32.WM_ACTIVATEAPP },
+        .{ win32.WM_ACTIVATEAPP, win32.WM_KILLFOCUS },
+    };
+    for (cases) |case| {
+        _ = windowProc(window, win32.WM_SETFOCUS, 0, 0);
+        _ = windowProc(window, case[0], 0, 0);
+        try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+        _ = windowProc(window, case[1], 0, 0);
+        try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    }
 }
 
 test "capture release distinguishes completion from cancellation" {
@@ -780,22 +901,31 @@ test "capture release distinguishes completion from cancellation" {
     try std.testing.expectEqual(@as(usize, 2), released.len);
     try std.testing.expectEqual(MouseButton.left, released[0].mouse_released.button);
     try std.testing.expectEqual(MouseButton.right, released[1].mouse_released.button);
+
     _ = windowProc(window, win32.WM_LBUTTONDOWN, 0, 0);
     _ = platform.takeEvents();
     _ = win32.ReleaseCapture(); // Simulates unexpected loss while a client button is still held.
     try std.testing.expectEqualDeep(&[_]Event{.reset_mouse}, platform.takeEvents());
     _ = windowProc(window, win32.WM_CAPTURECHANGED, 0, 0);
     try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+
     _ = windowProc(window, win32.WM_LBUTTONDOWN, 0, 0);
     _ = platform.takeEvents();
     _ = windowProc(window, win32.WM_KILLFOCUS, 0, 0);
     try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
 }
 
-test "frame timer rounds relative due times up and rejects overflow" {
-    try std.testing.expectEqual(-1, try relativeDueTime(1));
-    try std.testing.expectEqual(-1, try relativeDueTime(100));
-    try std.testing.expectEqual(-2, try relativeDueTime(101));
+test "frame timer converts to negative rounded-up 100 ns units and rejects overflow" {
+    // SetWaitableTimerEx uses negative values for relative time, in 100 ns
+    // units. Round upward so quantization cannot shorten the requested wait.
+    const cases = [_]struct { nanoseconds: i128, due_time: i64 }{
+        .{ .nanoseconds = 1, .due_time = -1 },
+        .{ .nanoseconds = 100, .due_time = -1 },
+        .{ .nanoseconds = 101, .due_time = -2 },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(case.due_time, try relativeDueTime(case.nanoseconds));
+    }
     const maximum_ns = @as(i128, std.math.maxInt(i64)) * 100;
     try std.testing.expectEqual(-std.math.maxInt(i64), try relativeDueTime(maximum_ns));
     try std.testing.expectError(error.InvalidFrameDuration, relativeDueTime(maximum_ns + 1));
@@ -835,16 +965,24 @@ fn libraryPathW(buffer: []u16, path: [:0]const u8) error{FailedToLoadLibrary}![:
     return buffer[0..length :0];
 }
 
-test "Windows library paths preserve Unicode and bound UTF-16 storage" {
-    var buffer: [64]u16 = undefined;
-    const path = try libraryPathW(&buffer, "C:\\d\xc3\xa9v\\\xf0\x9f\x8e\xae.dll");
-    const expected = [_]u16{ 'C', ':', '\\', 'd', 0xe9, 'v', '\\', 0xd83c, 0xdfae, '.', 'd', 'l', 'l' };
-    try std.testing.expectEqualSlices(u16, &expected, path);
-    try std.testing.expectEqual(@as(u16, 0), path.ptr[path.len]);
-    const surrogate = try libraryPathW(&buffer, "\xed\xa0\x80");
-    try std.testing.expectEqualSlices(u16, &.{0xd800}, surrogate);
-    var exact: [2]u16 = undefined;
-    try std.testing.expectEqualSlices(u16, &.{0xe9}, try libraryPathW(&exact, "\xc3\xa9"));
-    try std.testing.expectError(error.FailedToLoadLibrary, libraryPathW(exact[0..1], "\xc3\xa9"));
-    try std.testing.expectError(error.FailedToLoadLibrary, libraryPathW(&buffer, "\xff"));
+test "Windows library paths reserve terminator space and reject invalid input" {
+    const cases = [_]struct { input: [:0]const u8, capacity: usize, units: ?[]const u16 }{
+        // U+1F3AE takes two UTF-16 units; a third must remain for the terminator.
+        .{ .input = "\xf0\x9f\x8e\xae", .capacity = 3, .units = &.{ 0xd83c, 0xdfae } },
+        .{ .input = "\xf0\x9f\x8e\xae", .capacity = 2, .units = null },
+        .{ .input = "\xff", .capacity = 3, .units = null },
+        .{ .input = "", .capacity = 3, .units = &.{} },
+        // Windows paths use WTF-8: an unpaired surrogate is preserved, not rejected.
+        .{ .input = "\xed\xa0\x80", .capacity = 3, .units = &.{0xd800} },
+    };
+    for (cases) |case| {
+        var buffer: [3]u16 = @splat(0xffff);
+        if (case.units) |units| {
+            const converted = try libraryPathW(buffer[0..case.capacity], case.input);
+            try std.testing.expectEqualSlices(u16, units, converted);
+            try std.testing.expectEqual(@as(u16, 0), buffer[converted.len]);
+        } else {
+            try std.testing.expectError(error.FailedToLoadLibrary, libraryPathW(buffer[0..case.capacity], case.input));
+        }
+    }
 }

@@ -123,9 +123,10 @@ pub fn main(init: std.process.Init) !void {
 
     while (running) {
         const frame_start = std.Io.Clock.awake.now(io);
+        var pacing_start = frame_start;
         defer {
             if (running) {
-                platform.paceFrame(io, frame_start, common.frame_duration) catch |err| {
+                platform.paceFrame(io, pacing_start, common.frame_duration) catch |err| {
                     running = false;
                     if (err != error.Canceled) pacing_error = err;
                 };
@@ -143,20 +144,14 @@ pub fn main(init: std.process.Init) !void {
         }
         engine_state.sound.update();
 
-        // Native window tracking can stall the pump; exclude that time to avoid movement jumps.
         const now = std.Io.Clock.awake.now(io);
-        if (status.native_interaction_active) {
-            std.debug.assert(!status.interaction_ended);
-            frame_timestamp = now;
-            continue;
-        }
-        if (status.interaction_ended) {
+        if (status.blocking_interaction_ended) {
             engine_state.delta_time = 0;
+            pacing_start = now;
         } else {
-            const elapsed = frame_timestamp.durationTo(now);
-            std.debug.assert(elapsed.toNanoseconds() >= 0);
-            const elapsed_ns: f32 = @floatFromInt(elapsed.toNanoseconds());
-            engine_state.delta_time = elapsed_ns / std.time.ns_per_s;
+            const elapsed_ns = frame_timestamp.durationTo(now).toNanoseconds();
+            std.debug.assert(elapsed_ns >= 0);
+            engine_state.delta_time = @as(f32, @floatFromInt(elapsed_ns)) / std.time.ns_per_s;
         }
         frame_timestamp = now;
 

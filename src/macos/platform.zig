@@ -8,7 +8,7 @@ const event_types = @import("../event.zig");
 const Key = event_types.Key;
 const Event = event_types.Event;
 const MouseButton = event_types.MouseButton;
-const max_messages_per_frame = 4096;
+const max_messages_per_frame = 1024;
 const Object = objc.Object;
 const Rect = c.CGRect;
 const Point = c.CGPoint;
@@ -43,9 +43,14 @@ pub const State = struct {
     presentation_options: appkit.NSApplicationPresentationOptions = .{},
     fullscreen: bool = false,
     quit_requested: bool = false,
+    /// Set when native window handling is going on i.e window move/resize
     tracking_window: bool = false,
-    focused: bool = false,
+    /// Specifically tracks moving window
     moving_window: bool = false,
+    /// Specifically tracking resizing
+    resizing_window: bool = false,
+    /// Track if the window is currently in focus
+    focused: bool = false,
     reset_frame_clock: bool = false,
     cursor_requested_hidden: bool = true,
     cursor_hidden: bool = false,
@@ -107,23 +112,18 @@ pub const State = struct {
         // outside the view, without changing individual click coordinates.
         if (self.focused and !self.tracking_window and !self.quit_requested) {
             const position = mousePositionFromView(self, point);
-            self.event_lists[self.pending_event_buffer].appendBounded(.{ .mouse_move = position }) catch
-                @panic("event buffer overflow");
+            self.enqueue(.{ .mouse_move = position }, "mouse sample");
         }
         return self.takeWindowStatus();
     }
 
     fn takeWindowStatus(self: *Self) Platform.WindowStatus {
-        const active = self.tracking_window;
-        var ended = false;
-        if (!active) {
-            ended = self.reset_frame_clock;
-            self.reset_frame_clock = false;
-        }
+        const ended = self.reset_frame_clock;
+        self.reset_frame_clock = false;
         return .{
             .quit_requested = self.quit_requested,
-            .native_interaction_active = active,
-            .interaction_ended = ended,
+            .native_interaction_active = self.tracking_window,
+            .blocking_interaction_ended = ended,
         };
     }
 
@@ -139,6 +139,22 @@ pub const State = struct {
         self.event_lists[next].clearRetainingCapacity();
         self.pending_event_buffer = next;
         return self.event_lists[ready].items;
+    }
+
+    fn enqueue(self: *Self, event: Event, comptime producer: []const u8) void {
+        if (self.tracking_window) return;
+        const list = &self.event_lists[self.pending_event_buffer];
+        list.appendBounded(event) catch std.debug.panic(
+            "event buffer overflow: producer={s}, len={d}, capacity={d}, tracking={}, moving={}, resizing={}",
+            .{ producer, list.items.len, list.capacity, self.tracking_window, self.moving_window, self.resizing_window },
+        );
+    }
+
+    // Discard the old batch; active native tracking alone suppresses new input.
+    fn cancelPendingInput(self: *Self) void {
+        const list = &self.event_lists[self.pending_event_buffer];
+        list.clearRetainingCapacity();
+        list.appendAssumeCapacity(.reset_all);
     }
 
     // Initialize in place: the view and delegate borrow this address until teardown.
@@ -353,14 +369,18 @@ pub const State = struct {
     }
 
     fn beginWindowTracking(self: *Self) void {
+        if (self.tracking_window) return;
         self.tracking_window = true;
+        self.cancelPendingInput();
         self.applyCursorHidden(false);
     }
 
     fn endWindowTracking(self: *Self) void {
+        if (!self.tracking_window) return;
+        std.debug.assert(!self.resizing_window);
         self.tracking_window = false;
         self.moving_window = false;
-        self.reset_frame_clock = true;
+        self.cancelPendingInput();
     }
 
     fn applyCursorHidden(self: *Self, hidden: bool) void {
@@ -441,6 +461,7 @@ fn registerClasses() !void {
             return error.FailedToRegisterMethod;
         }
         if (!class.addMethod("drawRect:", drawRect)) return error.FailedToRegisterMethod;
+        if (!class.addMethod("keyDown:", ignoreKeyDown)) return error.FailedToRegisterMethod;
 
         objc.registerClassPair(class);
     }
@@ -495,6 +516,10 @@ fn nativeTrue(_: objc.c.id, _: objc.c.SEL) callconv(.c) bool {
     return true;
 }
 
+// Native dispatch handles shortcuts first. Swallow any remaining key at the
+// game view so suppressed gameplay input does not trigger NSResponder's beep.
+fn ignoreKeyDown(_: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c) void {}
+
 fn platformForCallback(receiver: objc.c.id) ?*State {
     var pointer: ?*anyopaque = null;
     _ = objc.c.object_getInstanceVariable(receiver, platform_ivar, &pointer);
@@ -529,8 +554,7 @@ fn didResignFocus(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c)
     const platform = platformForCallback(receiver) orelse return;
     if (!platform.focused) return;
     platform.focused = false;
-    platform.event_lists[platform.pending_event_buffer].appendBounded(.reset_all) catch
-        @panic("event buffer overflow");
+    platform.enqueue(.reset_all, "focus loss");
     platform.native_mouse_buttons = @splat(false);
     platform.client_mouse_buttons = @splat(false);
     platform.keys_by_code = @splat(null);
@@ -545,12 +569,16 @@ fn windowWillMove(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c)
 
 fn windowWillStartLiveResize(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c) void {
     const platform = platformForCallback(receiver) orelse return;
+    platform.resizing_window = true;
     platform.beginWindowTracking();
 }
 
 fn windowDidEndLiveResize(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c) void {
     const platform = platformForCallback(receiver) orelse return;
-    platform.endWindowTracking();
+    if (!platform.resizing_window) return;
+    platform.resizing_window = false;
+    platform.reset_frame_clock = true;
+    if (!platform.moving_window) platform.endWindowTracking();
 }
 
 fn drawRect(receiver: objc.c.id, _: objc.c.SEL, _: Rect) callconv(.c) void {
@@ -633,17 +661,10 @@ fn pumpMessages(platform: *State, budget: usize) void {
 
     // Bound event work so continuous input cannot starve a frame.
     for (0..budget) |_| {
-        // WindowServer can drag a title bar without a blocking AppKit loop.
-        // didMove can fire more than once, so wait for the initiating button up.
-        const left_button_mask = @as(usize, 1) << @backingInt(MouseButton.left);
-        if (platform.moving_window) {
-            const event_class = objc.getClass("NSEvent").?;
-            const pressed_buttons = event_class.msgSend(usize, "pressedMouseButtons", .{});
-            const left_released = (pressed_buttons & left_button_mask) == 0;
-            const move_finished = left_released and
-                !platform.window.msgSend(bool, "inLiveResize", .{});
-            if (move_finished) platform.endWindowTracking();
-        }
+        finishWindowMovement(platform);
+        const pending = &platform.event_lists[platform.pending_event_buffer];
+        // Native callbacks may already have queued input. Leave room for the final sample.
+        if (pending.items.len >= pending.capacity - 1) break;
 
         const event = platform.application.msgSend(
             Object,
@@ -657,6 +678,21 @@ fn pumpMessages(platform: *State, budget: usize) void {
         platform.application.msgSend(void, "sendEvent:", .{event});
         if (platform.quit_requested) break;
     }
+    // The last budgeted dispatch can finish a gesture too.
+    if (!platform.quit_requested) finishWindowMovement(platform);
+}
+
+/// While the moving_window flag is set we check for a mouse button left up signal and that the window is not inLiveResize
+/// and end window tracking once we encounter that.
+fn finishWindowMovement(platform: *State) void {
+    if (!platform.moving_window) return;
+    // WindowServer can move a window asynchronously; didMove is not an end notification.
+    const left_button_mask = @as(usize, 1) << @backingInt(MouseButton.left);
+    const pressed_buttons = objc.getClass("NSEvent").?.msgSend(usize, "pressedMouseButtons", .{});
+    if ((pressed_buttons & left_button_mask) != 0) return;
+    if (platform.window.msgSend(bool, "inLiveResize", .{})) return;
+    platform.moving_window = false;
+    if (!platform.resizing_window) platform.endWindowTracking();
 }
 
 // One producer path also covers AppKit dispatch invoked outside our explicit pump.
@@ -698,6 +734,7 @@ fn processEvent(platform: *State, event: Object, event_type: appkit.NSEventType)
             const code = event.msgSend(appkit.VirtualKeyCode, "keyCode", .{});
             const index = @backingInt(code);
             const down = event_type == .key_down;
+            const repeat = down and event.msgSend(bool, "isARepeat", .{});
 
             // Remember the logical key so changing layouts while held cannot
             // send its release to a different key. Command follows this path too.
@@ -705,21 +742,20 @@ fn processEvent(platform: *State, event: Object, event_type: appkit.NSEventType)
                 platform.keys_by_code[index]
             else
                 null;
-            if (cached orelse keyFromEvent(event, code)) |key| {
-                const repeat = down and event.msgSend(bool, "isARepeat", .{});
+            const mapped = if (down and !repeat) keyFromEvent(event, code) else cached orelse keyFromEvent(event, code);
+            if (mapped) |key| {
                 const translated: Event = if (!down)
                     .{ .key_released = key }
                 else if (repeat)
                     .{ .key_repeat = key }
                 else
                     .{ .key_pressed = key };
-                platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
-                    @panic("event buffer overflow");
+                platform.enqueue(translated, "keyboard");
                 if (index < platform.keys_by_code.len) {
                     platform.keys_by_code[index] = if (down) key else null;
                 }
             }
-            return true;
+            return !platform.tracking_window;
         },
         .flags_changed => {
             updateModifiers(
@@ -727,7 +763,7 @@ fn processEvent(platform: *State, event: Object, event_type: appkit.NSEventType)
                 event.msgSend(appkit.VirtualKeyCode, "keyCode", .{}),
                 event.msgSend(usize, "modifierFlags", .{}),
             );
-            return true;
+            return !platform.tracking_window;
         },
         .left_mouse_down,
         .left_mouse_up,
@@ -746,7 +782,7 @@ fn processEvent(platform: *State, event: Object, event_type: appkit.NSEventType)
             // AppKit must receive title-bar/control clicks and their matching releases.
             // A release from a game click is still recorded after dragging outside the view.
             const index: usize = @intCast(button);
-            if (down and !eventInsideView(platform, event)) {
+            if (down and (platform.tracking_window or !eventInsideView(platform, event))) {
                 platform.native_mouse_buttons[index] = true;
                 return false;
             }
@@ -756,7 +792,7 @@ fn processEvent(platform: *State, event: Object, event_type: appkit.NSEventType)
             }
 
             const unmatched_release = !down and !platform.client_mouse_buttons[index];
-            if (unmatched_release and !eventInsideView(platform, event)) {
+            if (unmatched_release and (platform.tracking_window or !eventInsideView(platform, event))) {
                 return false;
             }
 
@@ -767,28 +803,37 @@ fn processEvent(platform: *State, event: Object, event_type: appkit.NSEventType)
                 .{ .mouse_pressed = .{ .button = mapped, .pos = position } }
             else
                 .{ .mouse_released = .{ .button = mapped, .pos = position } };
-            platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
-                @panic("event buffer overflow");
+            platform.enqueue(translated, "mouse button");
             return true;
         },
-        .mouse_moved, .left_mouse_dragged, .right_mouse_dragged, .other_mouse_dragged => {
-            const dragging = std.mem.indexOfScalar(bool, &platform.client_mouse_buttons, true) != null;
-            if (!dragging and !eventInsideView(platform, event)) return false;
+        .mouse_moved => {
+            if (platform.tracking_window or !eventInsideView(platform, event)) return false;
             const position = mousePosition(platform, event);
-            platform.event_lists[platform.pending_event_buffer].appendBounded(.{ .mouse_move = position }) catch
-                @panic("event buffer overflow");
+            platform.enqueue(.{ .mouse_move = position }, "mouse motion");
+            return true;
+        },
+        .left_mouse_dragged, .right_mouse_dragged, .other_mouse_dragged => {
+            const button: isize = switch (event_type) {
+                .left_mouse_dragged => @backingInt(MouseButton.left),
+                .right_mouse_dragged => @backingInt(MouseButton.right),
+                else => event.msgSend(isize, "buttonNumber", .{}),
+            };
+            if (button < 0 or button >= platform.client_mouse_buttons.len) return false;
+            if (!platform.client_mouse_buttons[@intCast(button)]) return false;
+            platform.enqueue(.{ .mouse_move = mousePosition(platform, event) }, "client drag");
             return true;
         },
         .scroll_wheel => {
+            if (platform.tracking_window) return false;
             const delta = event.msgSend(f64, "scrollingDeltaY", .{});
             // WM_MOUSEWHEEL reports device direction; undo macOS natural scrolling.
             const inverted = event.msgSend(bool, "isDirectionInvertedFromDevice", .{});
             const device_delta = if (inverted) -delta else delta;
             if (device_delta != 0) {
                 const position = mousePosition(platform, event);
-                platform.event_lists[platform.pending_event_buffer].appendBounded(.{
+                platform.enqueue(.{
                     .mouse_scroll = .{ .value = if (device_delta > 0) 1 else -1, .mouse_pos = position },
-                }) catch @panic("event buffer overflow");
+                }, "mouse wheel");
             }
             return true;
         },
@@ -854,8 +899,7 @@ fn updateModifiers(platform: *State, code: appkit.VirtualKeyCode, raw_flags: usi
     };
     const key = keyFromCode(code).?;
     const translated: Event = if (down) .{ .key_pressed = key } else .{ .key_released = key };
-    platform.event_lists[platform.pending_event_buffer].appendBounded(translated) catch
-        @panic("event buffer overflow");
+    platform.enqueue(translated, "modifier");
 }
 
 fn keyFromEvent(event: Object, code: appkit.VirtualKeyCode) ?Key {
@@ -1082,6 +1126,14 @@ fn testInputPlatform(platform: *State) void {
     }
 }
 
+fn testDelegate(platform: *State) !Object {
+    try registerClasses();
+    const delegate = objc.getClass("FractureDelegate").?.msgSend(Object, "alloc", .{})
+        .msgSend(Object, "init", .{});
+    _ = objc.c.object_setInstanceVariable(delegate.value, platform_ivar, platform);
+    return delegate;
+}
+
 fn testKeyEvent(
     event_type: appkit.NSEventType,
     code: appkit.VirtualKeyCode,
@@ -1132,29 +1184,96 @@ fn testMouseEvent(event_type: appkit.NSEventType, point: Point, window_number: i
     );
 }
 
-test "AppKit ignores unknown keycodes" {
+// Supply the native layout translation without changing the user's keyboard
+// layout. The real processEvent/keyFromEvent path must establish its own cache.
+const TestLayoutKeyEvent = struct {
+    var characters: [:0]const u8 = "";
+    var repeat: bool = false;
+
+    fn keyCode(_: objc.c.id, _: objc.c.SEL) callconv(.c) c_ushort {
+        return @backingInt(appkit.VirtualKeyCode.ansi_e);
+    }
+
+    fn isARepeat(_: objc.c.id, _: objc.c.SEL) callconv(.c) bool {
+        return repeat;
+    }
+
+    fn charactersByApplyingModifiers(_: objc.c.id, _: objc.c.SEL, flags: c_ulong) callconv(.c) objc.c.id {
+        std.debug.assert(flags == 0);
+        return nsString(characters).value;
+    }
+
+    fn create() !Object {
+        const class = objc.allocateClassPair(objc.getClass("NSObject").?, "FractureTestLayoutKeyEvent") orelse
+            return error.FailedToRegisterClass;
+        errdefer objc.disposeClassPair(class);
+        if (!class.addMethod("keyCode", keyCode)) return error.FailedToRegisterMethod;
+        if (!class.addMethod("isARepeat", isARepeat)) return error.FailedToRegisterMethod;
+        if (!class.addMethod("charactersByApplyingModifiers:", charactersByApplyingModifiers)) return error.FailedToRegisterMethod;
+        objc.registerClassPair(class);
+        return class.msgSend(Object, "alloc", .{}).msgSend(Object, "init", .{});
+    }
+};
+
+test "AppKit key presses establish identity across layout changes until release" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
     var platform: State = undefined;
     testInputPlatform(&platform);
-
-    const unknown_code: appkit.VirtualKeyCode = @fromBackingInt(@as(u16, 65535));
-    const event = testKeyEvent(.key_down, unknown_code, 0, false, 0);
-    try std.testing.expect(processEvent(&platform, event, .key_down));
+    const unknown = testKeyEvent(.key_down, @fromBackingInt(@as(u16, 65535)), 0, false, 0);
+    try std.testing.expect(processEvent(&platform, unknown, .key_down));
     try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+
+    const event = try TestLayoutKeyEvent.create();
+    defer event.release();
+    const cases = [_]struct { kind: appkit.NSEventType, characters: [:0]const u8, repeat: bool = false, expected: Event }{
+        .{ .kind = .key_down, .characters = "z", .expected = .{ .key_pressed = .z } },
+        // The layout now produces E, but this is still the original Z press.
+        .{ .kind = .key_down, .characters = "e", .repeat = true, .expected = .{ .key_repeat = .z } },
+        .{ .kind = .key_up, .characters = "e", .expected = .{ .key_released = .z } },
+        .{ .kind = .key_down, .characters = "e", .expected = .{ .key_pressed = .e } },
+        // If a release was missed, a fresh press still replaces the old identity.
+        .{ .kind = .key_down, .characters = "z", .expected = .{ .key_pressed = .z } },
+        .{ .kind = .key_up, .characters = "e", .expected = .{ .key_released = .z } },
+    };
+    for (cases) |case| {
+        TestLayoutKeyEvent.characters = case.characters;
+        TestLayoutKeyEvent.repeat = case.repeat;
+        try std.testing.expect(processEvent(&platform, event, case.kind));
+        try std.testing.expectEqualDeep(&[_]Event{case.expected}, platform.takeEvents());
+    }
 }
 
-test "AppKit releases retain the key chosen by the earlier layout" {
+test "native tracking cancels pending input and preserves the handed out batch" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
     var platform: State = undefined;
     testInputPlatform(&platform);
-
-    platform.keys_by_code[@backingInt(appkit.VirtualKeyCode.ansi_e)] = .z;
-
-    const release = testKeyEvent(.key_up, .ansi_e, 0, false, 0);
-    try std.testing.expect(processEvent(&platform, release, .key_up));
-    try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .z }}, platform.takeEvents());
+    const press = testKeyEvent(.key_down, .f1, 0, false, 0);
+    const repeat = testKeyEvent(.key_down, .f1, 0, true, 0);
+    _ = processEvent(&platform, press, .key_down);
+    const previous = platform.takeEvents();
+    _ = processEvent(&platform, press, .key_down);
+    for (0..1023) |_| platform.enqueue(.{ .key_repeat = .f1 }, "test setup");
+    platform.moving_window = true;
+    platform.beginWindowTracking();
+    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, previous);
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    // Repeated entry notifications must not generate another reset.
+    platform.beginWindowTracking();
+    try std.testing.expect(!processEvent(&platform, press, .key_down));
+    try std.testing.expect(!processEvent(&platform, repeat, .key_down));
+    updateModifiers(&platform, .control, c.NX_DEVICELCTLKEYMASK);
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    platform.endWindowTracking();
+    // Asynchronous movement completion does not request frame-clock recovery.
+    const status = platform.takeWindowStatus();
+    try std.testing.expect(!status.native_interaction_active);
+    try std.testing.expect(!status.blocking_interaction_ended);
+    // A held key resumes as a repeat without inventing a fresh press.
+    _ = processEvent(&platform, repeat, .key_down);
+    _ = processEvent(&platform, press, .key_down);
+    try std.testing.expectEqualDeep(&[_]Event{ .reset_all, .{ .key_repeat = .f1 }, .{ .key_pressed = .f1 } }, platform.takeEvents());
 }
 
 test "AppKit modifier snapshots do not invent unrelated presses" {
@@ -1168,7 +1287,7 @@ test "AppKit modifier snapshots do not invent unrelated presses" {
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .lshift }}, platform.takeEvents());
 }
 
-test "AppKit nonclient presses suppress their releases inside the view" {
+test "AppKit mouse events require ownership of the matching client button" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
     try registerClasses();
@@ -1187,6 +1306,66 @@ test "AppKit nonclient presses suppress their releases inside the view" {
     const release = testMouseEvent(.left_mouse_up, .{ .x = 20, .y = 30 }, 0);
     try std.testing.expect(!processEvent(&platform, release, .left_mouse_up));
     try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+
+    // A different client button cannot claim this drag.
+    testInputPlatform(&platform);
+    platform.view = view;
+    platform.client_mouse_buttons[@backingInt(MouseButton.right)] = true;
+    const drag = testMouseEvent(.left_mouse_dragged, .{ .x = 20, .y = 30 }, 0);
+    try std.testing.expect(!processEvent(&platform, drag, .left_mouse_dragged));
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    platform.client_mouse_buttons[@backingInt(MouseButton.left)] = true;
+    try std.testing.expect(processEvent(&platform, drag, .left_mouse_dragged));
+    try std.testing.expectEqual(@as(usize, 1), platform.takeEvents().len);
+
+    // Extra-button drags require a valid index and ownership of that button.
+    testInputPlatform(&platform);
+    platform.view = view;
+    platform.client_mouse_buttons[2] = true;
+    const native = c.CGEventCreateMouseEvent(null, c.kCGEventOtherMouseDragged, .{ .x = 20, .y = 30 }, c.kCGMouseButtonCenter) orelse return error.TestEventCreationFailed;
+    defer c.CFRelease(native);
+    for ([_]i64{ 2, 4, 5 }) |button| {
+        c.CGEventSetIntegerValueField(native, c.kCGMouseEventButtonNumber, button);
+        const event = objc.getClass("NSEvent").?.msgSend(Object, "eventWithCGEvent:", .{native});
+        try std.testing.expectEqual(button, event.msgSend(isize, "buttonNumber", .{}));
+        try std.testing.expectEqual(button == 2, processEvent(&platform, event, .other_mouse_dragged));
+        try std.testing.expectEqual(@as(usize, if (button == 2) 1 else 0), platform.takeEvents().len);
+    }
+}
+
+test "tracking preserves mouse ownership and accepts new client presses on exit" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    try registerClasses();
+    const view = objc.getClass("FractureView").?.msgSend(Object, "alloc", .{})
+        .msgSend(Object, "initWithFrame:", .{makeRect(0, 0, 320, 180)});
+    defer view.release();
+    var platform: State = undefined;
+    testInputPlatform(&platform);
+    platform.view = view;
+    const press = testMouseEvent(.left_mouse_down, .{ .x = 20, .y = 30 }, 0);
+    try std.testing.expect(processEvent(&platform, press, .left_mouse_down));
+    _ = platform.takeEvents();
+    platform.beginWindowTracking();
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    // A pre-existing client press still owns its release, but cannot enqueue it.
+    try std.testing.expect(processEvent(&platform, testMouseEvent(.left_mouse_up, .{ .x = 20, .y = 30 }, 0), .left_mouse_up));
+    try std.testing.expect(!platform.client_mouse_buttons[@backingInt(MouseButton.left)]);
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    try std.testing.expect(!processEvent(&platform, press, .left_mouse_down));
+    try std.testing.expect(!platform.client_mouse_buttons[@backingInt(MouseButton.left)]);
+    try std.testing.expect(platform.native_mouse_buttons[@backingInt(MouseButton.left)]);
+    platform.endWindowTracking();
+    const drag = testMouseEvent(.left_mouse_dragged, .{ .x = 25, .y = 35 }, 0);
+    try std.testing.expect(!processEvent(&platform, drag, .left_mouse_dragged));
+    try std.testing.expect(!processEvent(&platform, testMouseEvent(.left_mouse_up, .{ .x = 25, .y = 35 }, 0), .left_mouse_up));
+    try std.testing.expect(!platform.native_mouse_buttons[@backingInt(MouseButton.left)]);
+    try std.testing.expect(processEvent(&platform, press, .left_mouse_down));
+    const events = platform.takeEvents();
+    try std.testing.expectEqual(@as(usize, 2), events.len);
+    try std.testing.expect(events[0] == .reset_all);
+    try std.testing.expect(events[1] == .mouse_pressed);
+    try std.testing.expectEqual(MouseButton.left, events[1].mouse_pressed.button);
 }
 
 // Native integration tests need a desktop session to create and activate a window.
@@ -1212,6 +1391,12 @@ const TestWindow = struct {
         try self.platform.createWindow(.{ .title = "Fracture window test", .frame_buffer = &self.buffer });
         errdefer self.platform.destroyWindow();
         self.platform.showWindow();
+        errdefer std.debug.print("window test activation: key={}, active={}, focused={}, quit={}\n", .{
+            self.platform.window.msgSend(bool, "isKeyWindow", .{}),
+            self.platform.application.msgSend(bool, "isActive", .{}),
+            self.platform.focused,
+            self.platform.quit_requested,
+        });
 
         // Activation is asynchronous. Inject only after the desktop grants focus.
         for (0..200) |_| {
@@ -1258,43 +1443,117 @@ const TestWindow = struct {
     }
 };
 
-test "poll samples the mouse without a queued motion event" {
-    const pool = objc.AutoreleasePool.init();
-    defer pool.deinit();
-    var fixture: TestWindow = undefined;
-    try fixture.init();
-    defer fixture.deinit();
-    const platform = &fixture.platform;
+var test_forwarded_key_down: usize = 0;
 
-    // A fast exit may leave the last event well inside the view. No final
-    // mouse-moved event is guaranteed, so an empty native queue must still
-    // provide the current pointer position to the game.
-    _ = platform.pollEvents();
-    const events = platform.takeEvents();
-    try std.testing.expect(events.len > 0);
-    try std.testing.expect(events[events.len - 1] == .mouse_move);
+fn testForwardedKeyDown(_: objc.c.id, _: objc.c.SEL, _: objc.c.id) callconv(.c) void {
+    test_forwarded_key_down += 1;
 }
 
-test "queued Command-modified keys reach the event buffer" {
+test "tracking key downs stop at the game view instead of falling off the responder chain" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    try registerClasses();
+    const view = objc.getClass("FractureView").?.msgSend(Object, "alloc", .{})
+        .msgSend(Object, "initWithFrame:", .{makeRect(0, 0, 320, 180)});
+    defer view.release();
+    var platform: State = undefined;
+    testInputPlatform(&platform);
+    platform.view = view;
+    // Observe a forwarded key at the next responder without triggering a system beep.
+    const observer_class = objc.allocateClassPair(objc.getClass("NSResponder").?, "FractureTestKeyResponder") orelse return error.FailedToRegisterClass;
+    // Keep the registered class alive through AppKit's autorelease pools.
+    try std.testing.expect(observer_class.addMethod("keyDown:", testForwardedKeyDown));
+    objc.registerClassPair(observer_class);
+    const observer = observer_class.msgSend(Object, "alloc", .{}).msgSend(Object, "init", .{});
+    defer observer.release();
+    const next = view.msgSend(Object, "nextResponder", .{});
+    view.msgSend(void, "setNextResponder:", .{observer});
+    defer view.msgSend(void, "setNextResponder:", .{next});
+    test_forwarded_key_down = 0;
+    platform.beginWindowTracking();
+    const key = testKeyEvent(.key_down, .f1, 0, false, 0);
+    try std.testing.expect(!processEvent(&platform, key, .key_down));
+    // Deliver the forwarded key to the real responder chain without requiring
+    // desktop activation. Full application dispatch has separate window tests.
+    view.msgSend(void, "keyDown:", .{key});
+    try std.testing.expectEqual(@as(usize, 0), test_forwarded_key_down);
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    platform.endWindowTracking();
+}
+
+test "poll samples fresh mouse coordinates without a queued motion event" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
     var fixture: TestWindow = undefined;
     try fixture.init();
     defer fixture.deinit();
     const platform = &fixture.platform;
-    const window_number = platform.window.msgSend(isize, "windowNumber", .{});
 
-    // F1 has a layout-independent mapping, so the expected event is explicit.
-    const press = testKeyEvent(.key_down, .f1, c.NX_COMMANDMASK, false, window_number);
-    platform.application.msgSend(void, "postEvent:atStart:", .{ press, true });
-    pumpMessages(platform, max_messages_per_frame);
-    try std.testing.expect(!platform.quit_requested);
+    platform.cursor_requested_hidden = false;
+    const saved_event = c.CGEventCreate(null) orelse return error.TestEventCreationFailed;
+    defer c.CFRelease(saved_event);
+    const saved_position = c.CGEventGetLocation(saved_event);
+    defer _ = c.CGWarpMouseCursorPosition(saved_position);
+
+    // The fixture presents 320x180 pixels in a 340x200 point view, with a
+    // 10-point windowed inset. Fullscreen fills that view instead of insetting.
+    const bounds = platform.view.msgSend(Rect, "bounds", .{});
+    try std.testing.expectEqual(@as(f64, 340), bounds.size.width);
+    try std.testing.expectEqual(@as(f64, 200), bounds.size.height);
+    const cases = [_]struct { point: Point, fullscreen: bool, expected: event_types.MousePosition }{
+        .{ .point = .{ .x = 17, .y = 23 }, .fullscreen = false, .expected = .{ .x = 7, .y = 13 } },
+        .{ .point = .{ .x = -11, .y = 27 }, .fullscreen = false, .expected = .{ .x = -21, .y = 17 } },
+        // One quarter across and three quarters down maps to (80,135).
+        .{ .point = .{ .x = 85, .y = 150 }, .fullscreen = true, .expected = .{ .x = 80, .y = 135 } },
+    };
+    defer platform.fullscreen = false;
+    for (cases) |case| {
+        platform.fullscreen = case.fullscreen;
+        const window_point = platform.view.msgSend(Point, "convertPoint:toView:", .{ case.point, nil });
+        const screen_point = platform.window.msgSend(Point, "convertPointToScreen:", .{window_point});
+        // AppKit's screen origin is bottom-left; Quartz's is top-left on the
+        // main display. Warping changes the live pointer without posting NSEvents.
+        const display_height = c.CGDisplayBounds(c.CGMainDisplayID()).size.height;
+        try std.testing.expectEqual(@as(c.CGError, 0), c.CGWarpMouseCursorPosition(.{
+            .x = screen_point.x,
+            .y = display_height - screen_point.y,
+        }));
+        // A queued stale position must not replace the final live sample.
+        platform.enqueue(.{ .mouse_move = .{ .x = 123, .y = 124 } }, "test setup");
+        _ = platform.pollEvents();
+        const events = platform.takeEvents();
+        try std.testing.expect(events.len >= 2);
+        try std.testing.expectEqualDeep(Event{ .mouse_move = case.expected }, events[events.len - 1]);
+    }
+}
+
+test "pump reserves the final sample and leaves native input queued at capacity" {
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
+    var fixture: TestWindow = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const platform = &fixture.platform;
+    // Exercise the production pump with the same small capacity as the drag reproduction.
+    for (&platform.event_lists, &platform.event_storage) |*list, *storage| {
+        list.* = std.ArrayList(Event).initBuffer(storage[0..64]);
+    }
+    for (0..63) |_| platform.enqueue(.{ .key_repeat = .s }, "test setup");
+    const number = platform.window.msgSend(isize, "windowNumber", .{});
+    platform.application.msgSend(void, "postEvent:atStart:", .{ testKeyEvent(.key_down, .f1, 0, false, number), true });
+    _ = platform.pollEvents();
+    const full = platform.takeEvents();
+    try std.testing.expectEqual(@as(usize, 64), full.len);
+    try std.testing.expect(full[63] == .mouse_move);
+    for (full[0..63]) |event| try std.testing.expectEqualDeep(Event{ .key_repeat = .s }, event);
+    pumpMessages(platform, 1);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, platform.takeEvents());
-
-    const release = testKeyEvent(.key_up, .f1, c.NX_COMMANDMASK, false, window_number);
-    platform.application.msgSend(void, "postEvent:atStart:", .{ release, true });
-    pumpMessages(platform, max_messages_per_frame);
-    try std.testing.expect(!platform.quit_requested);
+    // A full producer batch also prevents dequeuing; handoff is what makes room.
+    for (0..64) |_| platform.enqueue(.{ .key_repeat = .s }, "test setup");
+    platform.application.msgSend(void, "postEvent:atStart:", .{ testKeyEvent(.key_up, .f1, 0, false, number), true });
+    pumpMessages(platform, 1);
+    try std.testing.expectEqual(@as(usize, 64), platform.takeEvents().len);
+    pumpMessages(platform, 1);
     try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .f1 }}, platform.takeEvents());
 }
 
@@ -1363,50 +1622,67 @@ test "native pump leaves events beyond its budget for the next frame" {
 test "either focus-loss callback resets input once per focus interval" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
-    var fixture: TestWindow = undefined;
-    try fixture.init();
-    defer fixture.deinit();
-    const platform = &fixture.platform;
-
+    var platform: State = undefined;
+    testInputPlatform(&platform);
+    platform.delegate = try testDelegate(&platform);
+    defer platform.delegate.release();
     // Both notifications may describe the same loss; either one may arrive first.
-    platform.delegate.msgSend(void, "windowDidResignKey:", .{nil});
-    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
-    platform.delegate.msgSend(void, "applicationDidResignActive:", .{nil});
-    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
-    platform.delegate.msgSend(void, "windowDidBecomeKey:", .{nil});
-    platform.delegate.msgSend(void, "applicationDidBecomeActive:", .{nil});
-    platform.delegate.msgSend(void, "applicationDidResignActive:", .{nil});
-    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
-    platform.delegate.msgSend(void, "windowDidResignKey:", .{nil});
-    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    const cases = [_][2][:0]const u8{
+        .{ "windowDidResignKey:", "applicationDidResignActive:" },
+        .{ "applicationDidResignActive:", "windowDidResignKey:" },
+    };
+    inline for (cases) |case| {
+        // Start another focus interval; native focus transitions have desktop coverage.
+        platform.focused = true;
+        platform.delegate.msgSend(void, case[0], .{nil});
+        try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+        platform.delegate.msgSend(void, case[1], .{nil});
+        try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    }
 }
 
-test "resize callbacks preserve explicitly delivered input without a reset" {
+test "resize callbacks cancel input and report recovery during another interaction" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
-    var fixture: TestWindow = undefined;
-    try fixture.init();
-    defer fixture.deinit();
-    const platform = &fixture.platform;
-    const number = platform.window.msgSend(isize, "windowNumber", .{});
-    // This exercises the callbacks; it does not enter AppKit's native tracking loop.
+    var platform: State = undefined;
+    testInputPlatform(&platform);
+    platform.delegate = try testDelegate(&platform);
+    defer platform.delegate.release();
+    // Exercise callback state transitions without a native window or dispatch loop.
+    platform.enqueue(.{ .key_pressed = .f1 }, "test setup");
     platform.delegate.msgSend(void, "windowWillStartLiveResize:", .{nil});
-    platform.application.msgSend(void, "sendEvent:", .{testKeyEvent(.key_down, .f1, 0, false, number)});
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
     platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
-    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, platform.takeEvents());
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
     // An earlier end must stay latched if another interaction starts before polling.
     platform.delegate.msgSend(void, "windowWillStartLiveResize:", .{nil});
     const active = platform.takeWindowStatus();
     try std.testing.expect(active.native_interaction_active);
-    try std.testing.expect(!active.interaction_ended);
+    try std.testing.expect(active.blocking_interaction_ended);
     platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
     const ended = platform.takeWindowStatus();
     try std.testing.expect(!ended.native_interaction_active);
-    try std.testing.expect(ended.interaction_ended);
-    try std.testing.expect(!platform.takeWindowStatus().interaction_ended);
+    try std.testing.expect(ended.blocking_interaction_ended);
+    try std.testing.expect(!platform.takeWindowStatus().blocking_interaction_ended);
+    _ = platform.takeEvents();
+
+    // Resize recovery is also consumed while an overlapping movement remains active.
+    platform.delegate.msgSend(void, "windowWillMove:", .{nil});
+    platform.delegate.msgSend(void, "windowWillStartLiveResize:", .{nil});
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+    platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
+    const moving = platform.takeWindowStatus();
+    try std.testing.expect(moving.native_interaction_active);
+    try std.testing.expect(moving.blocking_interaction_ended);
+    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
+    try std.testing.expect(!platform.takeWindowStatus().blocking_interaction_ended);
+    platform.moving_window = false;
+    platform.endWindowTracking();
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
 }
 
-test "sendEvent outside pump reaches the next batch" {
+test "native dispatch preserves batches and polls recover input after tracking" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
     var fixture: TestWindow = undefined;
@@ -1414,12 +1690,55 @@ test "sendEvent outside pump reaches the next batch" {
     defer fixture.deinit();
     const platform = &fixture.platform;
     const number = platform.window.msgSend(isize, "windowNumber", .{});
-    platform.application.msgSend(void, "sendEvent:", .{testKeyEvent(.key_down, .f1, 0, false, number)});
-    const first = platform.takeEvents();
-    platform.application.msgSend(void, "sendEvent:", .{testKeyEvent(.key_up, .f1, 0, false, number)});
-    try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, first);
-    try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .f1 }}, platform.takeEvents());
-    try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    const cases = [_]struct { queued: bool, flags: usize }{
+        .{ .queued = false, .flags = 0 },
+        .{ .queued = true, .flags = c.NX_COMMANDMASK },
+    };
+    for (cases) |case| {
+        // F1 keeps both dispatch paths independent of the keyboard layout.
+        const press = testKeyEvent(.key_down, .f1, case.flags, false, number);
+        if (case.queued) {
+            platform.application.msgSend(void, "postEvent:atStart:", .{ press, true });
+            pumpMessages(platform, max_messages_per_frame);
+        } else {
+            platform.application.msgSend(void, "sendEvent:", .{press});
+        }
+        try std.testing.expect(!platform.quit_requested);
+        const first = platform.takeEvents();
+        const release = testKeyEvent(.key_up, .f1, case.flags, false, number);
+        if (case.queued) {
+            platform.application.msgSend(void, "postEvent:atStart:", .{ release, true });
+            pumpMessages(platform, max_messages_per_frame);
+        } else {
+            platform.application.msgSend(void, "sendEvent:", .{release});
+        }
+        try std.testing.expect(!platform.quit_requested);
+        try std.testing.expectEqualDeep(&[_]Event{.{ .key_pressed = .f1 }}, first);
+        try std.testing.expectEqualDeep(&[_]Event{.{ .key_released = .f1 }}, platform.takeEvents());
+        try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+    }
+
+    // Inject the callbacks; the real pump must admit queued input and its live
+    // mouse sample once tracking ends, before the next event handoff.
+    for ([_]bool{ true, false }) |resize| {
+        if (resize) {
+            platform.delegate.msgSend(void, "windowWillStartLiveResize:", .{nil});
+        } else {
+            platform.delegate.msgSend(void, "windowWillMove:", .{nil});
+        }
+        try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
+        platform.application.msgSend(void, "sendEvent:", .{testKeyEvent(.key_down, .f1, 0, false, number)});
+        try std.testing.expectEqual(@as(usize, 0), platform.takeEvents().len);
+        if (resize) platform.delegate.msgSend(void, "windowDidEndLiveResize:", .{nil});
+        platform.application.msgSend(void, "postEvent:atStart:", .{ testKeyEvent(.key_down, .f1, 0, false, number), true });
+        const status = platform.pollEvents();
+        try std.testing.expect(!status.native_interaction_active);
+        try std.testing.expectEqual(resize, status.blocking_interaction_ended);
+        const events = platform.takeEvents();
+        try std.testing.expectEqual(@as(usize, 3), events.len);
+        try std.testing.expectEqualDeep(&[_]Event{ .reset_all, .{ .key_pressed = .f1 } }, events[0..2]);
+        try std.testing.expect(events[2] == .mouse_move);
+    }
 }
 
 test "native close stops the pump before queued input is applied" {
@@ -1457,12 +1776,14 @@ test "client click focuses the window and its drag releases outside the view" {
     platform.window.msgSend(void, "orderOut:", .{nil});
     platform.window.msgSend(void, "orderFront:", .{nil});
     try std.testing.expect(!platform.window.msgSend(bool, "isKeyWindow", .{}));
-    _ = platform.takeEvents();
+    try std.testing.expect(!platform.focused);
+    try std.testing.expectEqualDeep(&[_]Event{.reset_all}, platform.takeEvents());
     const number = platform.window.msgSend(isize, "windowNumber", .{});
     const point = platform.view.msgSend(Point, "convertPoint:toView:", .{ Point{ .x = 17, .y = 23 }, nil });
     const click = testMouseEvent(.left_mouse_down, point, number);
     platform.application.msgSend(void, "sendEvent:", .{click});
     try std.testing.expect(platform.window.msgSend(bool, "isKeyWindow", .{}));
+    try std.testing.expect(platform.focused);
     const pressed = platform.takeEvents();
     try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 7, .y = 13 } } }}, pressed);
     // The release from a client drag still belongs to the game outside the view.

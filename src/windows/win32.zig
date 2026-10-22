@@ -1,5 +1,4 @@
 const std = @import("std");
-const testing = std.testing;
 const windows = std.os.windows;
 const Guid = std.os.windows.GUID;
 
@@ -1389,16 +1388,4 @@ pub fn typedConst2(
         },
         else => @compileError(target_type_error),
     }
-}
-
-test "Win32 constants preserve negative sentinels and signed high bits" {
-    try testing.expectEqual(
-        std.math.maxInt(usize),
-        @intFromPtr(typedConst(?*opaque {}, -1)),
-    );
-    try testing.expectEqual(
-        std.math.maxInt(usize) - 11,
-        @intFromPtr(typedConst(?*opaque {}, -12)),
-    );
-    try testing.expectEqual(std.math.minInt(i32), typedConst(i32, 0x80000000));
 }

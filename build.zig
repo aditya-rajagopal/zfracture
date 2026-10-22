@@ -108,7 +108,7 @@ pub fn build(b: *std.Build) !void {
     });
     const check = b.step(
         "check",
-        "Check the selected app and game library without emitting binaries",
+        "Check the selected app, game library, and tests without running them",
     );
     check.dependOn(&exe_check.step);
     check.dependOn(&dll_check.step);
@@ -118,33 +118,30 @@ pub fn build(b: *std.Build) !void {
         "test",
         "Run engine tests; check Windows audio tests",
     );
-    const host_fracture = b.createModule(.{
-        .root_source_file = b.path("src/fracture.zig"),
-        .target = b.graph.host,
-        .optimize = optimize,
-    });
+    const native_target = target.result.os.tag == b.graph.host.result.os.tag and
+        target.result.cpu.arch == b.graph.host.result.cpu.arch;
     const host_sound = b.createModule(.{
         .root_source_file = b.path("src/sound.zig"),
         .target = b.graph.host,
         .optimize = optimize,
     });
-    try addAudioDependencies(b, host_fracture);
-    try addPlatformDependencies(b, host_fracture);
     try addAudioDependencies(b, host_sound);
     const sound_tests = b.addTest(.{ .name = "sound-tests", .root_module = host_sound });
+    check.dependOn(&sound_tests.step);
     test_step.dependOn(&b.addRunArtifact(sound_tests).step);
     for ([_][]const u8{
         "src/software_renderer.zig",
-        "src/windows/win32.zig",
         "src/wav.zig",
     }) |path| {
+        // Native platform-tests already includes the renderer test.
+        if (native_target and std.mem.eql(u8, path, "src/software_renderer.zig")) continue;
         const test_module = b.createModule(.{
             .root_source_file = b.path(path),
             .target = b.graph.host,
             .optimize = optimize,
-            .imports = &.{.{ .name = "fracture", .module = host_fracture }},
         });
         const host_tests = b.addTest(.{ .root_module = test_module });
+        check.dependOn(&host_tests.step);
         test_step.dependOn(&b.addRunArtifact(host_tests).step);
     }
 
@@ -161,29 +158,23 @@ pub fn build(b: *std.Build) !void {
     const platform_tests = b.addTest(.{ .name = "platform-tests", .root_module = platform_module });
     check.dependOn(&platform_tests.step);
     test_step.dependOn(&platform_tests.step);
-    if (target.result.os.tag == b.graph.host.result.os.tag and
-        target.result.cpu.arch == b.graph.host.result.cpu.arch)
-    {
+    if (native_target) {
         test_step.dependOn(&b.addRunArtifact(platform_tests).step);
     }
 
-    const windows_query = try std.Target.Query.parse(.{ .arch_os_abi = "x86_64-windows" });
-    const windows_target = b.resolveTargetQuery(windows_query);
-    const windows_sound = b.createModule(.{
-        .root_source_file = b.path("src/sound.zig"),
-        .target = windows_target,
-        .optimize = optimize,
-    });
-    const audio_tests = b.addTest(.{
-        .name = "audio-tests",
-        .root_module = windows_sound,
-    });
-    check.dependOn(&audio_tests.step);
-    if (b.graph.host.result.os.tag == .windows and target.result.os.tag == .windows and
-        b.graph.host.result.cpu.arch == target.result.cpu.arch)
-    {
-        test_step.dependOn(&b.addRunArtifact(audio_tests).step);
-    } else {
+    if (b.graph.host.result.os.tag != .windows or b.graph.host.result.cpu.arch != .x86_64) {
+        const windows_query = try std.Target.Query.parse(.{ .arch_os_abi = "x86_64-windows" });
+        const windows_target = b.resolveTargetQuery(windows_query);
+        const windows_sound = b.createModule(.{
+            .root_source_file = b.path("src/sound.zig"),
+            .target = windows_target,
+            .optimize = optimize,
+        });
+        const audio_tests = b.addTest(.{
+            .name = "audio-tests",
+            .root_module = windows_sound,
+        });
+        check.dependOn(&audio_tests.step);
         test_step.dependOn(&audio_tests.step);
     }
 }

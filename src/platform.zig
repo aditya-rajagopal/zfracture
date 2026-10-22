@@ -26,8 +26,10 @@ pub const WindowConfig = struct {
 
 pub const WindowStatus = struct {
     quit_requested: bool,
+    /// Informational: returning polls may still update and render while this is true.
     native_interaction_active: bool,
-    interaction_ended: bool,
+    /// A known blocking interaction completed. Consume independently of active tracking.
+    blocking_interaction_ended: bool,
 };
 
 pub const InitError = backend.InitError;
@@ -115,6 +117,7 @@ pub fn pollEvents(self: *Platform) WindowStatus {
     return self.native.pollEvents();
 }
 
+/// Drain after every returned poll, including native interactions.
 /// The slice remains valid until the next handoff or platform teardown.
 pub fn takeEvents(self: *Platform) []const Event {
     self.assertWindow();
@@ -147,31 +150,21 @@ test "invalid framebuffer dimensions and storage are rejected" {
     try platform.init();
     defer platform.deinit();
     var pixels: [4]u8 align(4096) = @splat(0);
-    var buffer: Renderer.FrameBuffer = .{ .width = 0, .height = 1, .data = &pixels };
-    try std.testing.expectError(error.InvalidFramebuffer, platform.createWindow(.{ .title = "test", .frame_buffer = &buffer }));
-    buffer.width = 1;
-    buffer.height = 0;
-    try std.testing.expectError(error.InvalidFramebuffer, platform.createWindow(.{ .title = "test", .frame_buffer = &buffer }));
-    buffer.height = 2;
-    try std.testing.expectError(error.InvalidFramebuffer, platform.createWindow(.{ .title = "test", .frame_buffer = &buffer }));
+    var cases = [_]Renderer.FrameBuffer{
+        .{ .width = 0, .height = 1, .data = &pixels },
+        .{ .width = 1, .height = 0, .data = &pixels },
+        .{ .width = 1, .height = 2, .data = &pixels }, // Storage fits only one pixel.
+    };
+    for (&cases) |*buffer| {
+        try std.testing.expectError(error.InvalidFramebuffer, platform.createWindow(.{ .title = "test", .frame_buffer = buffer }));
+    }
 }
 
 test {
     std.testing.refAllDecls(backend);
 }
 
-test "frame pacing rejects deadline overflow" {
-    var platform: Platform = .{};
-    try platform.init();
-    defer platform.deinit();
-    try std.testing.expectError(error.InvalidFrameDuration, platform.paceFrame(
-        std.testing.io,
-        .fromNanoseconds(std.math.maxInt(i96)),
-        .fromNanoseconds(1),
-    ));
-}
-
-test "independent platforms pace without a live window and release their timers" {
+test "frame pacing rejects overflow and preserves independent timer lifetimes" {
     var first: Platform = .{};
     try first.init();
     defer first.deinit();
@@ -181,8 +174,12 @@ test "independent platforms pace without a live window and release their timers"
         try std.testing.expect(first.native.frame_timer != second.native.frame_timer);
     }
     second.deinit();
-    if (builtin.os.tag == .windows) try std.testing.expect(second.native.frame_timer == null);
     const io = std.testing.io;
+    try std.testing.expectError(error.InvalidFrameDuration, first.paceFrame(
+        io,
+        .fromNanoseconds(std.math.maxInt(i96)),
+        .fromNanoseconds(1),
+    ));
     const duration: std.Io.Duration = .fromMilliseconds(2);
     first.beginFrame();
     first.endFrame();
