@@ -3,7 +3,6 @@ const std = @import("std");
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const is_macos = target.result.os.tag == .macos;
     switch (target.result.os.tag) {
         .windows => if (target.result.cpu.arch != .x86_64) return error.UnsupportedArchitecture,
         .macos => if (target.result.cpu.arch != .aarch64) return error.UnsupportedArchitecture,
@@ -65,53 +64,17 @@ pub fn build(b: *std.Build) !void {
 
     run_cmd.addPassthruArgs();
 
-    // ==================================== GAME DLL ==================================/
-
-    const dll_module = b.addModule("dynamic_game", .{
-        .root_source_file = b.path("testbed/debug_dll.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "fracture", .module = fracture },
-        },
-    });
-    const game_dll = b.addLibrary(.{
-        .name = "dynamic_game",
-        .linkage = .dynamic,
-        .root_module = dll_module,
-    });
-
-    const dll_step = b.addInstallArtifact(game_dll, .{});
-
-    // A debug executable loads the game at startup, so `zig build run` needs
-    // the installed library as well as the executable (on either platform).
-    if (optimize == .debug) run_cmd.step.dependOn(&dll_step.step);
-    const options = b.addOptions();
-    // Track the application-owned path without making game builds rebuild the executable.
-    options.addOptionPathUntracked("game_library_path", .{ .relative = .{
-        .base = if (is_macos) .install_lib else .install_bin,
-        .sub_path = if (is_macos) "libdynamic_game.dylib" else "dynamic_game.dll",
-    } });
-    entrypoint.addOptions("build_options", options);
-    const game_step = b.step("game", "Build the reloadable game library");
-    game_step.dependOn(&dll_step.step);
     // ==================================== CHECK STEP ==================================/
     const exe_check = b.addExecutable(.{
         .name = "check",
         .root_module = entrypoint,
     });
     exe_check.subsystem = exe.subsystem;
-    const dll_check = b.addLibrary(.{
-        .name = "check_dynamic_game",
-        .linkage = .dynamic,
-        .root_module = dll_module,
-    });
     const check = b.step(
         "check",
-        "Check the selected app, game library, and tests without running them",
+        "Check the testbed and tests without running them",
     );
     check.dependOn(&exe_check.step);
-    check.dependOn(&dll_check.step);
 
     // ==================================== TESTS ==================================/
     const test_step = b.step(

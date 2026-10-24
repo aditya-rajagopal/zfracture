@@ -4,6 +4,8 @@ const assert = std.debug.assert;
 const types = @import("types.zig");
 const Color = types.Color;
 
+const AABB = @import("aabb.zig");
+
 const Renderer = @This();
 
 back_buffer: FrameBuffer,
@@ -46,7 +48,7 @@ pub fn updateCameraTo(renderer: *Renderer, x: f32, y: f32) void {
     renderer.camera_position = .{ .x = x, .y = y };
 }
 
-pub fn visibleWorldBounds(self: *Renderer) struct { min_x: f32, min_y: f32, max_x: f32, max_y: f32 } {
+pub fn visibleWorldBounds(self: *Renderer) AABB {
     assert(self.pixels_per_meter > 0);
     const half_width: f32 = @as(f32, @floatFromInt(self.back_buffer.width)) / self.pixels_per_meter / 2.0;
     const half_height: f32 = @as(f32, @floatFromInt(self.back_buffer.height)) / self.pixels_per_meter / 2.0;
@@ -84,24 +86,22 @@ pub fn drawRectangle(
     y: f32,
     width: f32,
     height: f32,
-    colour: Color,
+    color: Color,
 ) void {
     @setFloatMode(.optimized);
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
 
-    // TODO: Consider blending
     // Round fractional pixel positions and sizes before rasterizing.
-    const x_int: i32 = @intFromFloat(@round(x));
-    const y_int: i32 = @intFromFloat(@round(y));
-    // @TODO: Should we do x + width and then round it?
-    const width_int: i32 = @intFromFloat(@round(width));
-    const height_int: i32 = @intFromFloat(@round(height));
+    const left_int: i64 = @intFromFloat(@round(x));
+    const top_int: i64 = @intFromFloat(@round(y));
+    const right_int: i64 = @intFromFloat(@round(x + width));
+    const bottom_int: i64 = @intFromFloat(@round(y + height));
 
     // Offscreen endpoints can overflow i32 before clipping, so add them in i64.
-    const left = @max(@as(i64, x_int), 0);
-    const top = @max(@as(i64, y_int), 0);
-    const right = @min(@as(i64, x_int) + width_int, back_buffer.width);
-    const bottom = @min(@as(i64, y_int) + height_int, back_buffer.height);
+    const left: i64 = @max(left_int, 0);
+    const top: i64 = @max(top_int, 0);
+    const right: i64 = @min(right_int, back_buffer.width);
+    const bottom: i64 = @min(bottom_int, back_buffer.height);
     if (right <= left or bottom <= top) return;
 
     const x_min: usize = @intCast(left);
@@ -109,14 +109,42 @@ pub fn drawRectangle(
     const x_max: usize = @intCast(right);
     const y_max: usize = @intCast(bottom);
 
-    const colour_u32: u32 = colour.a8r8g8b8();
-
     const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
     const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
 
+    const source_r: f32 = color.r * color.r;
+    const source_g: f32 = color.g * color.g;
+    const source_b: f32 = color.b * color.b;
+    const source_a: f32 = color.a;
+
     for (y_min..y_max) |j| {
         for (x_min..x_max) |i| {
-            pixles_u32[j * back_buffer.width + i] = colour_u32;
+            const destination_u8: [4]u8 = @bitCast(pixles_u32[j * back_buffer.width + i]);
+
+            var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
+            var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
+            var destination_r: f32 = @as(f32, @floatFromInt(destination_u8[2])) / 255.0;
+
+            destination_r = destination_r * destination_r;
+            destination_g = destination_g * destination_g;
+            destination_b = destination_b * destination_b;
+
+            var blended_r = source_r * source_a + destination_r * (1.0 - source_a);
+            var blended_g = source_g * source_a + destination_g * (1.0 - source_a);
+            var blended_b = source_b * source_a + destination_b * (1.0 - source_a);
+
+            blended_r = @sqrt(blended_r);
+            blended_g = @sqrt(blended_g);
+            blended_b = @sqrt(blended_b);
+
+            const final = [_]u8{
+                @truncate(@as(u32, @intFromFloat(@round(blended_b * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_g * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_r * 255.0)))),
+                255,
+            };
+
+            pixles_u32[j * back_buffer.width + i] = @bitCast(final);
         }
     }
 }
