@@ -9,6 +9,8 @@ pub const Platform = @import("platform.zig");
 
 const Types = @import("types.zig");
 pub const Color = Types.Color;
+pub const AABB = @import("AABB.zig");
+
 pub const wav = @import("wav.zig");
 pub const event = @import("event.zig");
 
