@@ -1,31 +1,51 @@
 const std = @import("std");
 const fr = @import("fracture");
+const Bitmap = fr.Bitmap;
 
-const Rectangle = struct {
+const bitmap_size = 64;
+
+const DrawCase = struct {
+    name: []const u8,
     x: f32,
     y: f32,
     width: f32,
     height: f32,
-    colour: fr.Color,
 };
 
-// Alpha is stored with each colour; the renderer does not blend it yet.
-const rectangles = [_]Rectangle{
-    .{
-        .x = 320,
-        .y = 180,
-        .width = 400,
-        .height = 260,
-        .colour = .{ .r = 0.9, .g = 0.15, .b = 0.2, .a = 0.5 },
-    },
-    .{
-        .x = 560,
-        .y = 300,
-        .width = 400,
-        .height = 260,
-        .colour = .{ .r = 0.15, .g = 0.35, .b = 0.9, .a = 0.5 },
-    },
-};
+fn fillTestBitmap(bitmap: Bitmap) void {
+    std.debug.assert(bitmap.width == bitmap_size);
+    std.debug.assert(bitmap.height == bitmap_size);
+    std.debug.assert(bitmap.pixels.len == bitmap_size * bitmap_size);
+
+    for (0..bitmap.height) |y| {
+        for (0..bitmap.width) |x| {
+            // Eight-pixel squares reveal sampling and row-stride mistakes.
+            const checker = (x / 8 + y / 8) % 2;
+            var pixel: u32 = if (checker == 0) 0xffe0e0e0 else 0xff202020;
+
+            // Opaque corner markers reveal orientation and channel swaps.
+            if (y < 8) {
+                if (x < 8) pixel = 0xffff0000;
+                if (x >= bitmap_size - 8) pixel = 0xff00ff00;
+            }
+            if (y >= bitmap_size - 8) {
+                if (x < 8) pixel = 0xff0000ff;
+                if (x >= bitmap_size - 8) pixel = 0xffffff00;
+            }
+
+            // A white centre band fades from transparent to opaque.
+            // RGB stays white even at zero alpha, as this is straight alpha.
+            if (y >= 24) {
+                if (y < 40) {
+                    const alpha: u32 = @intCast(x * 255 / (bitmap.width - 1));
+                    pixel = (alpha << 24) | 0x00ffffff;
+                }
+            }
+
+            bitmap.pixels[y * bitmap.width + x] = pixel;
+        }
+    }
+}
 
 pub fn main(init: std.process.Init) !void {
     var platform: fr.Platform = .{};
@@ -34,6 +54,41 @@ pub fn main(init: std.process.Init) !void {
 
     const width = 1280;
     const height = 720;
+    const centre_x = width / 2;
+    const centre_y = height / 2;
+    const draw_cases = [_]DrawCase{
+        // Keep the image centred while changing the destination dimensions.
+        .{ .name = "Native (1x)", .x = centre_x - 32, .y = centre_y - 32, .width = 64, .height = 64 },
+        .{ .name = "Half size (0.5x)", .x = centre_x - 16, .y = centre_y - 16, .width = 32, .height = 32 },
+        .{ .name = "Fractional scale (1.5x)", .x = centre_x - 48, .y = centre_y - 48, .width = 96, .height = 96 },
+        .{ .name = "Double size (2x)", .x = centre_x - 64, .y = centre_y - 64, .width = 128, .height = 128 },
+        .{ .name = "Quadruple size (4x)", .x = centre_x - 128, .y = centre_y - 128, .width = 256, .height = 256 },
+        .{ .name = "Wide (2x, 0.5x)", .x = centre_x - 64, .y = centre_y - 16, .width = 128, .height = 32 },
+        .{ .name = "Tall (0.5x, 2x)", .x = centre_x - 16, .y = centre_y - 64, .width = 32, .height = 128 },
+
+        // Half-pixel origins put pixel centres exactly on the starting edges.
+        .{ .name = "Native, quarter-pixel origin", .x = centre_x - 32 + 0.25, .y = centre_y - 32 + 0.25, .width = 64, .height = 64 },
+        .{ .name = "Native, half-pixel origin", .x = centre_x - 32 + 0.5, .y = centre_y - 32 + 0.5, .width = 64, .height = 64 },
+        .{ .name = "1.5x, half-pixel origin", .x = centre_x - 48 + 0.5, .y = centre_y - 48 + 0.5, .width = 96, .height = 96 },
+        .{ .name = "0.5x, quarter-pixel origin", .x = centre_x - 16 + 0.25, .y = centre_y - 16 + 0.25, .width = 32, .height = 32 },
+
+        // Clipping must preserve the scale and the original texture position.
+        .{ .name = "2x, left edge, half-pixel origin", .x = -63.5, .y = centre_y - 64, .width = 128, .height = 128 },
+        .{ .name = "2x, right edge, half-pixel origin", .x = width - 63.5, .y = centre_y - 64, .width = 128, .height = 128 },
+        .{ .name = "2x, top edge, half-pixel origin", .x = centre_x - 64, .y = -63.5, .width = 128, .height = 128 },
+        .{ .name = "2x, bottom edge, half-pixel origin", .x = centre_x - 64, .y = height - 63.5, .width = 128, .height = 128 },
+        .{ .name = "1.5x, top-left corner, quarter-pixel origin", .x = -47.75, .y = -47.75, .width = 96, .height = 96 },
+        .{ .name = "1.5x, top-right corner, quarter-pixel origin", .x = width - 47.75, .y = -47.75, .width = 96, .height = 96 },
+        .{ .name = "1.5x, bottom-left corner, quarter-pixel origin", .x = -47.75, .y = height - 47.75, .width = 96, .height = 96 },
+        .{ .name = "1.5x, bottom-right corner, quarter-pixel origin", .x = width - 47.75, .y = height - 47.75, .width = 96, .height = 96 },
+
+        // These cases intentionally leave the screen blank.
+        .{ .name = "2x, fully offscreen left", .x = -128, .y = centre_y - 64, .width = 128, .height = 128 },
+        .{ .name = "2x, fully offscreen right", .x = width, .y = centre_y - 64, .width = 128, .height = 128 },
+        .{ .name = "2x, fully offscreen top", .x = centre_x - 64, .y = -128, .width = 128, .height = 128 },
+        .{ .name = "2x, fully offscreen bottom", .x = centre_x - 64, .y = height, .width = 128, .height = 128 },
+    };
+
     const allocator = std.heap.page_allocator;
     const pixels = try allocator.alignedAlloc(
         u8,
@@ -41,6 +96,15 @@ pub fn main(init: std.process.Init) !void {
         width * height * fr.Renderer.bytes_per_pixel,
     );
     defer allocator.free(pixels);
+
+    // The pixel storage lives for the entire testbed; creation happens once.
+    var bitmap_pixels: [bitmap_size * bitmap_size]u32 = undefined;
+    const bitmap: Bitmap = .{
+        .width = bitmap_size,
+        .height = bitmap_size,
+        .pixels = &bitmap_pixels,
+    };
+    fillTestBitmap(bitmap);
 
     var renderer: fr.Renderer = .{
         .back_buffer = .{ .width = width, .height = height, .data = pixels },
@@ -50,14 +114,16 @@ pub fn main(init: std.process.Init) !void {
     renderer.clearScreen(0.08, 0.08, 0.08);
 
     try platform.createWindow(.{
-        .title = "Testbed - left click to swap draw order",
+        .title = "Testbed - left click or Space: next texture case",
         .frame_buffer = &renderer.back_buffer,
     });
     defer platform.destroyWindow();
     platform.setCursorHidden(false);
     platform.showWindow();
 
-    var reverse_order = false;
+    var case_index: usize = 0;
+    // A sentinel makes the initial case print as well as later changes.
+    var previous_case_index: usize = draw_cases.len;
     const frame_duration: std.Io.Duration = .fromNanoseconds(std.time.ns_per_s / 60);
     var pacing_error: ?fr.Platform.PaceFrameError = null;
     while (true) {
@@ -77,27 +143,36 @@ pub fn main(init: std.process.Init) !void {
         for (events) |event| {
             switch (event) {
                 .mouse_pressed => |mouse| {
-                    if (mouse.button == .left) reverse_order = !reverse_order;
+                    if (mouse.button == .left) {
+                        case_index = (case_index + 1) % draw_cases.len;
+                    }
                 },
                 .key_pressed => |key| {
                     if (key == .escape) return;
+                    if (key == .space) {
+                        case_index = (case_index + 1) % draw_cases.len;
+                    }
                 },
                 else => {},
             }
         }
 
-        renderer.clearScreen(0.08, 0.08, 0.08);
-        for (0..rectangles.len) |i| {
-            const index = if (reverse_order) rectangles.len - 1 - i else i;
-            const rectangle = rectangles[index];
-            renderer.drawRectangle(
-                rectangle.x,
-                rectangle.y,
-                rectangle.width,
-                rectangle.height,
-                rectangle.colour,
-            );
+        const draw_case = draw_cases[case_index];
+        if (case_index != previous_case_index) {
+            std.debug.print("Texture {d}/{d}: {s}, position ({d}, {d}), size {d} x {d}\n", .{
+                case_index + 1, draw_cases.len, draw_case.name, draw_case.x, draw_case.y, draw_case.width, draw_case.height,
+            });
+            previous_case_index = case_index;
         }
+
+        renderer.clearScreen(0.08, 0.08, 0.08);
+        renderer.drawTexturedRectangle(
+            draw_case.x,
+            draw_case.y,
+            draw_case.width,
+            draw_case.height,
+            bitmap,
+        );
         platform.present();
     }
 }

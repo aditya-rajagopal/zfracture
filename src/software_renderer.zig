@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 
 const types = @import("types.zig");
 const Color = types.Color;
+const Bitmap = types.Bitmap;
 
 const AABB = @import("aabb.zig");
 
@@ -75,6 +76,101 @@ pub fn clearScreen(renderer: *Renderer, r: f32, g: f32, b: f32) void {
     const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
     const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
     @memset(pixles_u32[0..total_pixels], clear_colour);
+}
+
+pub fn drawTexturedRectangle(
+    renderer: *Renderer,
+    // x position in frame buffer coordinate
+    x: f32,
+    // y position in frame buffer coordinate
+    y: f32,
+    width: f32,
+    height: f32,
+    texture: Bitmap,
+) void {
+    @setFloatMode(.optimized);
+    const back_buffer: *FrameBuffer = &renderer.back_buffer;
+
+    // We deliberately chose a slightly larger bound here and the uv coordinates
+    // are clamped to the texture bounds. This is to avoid rounding errors
+    // causing the texture to be sampled outside the bounds.
+    const left_int: i64 = @intFromFloat(@floor(x));
+    const top_int: i64 = @intFromFloat(@floor(y));
+    const right_int: i64 = @intFromFloat(@ceil(x + width));
+    const bottom_int: i64 = @intFromFloat(@ceil(y + height));
+
+    const left: i64 = @max(left_int, 0);
+    const top: i64 = @max(top_int, 0);
+    const right: i64 = @min(right_int, back_buffer.width);
+    const bottom: i64 = @min(bottom_int, back_buffer.height);
+    if (right <= left or bottom <= top) return;
+
+    const x_min: usize = @intCast(left);
+    const y_min: usize = @intCast(top);
+    const x_max: usize = @intCast(right);
+    const y_max: usize = @intCast(bottom);
+
+    const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
+    const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
+
+    const inv_width: f32 = 1.0 / width;
+    const inv_height: f32 = 1.0 / height;
+
+    const texture_width: f32 = @floatFromInt(texture.width);
+    const texture_height: f32 = @floatFromInt(texture.height);
+
+    for (y_min..y_max) |j| {
+        const pixel_y: f32 = @as(f32, @floatFromInt(j)) + 0.5;
+        const v = (pixel_y - y) * inv_height;
+        if (v < 0 or v >= 1) continue;
+        const texel_y: usize = @intFromFloat(@floor(v * texture_height));
+        const source_y: usize = @min(texture.height - 1, texel_y);
+
+        for (x_min..x_max) |i| {
+            const pixel_x: f32 = @as(f32, @floatFromInt(i)) + 0.5;
+            const u = (pixel_x - x) * inv_width;
+            if (u < 0 or u >= 1) continue;
+            const texel_x: usize = @intFromFloat(@floor(u * texture_width));
+            const source_x: usize = @min(texture.width - 1, texel_x);
+
+            const source_pixel: [4]u8 = @bitCast(texture.pixels[source_y * texture.width + source_x]);
+            const destination_u8: [4]u8 = @bitCast(pixles_u32[j * back_buffer.width + i]);
+
+            var source_b: f32 = @as(f32, @floatFromInt(source_pixel[0])) / 255.0;
+            var source_g: f32 = @as(f32, @floatFromInt(source_pixel[1])) / 255.0;
+            var source_r: f32 = @as(f32, @floatFromInt(source_pixel[2])) / 255.0;
+            const source_a: f32 = @as(f32, @floatFromInt(source_pixel[3])) / 255.0;
+            if (source_a == 0) continue;
+            source_r = source_r * source_r;
+            source_g = source_g * source_g;
+            source_b = source_b * source_b;
+
+            var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
+            var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
+            var destination_r: f32 = @as(f32, @floatFromInt(destination_u8[2])) / 255.0;
+
+            destination_r = destination_r * destination_r;
+            destination_g = destination_g * destination_g;
+            destination_b = destination_b * destination_b;
+
+            var blended_r = source_r * source_a + destination_r * (1.0 - source_a);
+            var blended_g = source_g * source_a + destination_g * (1.0 - source_a);
+            var blended_b = source_b * source_a + destination_b * (1.0 - source_a);
+
+            blended_r = @sqrt(blended_r);
+            blended_g = @sqrt(blended_g);
+            blended_b = @sqrt(blended_b);
+
+            const final = [_]u8{
+                @truncate(@as(u32, @intFromFloat(@round(blended_b * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_g * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_r * 255.0)))),
+                255,
+            };
+
+            pixles_u32[j * back_buffer.width + i] = @bitCast(final);
+        }
+    }
 }
 
 /// Draw in framebuffer pixels, independent of the camera and world scale.

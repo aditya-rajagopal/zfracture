@@ -1,5 +1,13 @@
 const std = @import("std");
 
+pub const Bitmap = struct {
+    width: usize,
+    height: usize,
+    // Top-down rows of tightly packed 0xAARRGGBB pixels.
+    // RGB is sRGB encoded; alpha is straight (not premultiplied).
+    pixels: []u32,
+};
+
 // NOTE: We dont need this to be a simd structure because we realistically only want to use
 // structure of arrays where each array is 1 colour channel.
 pub const Color = struct {

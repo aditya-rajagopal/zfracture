@@ -9,6 +9,7 @@ pub const Platform = @import("platform.zig");
 
 const Types = @import("types.zig");
 pub const Color = Types.Color;
+pub const Bitmap = Types.Bitmap;
 pub const AABB = @import("AABB.zig");
 
 pub const wav = @import("wav.zig");
