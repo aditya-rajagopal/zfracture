@@ -41,8 +41,24 @@ fn fillTestBitmap(bitmap: Bitmap) void {
                     pixel = (alpha << 24) | 0x00ffffff;
                 }
             }
+            const color: [4]u8 = @bitCast(pixel);
+            var b: f32 = @as(f32, @floatFromInt(color[0])) / 255.0;
+            var g: f32 = @as(f32, @floatFromInt(color[1])) / 255.0;
+            var r: f32 = @as(f32, @floatFromInt(color[2])) / 255.0;
+            const a: f32 = @as(f32, @floatFromInt(color[3])) / 255.0;
 
-            bitmap.pixels[y * bitmap.width + x] = pixel;
+            r = @sqrt(r * r * a);
+            g = @sqrt(g * g * a);
+            b = @sqrt(b * b * a);
+
+            const final = [_]u8{
+                @truncate(@as(u32, @intFromFloat(@round(b * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(g * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(r * 255.0)))),
+                color[3],
+            };
+
+            bitmap.pixels[y * bitmap.width + x] = @bitCast(final);
         }
     }
 }

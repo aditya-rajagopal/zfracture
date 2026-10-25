@@ -4,7 +4,7 @@ pub const Bitmap = struct {
     width: usize,
     height: usize,
     // Top-down rows of tightly packed 0xAARRGGBB pixels.
-    // RGB is sRGB encoded; alpha is straight (not premultiplied).
+    // RGB is premultiplied in linear space, then encoded; alpha is stored unchanged.
     pixels: []u32,
 };
 

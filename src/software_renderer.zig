@@ -78,6 +78,7 @@ pub fn clearScreen(renderer: *Renderer, r: f32, g: f32, b: f32) void {
     @memset(pixles_u32[0..total_pixels], clear_colour);
 }
 
+// TODO(adi): Maybe have nearest-neighbour sampling and bilinear sampling as options?
 pub fn drawTexturedRectangle(
     renderer: *Renderer,
     // x position in frame buffer coordinate
@@ -123,27 +124,97 @@ pub fn drawTexturedRectangle(
         const pixel_y: f32 = @as(f32, @floatFromInt(j)) + 0.5;
         const v = (pixel_y - y) * inv_height;
         if (v < 0 or v >= 1) continue;
-        const texel_y: usize = @intFromFloat(@floor(v * texture_height));
-        const source_y: usize = @min(texture.height - 1, texel_y);
+        // NOTE(adi): We do -0.5 makes it so integer texel coordinates refer to the centre of the texel.
+        // for texel i: (i + 0.5) / texture_width is the canonical centre.
+        // Got this from GPU Gems
+        const texel_y = v * texture_height - 0.5;
 
         for (x_min..x_max) |i| {
             const pixel_x: f32 = @as(f32, @floatFromInt(i)) + 0.5;
             const u = (pixel_x - x) * inv_width;
             if (u < 0 or u >= 1) continue;
-            const texel_x: usize = @intFromFloat(@floor(u * texture_width));
-            const source_x: usize = @min(texture.width - 1, texel_x);
+            const texel_x = u * texture_width - 0.5;
 
-            const source_pixel: [4]u8 = @bitCast(texture.pixels[source_y * texture.width + source_x]);
+            const raw_x0: f32 = @floor(texel_x);
+            const raw_y0: f32 = @floor(texel_y);
+            const raw_x1 = raw_x0 + 1;
+            const raw_y1 = raw_y0 + 1;
+
+            // Distance to center of pixel being sampled. texel_* is the pixel centre in texture space.
+            const dx: f32 = texel_x - raw_x0;
+            const dy: f32 = texel_y - raw_y0;
+
+            const x0: usize = @intFromFloat(std.math.clamp(raw_x0, 0.0, texture_width - 1));
+            const y0: usize = @intFromFloat(std.math.clamp(raw_y0, 0.0, texture_height - 1));
+            const x1: usize = @intFromFloat(std.math.clamp(raw_x1, 0.0, texture_width - 1));
+            const y1: usize = @intFromFloat(std.math.clamp(raw_y1, 0.0, texture_height - 1));
+
+            // Convention: • denotes the pixel being sampled.
+            // A ───── B
+            // │       │
+            // │   •   │
+            // │       │
+            // C ───── D
+            const pixel_a: [4]u8 = @bitCast(texture.pixels[y0 * texture.width + x0]);
+            const pixel_b: [4]u8 = @bitCast(texture.pixels[y0 * texture.width + x1]);
+            const pixel_c: [4]u8 = @bitCast(texture.pixels[y1 * texture.width + x0]);
+            const pixel_d: [4]u8 = @bitCast(texture.pixels[y1 * texture.width + x1]);
+
+            var pixel_a_b: f32 = @as(f32, @floatFromInt(pixel_a[0])) / 255.0;
+            var pixel_a_g: f32 = @as(f32, @floatFromInt(pixel_a[1])) / 255.0;
+            var pixel_a_r: f32 = @as(f32, @floatFromInt(pixel_a[2])) / 255.0;
+            const pixel_a_a: f32 = @as(f32, @floatFromInt(pixel_a[3])) / 255.0;
+
+            var pixel_b_b: f32 = @as(f32, @floatFromInt(pixel_b[0])) / 255.0;
+            var pixel_b_g: f32 = @as(f32, @floatFromInt(pixel_b[1])) / 255.0;
+            var pixel_b_r: f32 = @as(f32, @floatFromInt(pixel_b[2])) / 255.0;
+            const pixel_b_a: f32 = @as(f32, @floatFromInt(pixel_b[3])) / 255.0;
+
+            var pixel_c_b: f32 = @as(f32, @floatFromInt(pixel_c[0])) / 255.0;
+            var pixel_c_g: f32 = @as(f32, @floatFromInt(pixel_c[1])) / 255.0;
+            var pixel_c_r: f32 = @as(f32, @floatFromInt(pixel_c[2])) / 255.0;
+            const pixel_c_a: f32 = @as(f32, @floatFromInt(pixel_c[3])) / 255.0;
+
+            var pixel_d_b: f32 = @as(f32, @floatFromInt(pixel_d[0])) / 255.0;
+            var pixel_d_g: f32 = @as(f32, @floatFromInt(pixel_d[1])) / 255.0;
+            var pixel_d_r: f32 = @as(f32, @floatFromInt(pixel_d[2])) / 255.0;
+            const pixel_d_a: f32 = @as(f32, @floatFromInt(pixel_d[3])) / 255.0;
+
+            // NOTE(adi): We assume the texture is sRGB encoded and premultiplied by the alpha.
+            pixel_a_b = pixel_a_b * pixel_a_b;
+            pixel_a_g = pixel_a_g * pixel_a_g;
+            pixel_a_r = pixel_a_r * pixel_a_r;
+
+            pixel_b_b = pixel_b_b * pixel_b_b;
+            pixel_b_g = pixel_b_g * pixel_b_g;
+            pixel_b_r = pixel_b_r * pixel_b_r;
+
+            pixel_c_b = pixel_c_b * pixel_c_b;
+            pixel_c_g = pixel_c_g * pixel_c_g;
+            pixel_c_r = pixel_c_r * pixel_c_r;
+
+            pixel_d_b = pixel_d_b * pixel_d_b;
+            pixel_d_g = pixel_d_g * pixel_d_g;
+            pixel_d_r = pixel_d_r * pixel_d_r;
+
+            const top_r = std.math.lerp(pixel_a_r, pixel_b_r, dx);
+            const top_g = std.math.lerp(pixel_a_g, pixel_b_g, dx);
+            const top_b = std.math.lerp(pixel_a_b, pixel_b_b, dx);
+            const top_a = std.math.lerp(pixel_a_a, pixel_b_a, dx);
+
+            const bottom_r = std.math.lerp(pixel_c_r, pixel_d_r, dx);
+            const bottom_g = std.math.lerp(pixel_c_g, pixel_d_g, dx);
+            const bottom_b = std.math.lerp(pixel_c_b, pixel_d_b, dx);
+            const bottom_a = std.math.lerp(pixel_c_a, pixel_d_a, dx);
+
+            const source_r = std.math.lerp(top_r, bottom_r, dy);
+            const source_g = std.math.lerp(top_g, bottom_g, dy);
+            const source_b = std.math.lerp(top_b, bottom_b, dy);
+            const source_a = std.math.lerp(top_a, bottom_a, dy);
+
             const destination_u8: [4]u8 = @bitCast(pixles_u32[j * back_buffer.width + i]);
 
-            var source_b: f32 = @as(f32, @floatFromInt(source_pixel[0])) / 255.0;
-            var source_g: f32 = @as(f32, @floatFromInt(source_pixel[1])) / 255.0;
-            var source_r: f32 = @as(f32, @floatFromInt(source_pixel[2])) / 255.0;
-            const source_a: f32 = @as(f32, @floatFromInt(source_pixel[3])) / 255.0;
             if (source_a == 0) continue;
-            source_r = source_r * source_r;
-            source_g = source_g * source_g;
-            source_b = source_b * source_b;
 
             var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
             var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
@@ -153,9 +224,9 @@ pub fn drawTexturedRectangle(
             destination_g = destination_g * destination_g;
             destination_b = destination_b * destination_b;
 
-            var blended_r = source_r * source_a + destination_r * (1.0 - source_a);
-            var blended_g = source_g * source_a + destination_g * (1.0 - source_a);
-            var blended_b = source_b * source_a + destination_b * (1.0 - source_a);
+            var blended_r = source_r + destination_r * (1.0 - source_a);
+            var blended_g = source_g + destination_g * (1.0 - source_a);
+            var blended_b = source_b + destination_b * (1.0 - source_a);
 
             blended_r = @sqrt(blended_r);
             blended_g = @sqrt(blended_g);
@@ -208,9 +279,9 @@ pub fn drawRectangle(
     const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
     const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
 
-    const source_r: f32 = color.r * color.r;
-    const source_g: f32 = color.g * color.g;
-    const source_b: f32 = color.b * color.b;
+    const source_r: f32 = color.r * color.r * color.a;
+    const source_g: f32 = color.g * color.g * color.a;
+    const source_b: f32 = color.b * color.b * color.a;
     const source_a: f32 = color.a;
 
     for (y_min..y_max) |j| {
@@ -225,9 +296,9 @@ pub fn drawRectangle(
             destination_g = destination_g * destination_g;
             destination_b = destination_b * destination_b;
 
-            var blended_r = source_r * source_a + destination_r * (1.0 - source_a);
-            var blended_g = source_g * source_a + destination_g * (1.0 - source_a);
-            var blended_b = source_b * source_a + destination_b * (1.0 - source_a);
+            var blended_r = source_r + destination_r * (1.0 - source_a);
+            var blended_g = source_g + destination_g * (1.0 - source_a);
+            var blended_b = source_b + destination_b * (1.0 - source_a);
 
             blended_r = @sqrt(blended_r);
             blended_g = @sqrt(blended_g);
