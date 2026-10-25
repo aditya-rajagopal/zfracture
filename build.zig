@@ -95,6 +95,7 @@ pub fn build(b: *std.Build) !void {
     for ([_][]const u8{
         "src/software_renderer.zig",
         "src/wav.zig",
+        "src/stdx/png.zig",
     }) |path| {
         // Native platform-tests already includes the renderer test.
         if (native_target and std.mem.eql(u8, path, "src/software_renderer.zig")) continue;

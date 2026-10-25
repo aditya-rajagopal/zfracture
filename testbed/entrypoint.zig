@@ -228,6 +228,7 @@ pub fn main(init: std.process.Init) !void {
             draw_case.height,
             angle_radians,
             bitmap,
+            null,
         );
         platform.present();
     }

@@ -196,6 +196,7 @@ pub fn drawTexturedRectangle(
     height: f32,
     angle_radians: f32,
     texture: Bitmap,
+    tint_srgb: ?Color,
 ) void {
     @setFloatMode(.optimized);
     if (texture.width == 0 or texture.height == 0) return;
@@ -215,6 +216,12 @@ pub fn drawTexturedRectangle(
     const texture_height: f32 = @floatFromInt(texture.height);
     const texels_per_pixel_x = texture_width / width;
     const texels_per_pixel_y = texture_height / height;
+
+    const tint_r: f32, const tint_g: f32, const tint_b: f32, const tint_a: f32 = if (tint_srgb) |tint| blk: {
+        break :blk .{ tint.r * tint.r * tint.a, tint.g * tint.g * tint.a, tint.b * tint.b * tint.a, tint.a };
+    } else blk: {
+        break :blk .{ 1.0, 1.0, 1.0, 1.0 };
+    };
 
     for (y_min..y_max) |j| {
         const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
@@ -300,10 +307,10 @@ pub fn drawTexturedRectangle(
             const bottom_b = std.math.lerp(pixel_c_b, pixel_d_b, dx);
             const bottom_a = std.math.lerp(pixel_c_a, pixel_d_a, dx);
 
-            const source_r = std.math.lerp(top_r, bottom_r, dy);
-            const source_g = std.math.lerp(top_g, bottom_g, dy);
-            const source_b = std.math.lerp(top_b, bottom_b, dy);
-            const source_a = std.math.lerp(top_a, bottom_a, dy);
+            const source_r = std.math.lerp(top_r, bottom_r, dy) * tint_r;
+            const source_g = std.math.lerp(top_g, bottom_g, dy) * tint_g;
+            const source_b = std.math.lerp(top_b, bottom_b, dy) * tint_b;
+            const source_a = std.math.lerp(top_a, bottom_a, dy) * tint_a;
 
             if (source_a == 0) continue;
             const index = j * @as(usize, back_buffer.width) + i;
@@ -425,7 +432,7 @@ test "native size texture preserves pixel channels and row stride" {
         .pixels_per_meter = 1,
         .camera_position = .{ .x = 0, .y = 0 },
     };
-    renderer.drawTexturedRectangle(0, 0, 3, 2, 0, .{ .width = 3, .height = 2, .pixels = &texels });
+    renderer.drawTexturedRectangle(0, 0, 3, 2, 0, .{ .width = 3, .height = 2, .pixels = &texels }, null);
     try std.testing.expectEqualSlices(u32, &texels, &pixels);
 }
 
@@ -439,10 +446,10 @@ test "bilinear texture filtering averages linear colors and clamps edge texels" 
         .camera_position = .{ .x = 0, .y = 0 },
     };
     // The centre averages all four texels: each linear RGB channel is 0.5.
-    renderer.drawTexturedRectangle(0, 0, 1, 1, 0, texture);
+    renderer.drawTexturedRectangle(0, 0, 1, 1, 0, texture, null);
     try std.testing.expectEqual(@as(u32, 0xffb4b4b4), pixels[0]);
 
-    renderer.drawTexturedRectangle(0, 0, 4, 4, 0, texture);
+    renderer.drawTexturedRectangle(0, 0, 4, 4, 0, texture, null);
     try std.testing.expectEqual(@as(u32, 0xffff0000), pixels[0]);
     try std.testing.expectEqual(@as(u32, 0xff00ff00), pixels[3]);
     try std.testing.expectEqual(@as(u32, 0xff0000ff), pixels[12]);
@@ -593,7 +600,7 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
             .pixels = texels[0 .. case.texture_width * case.texture_height],
         };
 
-        renderer.drawTexturedRectangle(case.x, case.y, case.width, case.height, case.angle_radians, texture);
+        renderer.drawTexturedRectangle(case.x, case.y, case.width, case.height, case.angle_radians, texture, null);
 
         for (pixels[0 .. 48 * 48], 0..) |pixel, index| {
             const x = index % 48;
