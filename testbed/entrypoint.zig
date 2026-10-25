@@ -146,7 +146,7 @@ pub fn main(init: std.process.Init) !void {
     // };
     // fillTestBitmap(bitmap);
 
-    const bitmap: Bitmap = .fromPng(image);
+    const bitmap: Bitmap = .prepareFromPNG(image);
 
     var renderer: fr.Renderer = .{
         .back_buffer = .{ .width = width, .height = height, .data = pixels },

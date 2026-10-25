@@ -17,6 +17,11 @@ pub const FrameBuffer = struct {
     width: u16,
     height: u16,
     data: []align(4096) u8,
+
+    fn pixels(self: *FrameBuffer) []u32 {
+        const count = @as(usize, self.width) * @as(usize, self.height);
+        return @ptrCast(self.data[0 .. count * bytes_per_pixel]);
+    }
 };
 
 pub const bytes_per_pixel: usize = 4;
@@ -73,9 +78,111 @@ pub fn clearScreen(renderer: *Renderer, r: f32, g: f32, b: f32) void {
 
     const clear_colour: u32 = (@as(u32, r_int) << 16) | (@as(u32, g_int) << 8) | b_int;
 
-    const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
-    const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
-    @memset(pixles_u32[0..total_pixels], clear_colour);
+    @memset(back_buffer.pixels(), clear_colour);
+}
+
+fn clipped(buffer: *const FrameBuffer, left: f32, top: f32, right: f32, bottom: f32) ?AABB {
+    @setFloatMode(.optimized);
+    // Keep offscreen coordinates in floating point until the intersection
+    // bounds them to the framebuffer; finite inputs can be larger than i64.
+    const bounds: AABB = .{
+        .min_x = @max(left, 0),
+        .min_y = @max(top, 0),
+        .max_x = @min(right, @as(f32, @floatFromInt(buffer.width))),
+        .max_y = @min(bottom, @as(f32, @floatFromInt(buffer.height))),
+    };
+    if (bounds.max_x <= bounds.min_x or bounds.max_y <= bounds.min_y) return null;
+    return bounds;
+}
+
+const PreparedRectangle = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    right_x: f32,
+    right_y: f32,
+    down_x: f32,
+    down_y: f32,
+    bounds: AABB,
+
+    const BoundsRounding = enum { pixel_centres, outward };
+
+    fn init(
+        buffer: *const FrameBuffer,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        angle_radians: f32,
+        rounding: BoundsRounding,
+    ) ?PreparedRectangle {
+        @setFloatMode(.optimized);
+        if (width <= 0 or height <= 0) return null;
+        // Exact pixel-centre bounds are only sufficient for an unrotated rectangle.
+        assert(rounding != .pixel_centres or angle_radians == 0);
+
+        const right_x = @cos(angle_radians);
+        const right_y = @sin(angle_radians);
+        const down_x = -right_y;
+        const down_y = right_x;
+
+        const p1_x = x + width * right_x;
+        const p1_y = y + width * right_y;
+        const p2_x = x + height * down_x;
+        const p2_y = y + height * down_y;
+        const p3_x = x + height * down_x + width * right_x;
+        const p3_y = y + height * down_y + width * right_y;
+        const raw_left = @min(x, p1_x, p2_x, p3_x);
+        const raw_right = @max(x, p1_x, p2_x, p3_x);
+        const raw_top = @min(y, p1_y, p2_y, p3_y);
+        const raw_bottom = @max(y, p1_y, p2_y, p3_y);
+
+        // At zero rotation, solve x <= i + 0.5 < x + width once at the bounds.
+        // Otherwise include candidate pixels and reject uncovered centres below.
+        const left = if (rounding == .pixel_centres) @ceil(raw_left - 0.5) else @floor(raw_left);
+        const top = if (rounding == .pixel_centres) @ceil(raw_top - 0.5) else @floor(raw_top);
+        const right = if (rounding == .pixel_centres) @ceil(raw_right - 0.5) else @ceil(raw_right);
+        const bottom = if (rounding == .pixel_centres) @ceil(raw_bottom - 0.5) else @ceil(raw_bottom);
+        return .{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = height,
+            .right_x = right_x,
+            .right_y = right_y,
+            .down_x = down_x,
+            .down_y = down_y,
+            .bounds = clipped(buffer, left, top, right, bottom) orelse return null,
+        };
+    }
+
+    fn coveredPosition(self: PreparedRectangle, pixel_x: f32, pixel_y: f32) ?struct { x: f32, y: f32 } {
+        @setFloatMode(.optimized);
+        const translated_x = pixel_x - self.x;
+        const translated_y = pixel_y - self.y;
+        const local_x = translated_x * self.right_x + translated_y * self.right_y;
+        const local_y = translated_x * self.down_x + translated_y * self.down_y;
+
+        // Test half-open geometry before scaling to texels. For a 31-pixel
+        // texture drawn 7 pixels wide, f32 can round 7 * (31 / 7) below 31
+        // and incorrectly admit the ending edge if coverage is tested afterward.
+        if (local_x < 0 or local_x >= self.width) return null;
+        if (local_y < 0 or local_y >= self.height) return null;
+        return .{ .x = local_x, .y = local_y };
+    }
+};
+
+fn fillSolidRows(buffer: *FrameBuffer, bounds: AABB, packed_color: u32) void {
+    const x_min: usize = @intFromFloat(bounds.min_x);
+    const y_min: usize = @intFromFloat(bounds.min_y);
+    const x_max: usize = @intFromFloat(bounds.max_x);
+    const y_max: usize = @intFromFloat(bounds.max_y);
+    const pixels = buffer.pixels();
+    for (y_min..y_max) |y| {
+        const offset = y * @as(usize, buffer.width);
+        @memset(pixels[offset + x_min .. offset + x_max], packed_color);
+    }
 }
 
 // TODO(adi): Maybe have nearest-neighbour sampling and bilinear sampling as options?
@@ -91,101 +198,35 @@ pub fn drawTexturedRectangle(
     texture: Bitmap,
 ) void {
     @setFloatMode(.optimized);
-    if (width <= 0 or height <= 0) return;
     if (texture.width == 0 or texture.height == 0) return;
-    const back_buffer: *FrameBuffer = &renderer.back_buffer;
+    const back_buffer = &renderer.back_buffer;
 
-    // We find the basis vectors for the texture space the rotated rectangle is in.
-    const right_x = @cos(angle_radians);
-    const right_y = @sin(angle_radians);
-    const down_x = -@sin(angle_radians);
-    const down_y = @cos(angle_radians);
+    const rectangle = PreparedRectangle.init(back_buffer, x, y, width, height, angle_radians, .outward) orelse return;
 
-    // Four corners of rotated rectangle.
-    const p0_x = x;
-    const p0_y = y;
-    const p1_x = x + width * right_x;
-    const p1_y = y + width * right_y;
-    const p2_x = x + height * down_x;
-    const p2_y = y + height * down_y;
-    const p3_x = x + height * down_x + width * right_x;
-    const p3_y = y + height * down_y + width * right_y;
+    const bounds = rectangle.bounds;
+    const x_min: usize = @intFromFloat(bounds.min_x);
+    const y_min: usize = @intFromFloat(bounds.min_y);
+    const x_max: usize = @intFromFloat(bounds.max_x);
+    const y_max: usize = @intFromFloat(bounds.max_y);
 
-    const raw_left: f32 = @min(p0_x, p1_x, p2_x, p3_x);
-    const raw_right: f32 = @max(p0_x, p1_x, p2_x, p3_x);
-    const raw_top: f32 = @min(p0_y, p1_y, p2_y, p3_y);
-    const raw_bottom: f32 = @max(p0_y, p1_y, p2_y, p3_y);
-
-    // Round outwards for candidate pixels; local coverage rejects outside centres.
-    // Clip in floating point because offscreen bounds may not fit an integer.
-    const left: f32 = @max(@floor(raw_left), 0);
-    const top: f32 = @max(@floor(raw_top), 0);
-    const right: f32 = @min(@ceil(raw_right), @as(f32, @floatFromInt(back_buffer.width)));
-    const bottom: f32 = @min(@ceil(raw_bottom), @as(f32, @floatFromInt(back_buffer.height)));
-    if (right <= left or bottom <= top) return;
-
-    // A nonempty intersection guarantees 0 <= left < right <= framebuffer width,
-    // and the corresponding y bounds, so these conversions are now bounded.
-    const x_min: usize = @intFromFloat(left);
-    const y_min: usize = @intFromFloat(top);
-    const x_max: usize = @intFromFloat(right);
-    const y_max: usize = @intFromFloat(bottom);
-
-    const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
-    const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
+    const pixels = back_buffer.pixels();
 
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
-
     const texels_per_pixel_x = texture_width / width;
     const texels_per_pixel_y = texture_height / height;
 
     for (y_min..y_max) |j| {
-        const pixel_y: f32 = @as(f32, @floatFromInt(j)) + 0.5;
-
+        const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
         for (x_min..x_max) |i| {
-            const pixel_x: f32 = @as(f32, @floatFromInt(i)) + 0.5;
+            const pixel_x = @as(f32, @floatFromInt(i)) + 0.5;
+            const local = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
 
-            // Transform the pixel from the screen space to the texture space.
-            // First translation and then rotation.
-            const translated_x: f32 = pixel_x - x;
-            const translated_y: f32 = pixel_y - y;
-
-            const local_x = translated_x * right_x + translated_y * right_y;
-            const local_y = translated_x * down_x + translated_y * down_y;
-
-            // NOTE(adi): We do a check before computing the texture coordinates to avoid
-            // admitting extra pixels on the right or bottom edge due to floating point scaling.
-            // eg. if we draw a 31x1 texture at x=0.5 and width=7, the rectangle will cover [0.5, 7.5]
-            // pixel 0 has its center at 0.5, 2 at 1.5 etc. We want to choose pixels 0 to 6 inclusive and not 7.
-            // So we need to discard the right edge (bottom in y). In exact math:
-            // texels_per_pixel = 31 / 7
-            // sample_x         = 7 × (31 / 7) = 31
-            // sample_x >= 31   → true → skip
-            //
-            // but f32 cannot represent 31/7 so in actualitly
-            // texels_per_pixel = 31 / 7 = 4.428571_224212646 ( actual exact value should be 4.428571_428571428)
-            // sample_x         = 7 * 4.428571_224212646 = 30.999998092651367
-            // sample_x >= 31   → false → include
-            // So we want to do admitance checks on local_x and local_y instead of on sample_x and sample_y.
-            if (local_x < 0.0 or local_x >= width) continue;
-            if (local_y < 0.0 or local_y >= height) continue;
-
-            // NOTE(adi): Instead of calculating v = (pixel_y - y) / width and then doing a seperate
-            // texel_y = v * texture_height - 0.5 causes floating point errors.
-            // eg. if we draw 127 wide texture at 127 width starting at y = 0 then at screen pixel 87
-            // its centre is 87.5 which should get us texel_y = ((87.5 / 127) * 127 - 0.5) = 87
-            // but f32 cannot represent 1/127 so we will end up with texel_y = 86.99999237 which will cause
-            // some contribution from texel 86. Not a big deal but doing it our way helps remove that issue.
-            // ¯\_(ツ)_/¯
-            const sample_x = local_x * texels_per_pixel_x;
-            const sample_y = local_y * texels_per_pixel_y;
-
-            // NOTE(adi): We do -0.5 makes it so integer texel coordinates refer to the centre of the texel.
-            // for texel i: (i + 0.5) / texture_width is the canonical centre.
-            // Got this from GPU Gems
-            const texel_x = sample_x - 0.5;
-            const texel_y = sample_y - 0.5;
+            // Scale directly to texels: for a native-size 127-pixel texture,
+            // (87.5 / 127) * 127 can drift whereas 87.5 * (127 / 127) does not.
+            // Subtract 0.5 so integer coordinates address texel centres.
+            const texel_x = local.x * texels_per_pixel_x - 0.5;
+            const texel_y = local.y * texels_per_pixel_y - 0.5;
 
             const raw_x0: f32 = @floor(texel_x);
             const raw_y0: f32 = @floor(texel_y);
@@ -232,7 +273,7 @@ pub fn drawTexturedRectangle(
             var pixel_d_r: f32 = @as(f32, @floatFromInt(pixel_d[2])) / 255.0;
             const pixel_d_a: f32 = @as(f32, @floatFromInt(pixel_d[3])) / 255.0;
 
-            // NOTE(adi): We assume the texture is sRGB encoded and premultiplied by the alpha.
+            // Gamma-2 decode. Bitmap RGB was premultiplied before encoding;
             pixel_a_b = pixel_a_b * pixel_a_b;
             pixel_a_g = pixel_a_g * pixel_a_g;
             pixel_a_r = pixel_a_r * pixel_a_r;
@@ -264,9 +305,9 @@ pub fn drawTexturedRectangle(
             const source_b = std.math.lerp(top_b, bottom_b, dy);
             const source_a = std.math.lerp(top_a, bottom_a, dy);
 
-            const destination_u8: [4]u8 = @bitCast(pixles_u32[j * back_buffer.width + i]);
-
             if (source_a == 0) continue;
+            const index = j * @as(usize, back_buffer.width) + i;
+            const destination_u8: [4]u8 = @bitCast(pixels[index]);
 
             var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
             var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
@@ -291,7 +332,7 @@ pub fn drawTexturedRectangle(
                 255,
             };
 
-            pixles_u32[j * back_buffer.width + i] = @bitCast(final);
+            pixels[index] = @bitCast(final);
         }
     }
 }
@@ -310,78 +351,43 @@ pub fn drawRectangle(
     color_srgb: Color,
 ) void {
     @setFloatMode(.optimized);
-    if (width <= 0 or height <= 0) return;
-    const back_buffer: *FrameBuffer = &renderer.back_buffer;
+    const back_buffer = &renderer.back_buffer;
+    const rounding: PreparedRectangle.BoundsRounding = if (angle_radians == 0) .pixel_centres else .outward;
+    const rectangle = PreparedRectangle.init(back_buffer, x, y, width, height, angle_radians, rounding) orelse return;
 
-    // We find the basis vectors for the space the rotated rectangle is in.
-    const right_x = @cos(angle_radians);
-    const right_y = @sin(angle_radians);
-    const down_x = -@sin(angle_radians);
-    const down_y = @cos(angle_radians);
+    // Gamma-2 decode and premultiply once for the entire solid draw.
+    const source_r = color_srgb.r * color_srgb.r * color_srgb.a;
+    const source_g = color_srgb.g * color_srgb.g * color_srgb.a;
+    const source_b = color_srgb.b * color_srgb.b * color_srgb.a;
+    const source_a = color_srgb.a;
+    if (angle_radians == 0 and source_a == 1) {
+        // An opaque source replaces destination RGB; encode once for the row fills.
+        const packed_color: u32 = @bitCast([_]u8{
+            @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_b) * 255.0)))),
+            @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_g) * 255.0)))),
+            @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_r) * 255.0)))),
+            255,
+        });
+        fillSolidRows(back_buffer, rectangle.bounds, packed_color);
+        return;
+    }
 
-    // Four corners of rotated rectangle.
-    const p0_x = x;
-    const p0_y = y;
-    const p1_x = x + width * right_x;
-    const p1_y = y + width * right_y;
-    const p2_x = x + height * down_x;
-    const p2_y = y + height * down_y;
-    const p3_x = x + height * down_x + width * right_x;
-    const p3_y = y + height * down_y + width * right_y;
-
-    const raw_left: f32 = @min(p0_x, p1_x, p2_x, p3_x);
-    const raw_right: f32 = @max(p0_x, p1_x, p2_x, p3_x);
-    const raw_top: f32 = @min(p0_y, p1_y, p2_y, p3_y);
-    const raw_bottom: f32 = @max(p0_y, p1_y, p2_y, p3_y);
-
-    // Round the bounds outwards, then reject pixel centres outside the rectangle.
-    // At zero rotation, solve the pixel-centre coverage once at the bounds:
-    // x <= i + 0.5 < x + width. Every pixel in those bounds is covered.
-    const left_rounded: f32 = if (angle_radians == 0) @ceil(raw_left - 0.5) else @floor(raw_left);
-    const top_rounded: f32 = if (angle_radians == 0) @ceil(raw_top - 0.5) else @floor(raw_top);
-    const right_rounded: f32 = if (angle_radians == 0) @ceil(raw_right - 0.5) else @ceil(raw_right);
-    const bottom_rounded: f32 = if (angle_radians == 0) @ceil(raw_bottom - 0.5) else @ceil(raw_bottom);
-
-    // Keep bounds floating point until the framebuffer intersection is known.
-    const left: f32 = @max(left_rounded, 0);
-    const top: f32 = @max(top_rounded, 0);
-    const right: f32 = @min(right_rounded, @as(f32, @floatFromInt(back_buffer.width)));
-    const bottom: f32 = @min(bottom_rounded, @as(f32, @floatFromInt(back_buffer.height)));
-    if (right <= left or bottom <= top) return;
-
-    const x_min: usize = @intFromFloat(left);
-    const y_min: usize = @intFromFloat(top);
-    const x_max: usize = @intFromFloat(right);
-    const y_max: usize = @intFromFloat(bottom);
-
-    const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
-    const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
-
-    const source_r: f32 = color_srgb.r * color_srgb.r * color_srgb.a;
-    const source_g: f32 = color_srgb.g * color_srgb.g * color_srgb.a;
-    const source_b: f32 = color_srgb.b * color_srgb.b * color_srgb.a;
-    const source_a: f32 = color_srgb.a;
+    const bounds = rectangle.bounds;
+    const x_min: usize = @intFromFloat(bounds.min_x);
+    const y_min: usize = @intFromFloat(bounds.min_y);
+    const x_max: usize = @intFromFloat(bounds.max_x);
+    const y_max: usize = @intFromFloat(bounds.max_y);
+    const pixels = back_buffer.pixels();
 
     for (y_min..y_max) |j| {
-        const pixel_y: f32 = @as(f32, @floatFromInt(j)) + 0.5;
-
+        const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
         for (x_min..x_max) |i| {
             if (angle_radians != 0) {
-                const pixel_x: f32 = @as(f32, @floatFromInt(i)) + 0.5;
-
-                // Transform the pixel from the screen space to the rectangle space.
-                // First translation and then rotation.
-                const translated_x: f32 = pixel_x - x;
-                const translated_y: f32 = pixel_y - y;
-
-                const local_x = translated_x * right_x + translated_y * right_y;
-                const local_y = translated_x * down_x + translated_y * down_y;
-
-                if (local_x < 0 or local_x >= width) continue;
-                if (local_y < 0 or local_y >= height) continue;
+                const pixel_x = @as(f32, @floatFromInt(i)) + 0.5;
+                _ = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
             }
-
-            const destination_u8: [4]u8 = @bitCast(pixles_u32[j * back_buffer.width + i]);
+            const index = j * @as(usize, back_buffer.width) + i;
+            const destination_u8: [4]u8 = @bitCast(pixels[index]);
 
             var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
             var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
@@ -406,9 +412,41 @@ pub fn drawRectangle(
                 255,
             };
 
-            pixles_u32[j * back_buffer.width + i] = @bitCast(final);
+            pixels[index] = @bitCast(final);
         }
     }
+}
+
+test "native size texture preserves pixel channels and row stride" {
+    var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff204080, 0xff000000, 0xffffffff };
+    var pixels: [6]u32 align(4096) = @splat(0);
+    var renderer: Renderer = .{
+        .back_buffer = .{ .width = 3, .height = 2, .data = std.mem.sliceAsBytes(&pixels) },
+        .pixels_per_meter = 1,
+        .camera_position = .{ .x = 0, .y = 0 },
+    };
+    renderer.drawTexturedRectangle(0, 0, 3, 2, 0, .{ .width = 3, .height = 2, .pixels = &texels });
+    try std.testing.expectEqualSlices(u32, &texels, &pixels);
+}
+
+test "bilinear texture filtering averages linear colors and clamps edge texels" {
+    var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff };
+    const texture: Bitmap = .{ .width = 2, .height = 2, .pixels = &texels };
+    var pixels: [16]u32 align(4096) = @splat(0);
+    var renderer: Renderer = .{
+        .back_buffer = .{ .width = 4, .height = 4, .data = std.mem.sliceAsBytes(&pixels) },
+        .pixels_per_meter = 1,
+        .camera_position = .{ .x = 0, .y = 0 },
+    };
+    // The centre averages all four texels: each linear RGB channel is 0.5.
+    renderer.drawTexturedRectangle(0, 0, 1, 1, 0, texture);
+    try std.testing.expectEqual(@as(u32, 0xffb4b4b4), pixels[0]);
+
+    renderer.drawTexturedRectangle(0, 0, 4, 4, 0, texture);
+    try std.testing.expectEqual(@as(u32, 0xffff0000), pixels[0]);
+    try std.testing.expectEqual(@as(u32, 0xff00ff00), pixels[3]);
+    try std.testing.expectEqual(@as(u32, 0xff0000ff), pixels[12]);
+    try std.testing.expectEqual(@as(u32, 0xffffffff), pixels[15]);
 }
 
 test "offscreen rectangles clip without overwriting the framebuffer boundary" {

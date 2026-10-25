@@ -6,7 +6,7 @@ height: usize,
 // RGB is premultiplied in linear space, then encoded; alpha is stored unchanged.
 pixels: []u32,
 
-pub fn fromPng(image: png.Image) Bitmap {
+pub fn prepareFromPNG(image: png.Image) Bitmap {
     std.debug.assert(image.channels == 4);
     for (0..image.height) |y| {
         for (0..image.width) |x| {
