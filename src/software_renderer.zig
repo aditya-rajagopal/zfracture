@@ -3,9 +3,9 @@ const assert = std.debug.assert;
 
 const types = @import("types.zig");
 const Color = types.Color;
-const Bitmap = types.Bitmap;
+const Bitmap = @import("bitmap.zig");
 
-const AABB = @import("aabb.zig");
+const AABB = @import("AABB.zig");
 
 const Renderer = @This();
 
@@ -87,18 +87,41 @@ pub fn drawTexturedRectangle(
     y: f32,
     width: f32,
     height: f32,
+    angle_radians: f32,
     texture: Bitmap,
 ) void {
     @setFloatMode(.optimized);
+    if (width <= 0 or height <= 0) return;
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
+
+    // We find the basis vectors for the texture space the rotated rectangle is in.
+    const right_x = @cos(angle_radians);
+    const right_y = @sin(angle_radians);
+    const down_x = -@sin(angle_radians);
+    const down_y = @cos(angle_radians);
+
+    // Four corners of rotated rectangle.
+    const p0_x = x;
+    const p0_y = y;
+    const p1_x = x + width * right_x;
+    const p1_y = y + width * right_y;
+    const p2_x = x + height * down_x;
+    const p2_y = y + height * down_y;
+    const p3_x = x + height * down_x + width * right_x;
+    const p3_y = y + height * down_y + width * right_y;
+
+    const raw_left: f32 = @min(p0_x, p1_x, p2_x, p3_x);
+    const raw_right: f32 = @max(p0_x, p1_x, p2_x, p3_x);
+    const raw_top: f32 = @min(p0_y, p1_y, p2_y, p3_y);
+    const raw_bottom: f32 = @max(p0_y, p1_y, p2_y, p3_y);
 
     // We deliberately chose a slightly larger bound here and the uv coordinates
     // are clamped to the texture bounds. This is to avoid rounding errors
     // causing the texture to be sampled outside the bounds.
-    const left_int: i64 = @intFromFloat(@floor(x));
-    const top_int: i64 = @intFromFloat(@floor(y));
-    const right_int: i64 = @intFromFloat(@ceil(x + width));
-    const bottom_int: i64 = @intFromFloat(@ceil(y + height));
+    const left_int: i64 = @intFromFloat(@floor(raw_left));
+    const top_int: i64 = @intFromFloat(@floor(raw_top));
+    const right_int: i64 = @intFromFloat(@ceil(raw_right));
+    const bottom_int: i64 = @intFromFloat(@ceil(raw_bottom));
 
     const left: i64 = @max(left_int, 0);
     const top: i64 = @max(top_int, 0);
@@ -114,26 +137,43 @@ pub fn drawTexturedRectangle(
     const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
     const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
 
-    const inv_width: f32 = 1.0 / width;
-    const inv_height: f32 = 1.0 / height;
-
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
 
+    const texels_per_pixel_x = texture_width / width;
+    const texels_per_pixel_y = texture_height / height;
+
     for (y_min..y_max) |j| {
         const pixel_y: f32 = @as(f32, @floatFromInt(j)) + 0.5;
-        const v = (pixel_y - y) * inv_height;
-        if (v < 0 or v >= 1) continue;
-        // NOTE(adi): We do -0.5 makes it so integer texel coordinates refer to the centre of the texel.
-        // for texel i: (i + 0.5) / texture_width is the canonical centre.
-        // Got this from GPU Gems
-        const texel_y = v * texture_height - 0.5;
 
         for (x_min..x_max) |i| {
             const pixel_x: f32 = @as(f32, @floatFromInt(i)) + 0.5;
-            const u = (pixel_x - x) * inv_width;
-            if (u < 0 or u >= 1) continue;
-            const texel_x = u * texture_width - 0.5;
+
+            // Transform the pixel from the screen space to the texture space.
+            // First translation and then rotation.
+            const translated_x: f32 = pixel_x - x;
+            const translated_y: f32 = pixel_y - y;
+
+            const local_x = translated_x * right_x + translated_y * right_y;
+            const local_y = translated_x * down_x + translated_y * down_y;
+
+            // NOTE(adi): Instead of calculating v = (pixel_y - y) / width and then doing a seperate
+            // texel_y = v * texture_height - 0.5 causes floating point errors.
+            // eg. if we draw 127 wide texture at 127 width starting at y = 0 then at screen pixel 87
+            // its centre is 87.5 which should get us texel_y = ((87.5 / 127) * 127 - 0.5) = 87
+            // but f32 cannot represent 1/127 so we will end up with texel_y = 86.99999237 which will cause
+            // some contribution from texel 86. Not a big deal but doing it our way helps remove that issue.
+            // ¯\_(ツ)_/¯
+            const sample_x = local_x * texels_per_pixel_x;
+            const sample_y = local_y * texels_per_pixel_y;
+
+            if (sample_x < 0 or sample_x >= texture_width) continue;
+            if (sample_y < 0 or sample_y >= texture_height) continue;
+            // NOTE(adi): We do -0.5 makes it so integer texel coordinates refer to the centre of the texel.
+            // for texel i: (i + 0.5) / texture_width is the canonical centre.
+            // Got this from GPU Gems
+            const texel_x = sample_x - 0.5;
+            const texel_y = sample_y - 0.5;
 
             const raw_x0: f32 = @floor(texel_x);
             const raw_y0: f32 = @floor(texel_y);
@@ -245,6 +285,7 @@ pub fn drawTexturedRectangle(
 }
 
 /// Draw in framebuffer pixels, independent of the camera and world scale.
+/// Positive angles rotate clockwise around (x, y), like drawTexturedRectangle.
 pub fn drawRectangle(
     renderer: *Renderer,
     // x position in frame buffer coordinate
@@ -253,18 +294,42 @@ pub fn drawRectangle(
     y: f32,
     width: f32,
     height: f32,
-    color: Color,
+    angle_radians: f32,
+    color_srgb: Color,
 ) void {
     @setFloatMode(.optimized);
+    if (width <= 0 or height <= 0) return;
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
 
-    // Round fractional pixel positions and sizes before rasterizing.
-    const left_int: i64 = @intFromFloat(@round(x));
-    const top_int: i64 = @intFromFloat(@round(y));
-    const right_int: i64 = @intFromFloat(@round(x + width));
-    const bottom_int: i64 = @intFromFloat(@round(y + height));
+    // We find the basis vectors for the space the rotated rectangle is in.
+    const right_x = @cos(angle_radians);
+    const right_y = @sin(angle_radians);
+    const down_x = -@sin(angle_radians);
+    const down_y = @cos(angle_radians);
 
-    // Offscreen endpoints can overflow i32 before clipping, so add them in i64.
+    // Four corners of rotated rectangle.
+    const p0_x = x;
+    const p0_y = y;
+    const p1_x = x + width * right_x;
+    const p1_y = y + width * right_y;
+    const p2_x = x + height * down_x;
+    const p2_y = y + height * down_y;
+    const p3_x = x + height * down_x + width * right_x;
+    const p3_y = y + height * down_y + width * right_y;
+
+    const raw_left: f32 = @min(p0_x, p1_x, p2_x, p3_x);
+    const raw_right: f32 = @max(p0_x, p1_x, p2_x, p3_x);
+    const raw_top: f32 = @min(p0_y, p1_y, p2_y, p3_y);
+    const raw_bottom: f32 = @max(p0_y, p1_y, p2_y, p3_y);
+
+    // Round the bounds outwards, then reject pixel centres outside the rectangle.
+    // At zero rotation, solve the pixel-centre coverage once at the bounds:
+    // x <= i + 0.5 < x + width. Every pixel in those bounds is covered.
+    const left_int: i64 = @intFromFloat(if (angle_radians == 0) @ceil(raw_left - 0.5) else @floor(raw_left));
+    const top_int: i64 = @intFromFloat(if (angle_radians == 0) @ceil(raw_top - 0.5) else @floor(raw_top));
+    const right_int: i64 = @intFromFloat(if (angle_radians == 0) @ceil(raw_right - 0.5) else @ceil(raw_right));
+    const bottom_int: i64 = @intFromFloat(if (angle_radians == 0) @ceil(raw_bottom - 0.5) else @ceil(raw_bottom));
+
     const left: i64 = @max(left_int, 0);
     const top: i64 = @max(top_int, 0);
     const right: i64 = @min(right_int, back_buffer.width);
@@ -279,13 +344,30 @@ pub fn drawRectangle(
     const total_pixels: usize = @as(usize, back_buffer.width) * @as(usize, back_buffer.height);
     const pixles_u32: []u32 = @ptrCast(back_buffer.data[0 .. total_pixels * bytes_per_pixel]);
 
-    const source_r: f32 = color.r * color.r * color.a;
-    const source_g: f32 = color.g * color.g * color.a;
-    const source_b: f32 = color.b * color.b * color.a;
-    const source_a: f32 = color.a;
+    const source_r: f32 = color_srgb.r * color_srgb.r * color_srgb.a;
+    const source_g: f32 = color_srgb.g * color_srgb.g * color_srgb.a;
+    const source_b: f32 = color_srgb.b * color_srgb.b * color_srgb.a;
+    const source_a: f32 = color_srgb.a;
 
     for (y_min..y_max) |j| {
+        const pixel_y: f32 = @as(f32, @floatFromInt(j)) + 0.5;
+
         for (x_min..x_max) |i| {
+            if (angle_radians != 0) {
+                const pixel_x: f32 = @as(f32, @floatFromInt(i)) + 0.5;
+
+                // Transform the pixel from the screen space to the rectangle space.
+                // First translation and then rotation.
+                const translated_x: f32 = pixel_x - x;
+                const translated_y: f32 = pixel_y - y;
+
+                const local_x = translated_x * right_x + translated_y * right_y;
+                const local_y = translated_x * down_x + translated_y * down_y;
+
+                if (local_x < 0 or local_x >= width) continue;
+                if (local_y < 0 or local_y >= height) continue;
+            }
+
             const destination_u8: [4]u8 = @bitCast(pixles_u32[j * back_buffer.width + i]);
 
             var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
@@ -322,6 +404,7 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
         y: f32,
         width: f32,
         height: f32,
+        angle_radians: f32 = 0,
         left: usize = 0,
         top: usize = 0,
         right: usize = 0,
@@ -349,6 +432,10 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
         .{ .x = 0, .y = -2, .width = 10, .height = 2 },
         .{ .x = 4, .y = 4, .width = 0, .height = 4 },
         .{ .x = 4, .y = 4, .width = 4, .height = -1 },
+        .{ .x = 1.5, .y = 1.5, .width = 2, .height = 2, .left = 1, .top = 1, .right = 3, .bottom = 3 },
+        .{ .x = 1.75, .y = 1.75, .width = 2, .height = 2, .left = 2, .top = 2, .right = 4, .bottom = 4 },
+        .{ .x = 5, .y = 2, .width = 2, .height = 3, .angle_radians = std.math.pi / 2.0, .left = 2, .top = 2, .right = 5, .bottom = 4 },
+        .{ .x = 1, .y = 2, .width = 2, .height = 3, .angle_radians = std.math.pi / 2.0, .top = 2, .right = 1, .bottom = 4 },
         // Each operand fits i32, but their sum does not. Offscreen geometry must
         // remain a no-op rather than overflow before clipping.
         .{ .x = 1073741824, .y = 1073741824, .width = 1073741824, .height = 1073741824 },
@@ -368,7 +455,7 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
             .camera_position = .{ .x = 10, .y = -4 },
         };
 
-        renderer.drawRectangle(case.x, case.y, case.width, case.height, .white);
+        renderer.drawRectangle(case.x, case.y, case.width, case.height, case.angle_radians, .white);
 
         for (pixels[0 .. 16 * 16], 0..) |pixel, index| {
             const x = index % 16;
@@ -378,6 +465,33 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
             try std.testing.expectEqual(expected, pixel);
         }
         for (pixels[16 * 16 ..]) |pixel| try std.testing.expectEqual(@as(u32, 0x12345678), pixel);
+    }
+}
+
+test "rotated rectangles blend only covered pixel centres" {
+    var pixels: [8 * 8]u32 align(4096) = @splat(0xff0000ff);
+    var renderer: Renderer = .{
+        .back_buffer = .{ .width = 8, .height = 8, .data = std.mem.sliceAsBytes(&pixels) },
+        .pixels_per_meter = 1,
+        .camera_position = .{ .x = 0, .y = 0 },
+    };
+    renderer.drawRectangle(4, 1.25, 3, 3, std.math.pi / 4.0, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
+
+    // A 45-degree square forms a diamond. These pixel centres are strictly
+    // inside it; the other pixels in its bounding box must remain blue.
+    const coverage = [_][]const u8{
+        "........",
+        "........",
+        "...##...",
+        "..####..",
+        "...##...",
+        "........",
+        "........",
+        "........",
+    };
+    for (pixels, 0..) |pixel, index| {
+        const expected: u32 = if (coverage[index / 8][index % 8] == '#') 0xffb400b4 else 0xff0000ff;
+        try std.testing.expectEqual(expected, pixel);
     }
 }
 

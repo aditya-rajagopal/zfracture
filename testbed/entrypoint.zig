@@ -98,7 +98,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "1.5x, bottom-left corner, quarter-pixel origin", .x = -47.75, .y = height - 47.75, .width = 96, .height = 96 },
         .{ .name = "1.5x, bottom-right corner, quarter-pixel origin", .x = width - 47.75, .y = height - 47.75, .width = 96, .height = 96 },
 
-        // These cases intentionally leave the screen blank.
+        // These are offscreen at zero rotation; rotating corners can enter the screen.
         .{ .name = "2x, fully offscreen left", .x = -128, .y = centre_y - 64, .width = 128, .height = 128 },
         .{ .name = "2x, fully offscreen right", .x = width, .y = centre_y - 64, .width = 128, .height = 128 },
         .{ .name = "2x, fully offscreen top", .x = centre_x - 64, .y = -128, .width = 128, .height = 128 },
@@ -113,14 +113,40 @@ pub fn main(init: std.process.Init) !void {
     );
     defer allocator.free(pixels);
 
-    // The pixel storage lives for the entire testbed; creation happens once.
-    var bitmap_pixels: [bitmap_size * bitmap_size]u32 = undefined;
-    const bitmap: Bitmap = .{
-        .width = bitmap_size,
-        .height = bitmap_size,
-        .pixels = &bitmap_pixels,
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const image_file = try std.Io.Dir.cwd().openFile(init.io, "assets/textures/paving2.png", .{});
+    defer image_file.close(init.io);
+
+    var diagnostic: ?[]const u8 = null;
+    const image = fr.png.fromFile(
+        image_file,
+        init.io,
+        arena.allocator(),
+        std.heap.page_allocator,
+        &diagnostic,
+        .{
+            .flip_vertical_on_load = false,
+            .requested_channels = 4,
+        },
+    ) catch |err| {
+        if (diagnostic) |d| std.debug.print("Failed to load image: {s}\n", .{d});
+        return err;
     };
-    fillTestBitmap(bitmap);
+    std.debug.assert(image.channels == 4);
+    defer std.heap.page_allocator.free(image.data);
+
+    // The pixel storage lives for the entire testbed; creation happens once.
+    // var bitmap_pixels: [bitmap_size * bitmap_size]u32 = undefined;
+    // const bitmap: Bitmap = .{
+    //     .width = bitmap_size,
+    //     .height = bitmap_size,
+    //     .pixels = &bitmap_pixels,
+    // };
+    // fillTestBitmap(bitmap);
+
+    const bitmap: Bitmap = .fromPng(image);
 
     var renderer: fr.Renderer = .{
         .back_buffer = .{ .width = width, .height = height, .data = pixels },
@@ -141,6 +167,8 @@ pub fn main(init: std.process.Init) !void {
     // A sentinel makes the initial case print as well as later changes.
     var previous_case_index: usize = draw_cases.len;
     const frame_duration: std.Io.Duration = .fromNanoseconds(std.time.ns_per_s / 60);
+    const rotation_period_ns: i96 = 8 * std.time.ns_per_s;
+    const rotation_start = std.Io.Clock.awake.now(init.io);
     var pacing_error: ?fr.Platform.PaceFrameError = null;
     while (true) {
         const frame_start = std.Io.Clock.awake.now(init.io);
@@ -181,12 +209,24 @@ pub fn main(init: std.process.Init) !void {
             previous_case_index = case_index;
         }
 
+        const rotation_ns = @mod(rotation_start.durationTo(frame_start).nanoseconds, rotation_period_ns);
+        const angle_radians: f32 = @as(f32, @floatFromInt(rotation_ns)) /
+            @as(f32, @floatFromInt(rotation_period_ns)) * std.math.tau;
+
+        const half_width = draw_case.width * 0.5;
+        const half_height = draw_case.height * 0.5;
+        const cosine = @cos(angle_radians);
+        const sine = @sin(angle_radians);
+        const origin_x = draw_case.x + half_width - (cosine * half_width - sine * half_height);
+        const origin_y = draw_case.y + half_height - (sine * half_width + cosine * half_height);
+
         renderer.clearScreen(0.08, 0.08, 0.08);
         renderer.drawTexturedRectangle(
-            draw_case.x,
-            draw_case.y,
+            origin_x,
+            origin_y,
             draw_case.width,
             draw_case.height,
+            angle_radians,
             bitmap,
         );
         platform.present();
