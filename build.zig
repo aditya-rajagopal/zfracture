@@ -93,6 +93,7 @@ pub fn build(b: *std.Build) !void {
     check.dependOn(&sound_tests.step);
     test_step.dependOn(&b.addRunArtifact(sound_tests).step);
     for ([_][]const u8{
+        "src/collision.zig",
         "src/software_renderer.zig",
         "src/wav.zig",
         "src/stdx/png.zig",
