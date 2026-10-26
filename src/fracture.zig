@@ -10,7 +10,8 @@ pub const Platform = @import("platform.zig");
 const Types = @import("types.zig");
 pub const Color = Types.Color;
 pub const Bitmap = @import("bitmap.zig");
-pub const AABB = @import("AABB.zig");
+pub const shapes = @import("shapes.zig");
+pub const collision = @import("collision.zig");
 
 pub const png = @import("stdx/png.zig");
 

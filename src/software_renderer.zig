@@ -5,7 +5,7 @@ const types = @import("types.zig");
 const Color = types.Color;
 const Bitmap = @import("bitmap.zig");
 
-const AABB = @import("AABB.zig");
+const AABB = @import("shapes.zig").AABB;
 
 const Renderer = @This();
 
