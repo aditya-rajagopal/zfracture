@@ -144,23 +144,19 @@ pub fn parse(
         }
     }
 
-    const width_stride, const stride_overflow = @mulWithOverflow(info.width, output_channels);
-    if (stride_overflow != 0) return Error(diagnostic, "Image too large");
-    const img_len, const image_overflow = @mulWithOverflow(width_stride, info.height);
-    if (image_overflow != 0) return Error(diagnostic, "Image too large");
+    const width_stride = info.width * output_channels;
+    const img_len = @as(u64, width_stride) * info.height;
+    if (img_len > std.math.maxInt(u32)) return Error(diagnostic, "Image too large");
 
-    const width_bytes, const row_overflow = @mulWithOverflow(info.width, raw_channels);
-    if (row_overflow != 0) return Error(diagnostic, "Image too large");
-    const filtered_stride, const filter_overflow = @addWithOverflow(width_bytes, 1);
-    if (filter_overflow != 0) return Error(diagnostic, "Image too large");
-    const filtered_len, const data_overflow = @mulWithOverflow(filtered_stride, info.height);
-    if (data_overflow != 0) return Error(diagnostic, "Image too large");
+    const width_bytes = info.width * raw_channels;
+    const filtered_len = (@as(u64, width_bytes) + 1) * info.height;
+    if (filtered_len > std.math.maxInt(u32)) return Error(diagnostic, "Image too large");
 
-    var deflated = try Zlib.deflate(compressed, arena, filtered_len, diagnostic);
+    var deflated = try Zlib.deflate(compressed, arena, @intCast(filtered_len), diagnostic);
 
     if (deflated.len != filtered_len) return Error(diagnostic, "Invalid uncompressed PNG data length");
 
-    const out_data = try gpa.alignedAlloc(u8, .@"4", img_len);
+    const out_data = try gpa.alignedAlloc(u8, .@"4", @intCast(img_len));
     errdefer gpa.free(out_data);
 
     // NOTE: We crete 2 buffers for scanlines. But this one will use the channels of the read image
@@ -468,6 +464,11 @@ fn parseChunks(reader: *std.Io.Reader, arena: Allocator, palette: *Palette, diag
                 if (info.interlace_method == 1) return Error(diagnostic, "Adam7 interlaced images are not supported");
 
                 if (info.bit_depth != 8) return Error(diagnostic, "Only 8-bit PNG images are supported");
+
+                // Reserve an estimate; compressed IDAT data can still require growth.
+                const raw_capacity = (@as(u64, info.width) + 1) * info.height * info.num_channels;
+                if (raw_capacity > std.math.maxInt(u32)) return Error(diagnostic, "Image too large");
+                raw_data = try std.ArrayList(u8).initCapacity(arena, @intCast(raw_capacity));
             },
             .PLTE => {
                 if (seen_idat) return Error(diagnostic, "PLTE after IDAT");
@@ -1123,13 +1124,52 @@ test "PNG scanlines require a valid filter and exact data length" {
     try std.testing.expectError(error.ParseFailed, fromMemory(&bytes, arena.allocator(), std.testing.allocator, null, .default));
 }
 
+test "PNG compressed data preallocation avoids growth within the estimate" {
+    const header = test_png_signature ++ testChunk("IHDR", &.{ 0, 0, 0, 255, 0, 0, 0, 1, 8, 0, 0, 0, 0 });
+    const payload: [64]u8 = @splat('a');
+    const chunk = testChunk("IDAT", &payload);
+    const bytes = header ++ chunk ++ chunk ++ chunk ++ chunk ++ test_iend;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var allocator = std.testing.FailingAllocator.init(arena.allocator(), .{
+        .fail_index = 1,
+        .resize_fail_index = 0,
+    });
+    var reader = std.Io.Reader.fixed(&bytes);
+    var palette: Palette = .{};
+    const info, const compressed = try parseChunks(&reader, allocator.allocator(), &palette, null);
+    _ = info;
+    const expected: [256]u8 = @splat('a');
+    try std.testing.expectEqualSlices(u8, &expected, compressed);
+}
+
+test "PNG compressed data preallocation enforces the u32 size limit" {
+    const cases = [_]struct { width: u32, height: u32, color: u8, expected_error: PNGError }{
+        .{ .width = 65534, .height = 65537, .color = 0, .expected_error = error.OutOfMemory },
+        .{ .width = 65535, .height = 65536, .color = 0, .expected_error = error.ParseFailed },
+        .{ .width = 32767, .height = 32768, .color = 6, .expected_error = error.ParseFailed },
+        .{ .width = MAX_IMAGE_DIM, .height = MAX_IMAGE_DIM, .color = 6, .expected_error = error.ParseFailed },
+    };
+    for (cases) |case| {
+        var bytes = test_png_signature ++ testChunk("IHDR", &.{ 0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0 }) ++ testData(&.{ 0, 0 }) ++ test_iend;
+        std.mem.writeInt(u32, bytes[16..20], case.width, .big);
+        std.mem.writeInt(u32, bytes[20..24], case.height, .big);
+        bytes[25] = case.color;
+        var reader = std.Io.Reader.fixed(&bytes);
+        var palette: Palette = .{};
+        try std.testing.expectError(case.expected_error, parseChunks(&reader, std.testing.failing_allocator, &palette, null));
+    }
+}
+
 test "PNG chunks require 31-bit lengths and complete framing" {
     for ([_]u32{ std.math.maxInt(u31), 1 << 31 }) |length| {
         var bytes = test_indexed_header_1x1 ++ test_palette_chunk ++ testChunk("IDAT", &.{});
         const offset = test_indexed_header_1x1.len + test_palette_chunk.len;
         std.mem.writeInt(u32, bytes[offset..][0..4], length, .big);
         const expected_error = if (length > std.math.maxInt(u31)) error.ParseFailed else error.OutOfMemory;
-        try std.testing.expectError(expected_error, fromMemory(&bytes, std.testing.failing_allocator, std.testing.allocator, null, .default));
+        var scratch: [128]u8 = undefined;
+        var arena = std.heap.FixedBufferAllocator.init(&scratch);
+        try std.testing.expectError(expected_error, fromMemory(&bytes, arena.allocator(), std.testing.allocator, null, .default));
     }
     const bytes = test_indexed_header_3x1 ++ test_palette_chunk ++ test_alpha_chunk ++ test_indices_chunk ++ test_iend;
     for (0..bytes.len) |len| {

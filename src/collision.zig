@@ -154,6 +154,8 @@ pub const Contact = struct {
     normal: ?struct { x: f32, y: f32 },
     kind: Kind,
 
+    pub const empty = Contact{ .fraction = 0, .normal = null, .kind = .overlapping };
+
     pub const Kind = enum {
         /// Movement crosses into the target at this contact.
         entering,
