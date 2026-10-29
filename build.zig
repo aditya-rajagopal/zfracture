@@ -97,6 +97,7 @@ pub fn build(b: *std.Build) !void {
         "src/software_renderer.zig",
         "src/wav.zig",
         "src/stdx/png.zig",
+        "src/stdx/tracer.zig",
     }) |path| {
         // Native platform-tests already includes the renderer test.
         if (native_target and std.mem.eql(u8, path, "src/software_renderer.zig")) continue;

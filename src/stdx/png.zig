@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 //https://github.com/ghostty-org/ghostty/blob/26e243a9194f8653e0b44cf00b600629fcee8f46/src/quirks.zig
-pub const assert = switch (builtin.mode) {
+const assert = switch (builtin.mode) {
     .debug => std.debug.assert,
     .fast, .safe, .small => struct {
         inline fn assert(cond: bool) void {
