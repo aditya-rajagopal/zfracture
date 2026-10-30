@@ -67,30 +67,39 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
             view.camera_x,
             view.camera_y,
         ),
-        .draw_rectangle => |rect| self.drawRectangle(
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            rect.angle_radians,
-            rect.color_srgb,
-        ),
-        .draw_sprite => |sprite| self.drawSprite(
-            sprite.x,
-            sprite.y,
-            sprite.width,
-            sprite.height,
-            self.getTexture(sprite.texture),
-        ),
-        .draw_textured_rectangle => |trect| self.drawTexturedRectangle(
-            trect.x,
-            trect.y,
-            trect.width,
-            trect.height,
-            trect.angle_radians,
-            self.getTexture(trect.texture),
-            trect.tint_srgb,
-        ),
+        .draw_rectangle => |rect| {
+            const screen = self.screenFromWorld(rect.x, rect.y);
+            self.drawRectangle(
+                screen.x,
+                screen.y,
+                rect.width,
+                rect.height,
+                rect.angle_radians,
+                rect.color_srgb,
+            );
+        },
+        .draw_sprite => |sprite| {
+            const screen = self.screenFromWorld(sprite.x, sprite.y);
+            self.drawSprite(
+                screen.x,
+                screen.y,
+                sprite.width,
+                sprite.height,
+                self.getTexture(sprite.texture),
+            );
+        },
+        .draw_textured_rectangle => |trect| {
+            const screen = self.screenFromWorld(trect.x, trect.y);
+            self.drawTexturedRectangle(
+                screen.x,
+                screen.y,
+                trect.width,
+                trect.height,
+                trect.angle_radians,
+                self.getTexture(trect.texture),
+                trect.tint_srgb,
+            );
+        },
     }
 }
 
@@ -106,6 +115,7 @@ pub fn createTextureCopy(self: *Self, gpa: std.mem.Allocator, texture: Bitmap) R
         return @fromBackingInt(0);
     }
     const t: *Bitmap = &self.textures[self.head];
+    assert(@as(u64, texture.width) * texture.height <= texture.pixels.len);
     t.pixels = gpa.dupe(u32, texture.pixels) catch {
         std.log.err("Failed to allocate memory for texture", .{});
         return @fromBackingInt(0);
@@ -127,6 +137,7 @@ pub fn loadAndCreateTexture(
         std.log.err("Texture slots full", .{});
         return @fromBackingInt(0);
     }
+
     const texture: *Bitmap = &self.textures[self.head];
     texture.* = loadTexture(io, gpa, arena, file_path) orelse return @fromBackingInt(0);
     defer self.head += 1;
