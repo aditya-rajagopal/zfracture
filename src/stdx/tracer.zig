@@ -18,10 +18,10 @@ const assert = switch (builtin.mode) {
 /// // Alternative: Tracer(Anchors, queryPerformanceCounter, true)
 /// tracer.init(50);
 /// {
-///     const work = tracer.start(.work);
+///     const work = tracer.startTrace(.work);
 ///     defer tracer.end(&work);
 ///     {
-///         const sub_work = tracer.start(.sub_work);
+///         const sub_work = tracer.startTrace(.sub_work);
 ///         defer tracer.end(&sub_work);
 ///     }
 ///     // Simulation work, optionally with nested scopes.
@@ -47,12 +47,18 @@ pub fn Tracer(
         const Self = @This();
         const State = struct {
             current_parent: u32 = 0,
+            frequency_hz: f64 = 0,
             tracer_anchors: [anchor_count]TracerInfo = @splat(.{}),
-            timer_frequency: f64 = 0,
             tracer_start: u64 = 0,
             tracer_end: u64 = 0,
             running: bool = false,
         };
+
+        pub const Snapshot = if (enabled) struct {
+            anchors: [anchor_count]TracerInfo = @splat(.{}),
+            start: u64 = 0,
+            end: u64 = 0,
+        } else void;
 
         pub const TracerInfo = struct {
             hit_count: u64 = 0,
@@ -71,7 +77,6 @@ pub fn Tracer(
         /// statistics and requires every old scope to have ended.
         pub fn init(self: *Self, calibration_time_ms: u64) void {
             if (!enabled) return;
-            assert(self.inner.current_parent == 0);
             const frequency = calibrateFrequency(calibration_time_ms, time_fn);
             self.initWithFrequency(frequency);
         }
@@ -79,14 +84,9 @@ pub fn Tracer(
         /// Use an already known/calibrated tick frequency without another calibration.
         pub fn initWithFrequency(self: *Self, frequency: f64) void {
             if (!enabled) return;
-            assert(self.inner.current_parent == 0);
-            assert(std.math.isFinite(frequency));
             assert(frequency > 0);
-            self.inner = .{
-                .timer_frequency = frequency,
-                .tracer_start = time_fn(),
-                .running = true,
-            };
+            self.inner.frequency_hz = frequency;
+            self.reset();
         }
 
         pub fn finish(self: *Self) void {
@@ -99,7 +99,32 @@ pub fn Tracer(
             self.inner.running = false;
         }
 
-        pub fn start(self: *Self, comptime tag: AnchorsEnum) TraceHandle {
+        pub fn snapshot(self: *const Self) Snapshot {
+            if (!enabled) return;
+            var s: Snapshot = undefined;
+            s.anchors = self.inner.tracer_anchors;
+            s.start = self.inner.tracer_start;
+            s.end = self.inner.tracer_end;
+            return s;
+        }
+
+        pub fn reset(self: *Self) void {
+            if (!enabled) return;
+            assert(self.inner.frequency_hz > 0);
+            self.inner.tracer_anchors = @splat(.{});
+            self.inner.tracer_end = 0;
+            self.inner.tracer_start = time_fn();
+            self.inner.running = true;
+            self.inner.current_parent = 0;
+        }
+
+        pub fn snapshotAndReset(self: *Self) Snapshot {
+            const s = self.snapshot();
+            self.reset();
+            return s;
+        }
+
+        pub fn startTrace(self: *Self, comptime tag: AnchorsEnum) TraceHandle {
             if (!enabled) return {};
             const in = &self.inner;
             assert(in.running);
@@ -151,9 +176,9 @@ pub fn Tracer(
             if (!enabled) return;
             const in = &self.inner;
             assert(!in.running);
-            assert(in.timer_frequency > 0);
+            assert(in.frequency_hz > 0);
             const full_time = self.durationMS(in.tracer_end, in.tracer_start);
-            try writer.print("Total time: {d:.6} ms (timer frequency {d} Hz)\n", .{ full_time, in.timer_frequency });
+            try writer.print("Total time: {d:.6} ms (timer frequency {d} Hz)\n", .{ full_time, in.frequency_hz });
             inline for (info.@"enum".field_names, info.@"enum".field_values) |name, value| {
                 const anchor = in.tracer_anchors[value + 1];
                 if (anchor.hit_count != 0) {
@@ -178,9 +203,9 @@ pub fn Tracer(
 
         pub fn duration(self: *const Self, end_time: u64, start_time: u64) f64 {
             if (!enabled) return 0;
-            assert(self.inner.timer_frequency > 0);
+            assert(self.inner.frequency_hz > 0);
             assert(end_time >= start_time);
-            return @as(f64, @floatFromInt(end_time - start_time)) / self.inner.timer_frequency;
+            return @as(f64, @floatFromInt(end_time - start_time)) / self.inner.frequency_hz;
         }
 
         pub fn durationMS(self: *const Self, end_time: u64, start_time: u64) f64 {
@@ -250,6 +275,8 @@ pub fn defaultTimer() u64 {
     switch (builtin.cpu.arch) {
         .x86_64 => return rdtsc(),
         .aarch64 => {
+            // NOTE(adi): AFAIK for CNTVCT_EL0, backed by Arm’s fixed-frequency system counter.
+            // CPU power-saving, performance changes, and thermal throttling do not change its rate.
             if (builtin.os.tag != .macos) @compileError("Arm profiling counter is supported on macOS only");
             return asm volatile (
                 \\isb
@@ -340,17 +367,17 @@ test "nested scopes attribute inclusive and exclusive time across siblings" {
     TestClock.now = 0;
     var tracer: TestTracer = .empty;
     tracer.initWithFrequency(1000);
-    const outer = tracer.start(.outer);
+    const outer = tracer.startTrace(.outer);
     TestClock.now = 10;
-    const child = tracer.start(.child);
+    const child = tracer.startTrace(.child);
     TestClock.now = 20;
-    const leaf = tracer.start(.leaf);
+    const leaf = tracer.startTrace(.leaf);
     TestClock.now = 30;
     tracer.end(&leaf);
     TestClock.now = 40;
     tracer.end(&child);
     TestClock.now = 50;
-    const sibling = tracer.start(.child);
+    const sibling = tracer.startTrace(.child);
     TestClock.now = 60;
     tracer.end(&sibling);
     TestClock.now = 70;
@@ -370,14 +397,14 @@ test "nested repeated anchors count their outermost inclusive interval once" {
     TestClock.now = 0;
     var tracer: TestTracer = .empty;
     tracer.initWithFrequency(1000);
-    const outer = tracer.start(.outer);
+    const outer = tracer.startTrace(.outer);
     TestClock.now = 10;
-    const inner = tracer.start(.outer);
+    const inner = tracer.startTrace(.outer);
     TestClock.now = 20;
     tracer.end(&inner);
     TestClock.now = 30;
     tracer.end(&outer);
-    const next = tracer.start(.outer);
+    const next = tracer.startTrace(.outer);
     TestClock.now = 40;
     tracer.end(&next);
     tracer.finish();

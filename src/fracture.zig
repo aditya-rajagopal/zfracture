@@ -14,6 +14,7 @@ pub const shapes = @import("shapes.zig");
 pub const collision = @import("collision.zig");
 
 pub const png = @import("stdx/png.zig");
+pub const tracer = @import("stdx/tracer.zig");
 
 pub const wav = @import("wav.zig");
 pub const event = @import("event.zig");
