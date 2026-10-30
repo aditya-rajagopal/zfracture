@@ -1,5 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const profile = @import("profiling.zig");
 
 const types = @import("types.zig");
 const Color = types.Color;
@@ -67,6 +68,8 @@ pub fn visibleWorldBounds(self: *Renderer) AABB {
 }
 
 pub fn clearScreen(renderer: *Renderer, r: f32, g: f32, b: f32) void {
+    const trace = profile.begin(.renderer_clear);
+    defer profile.end(trace);
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
 
     const red_quantized: u32 = @intFromFloat(@round(r * 255.0));
@@ -199,6 +202,8 @@ pub fn drawTexturedRectangle(
     tint_srgb: ?Color,
 ) void {
     @setFloatMode(.optimized);
+    const trace = profile.begin(.renderer_draw_textured_rectangle);
+    defer profile.end(trace);
     if (angle_radians == 0) {
         if (tint_srgb == null) {
             drawSprite(renderer, x, y, width, height, texture);
@@ -362,6 +367,8 @@ pub fn drawSprite(
     texture: Bitmap,
 ) void {
     @setFloatMode(.optimized);
+    const trace = profile.begin(.renderer_draw_sprite);
+    defer profile.end(trace);
     if (width <= 0) return;
     if (height <= 0) return;
     if (texture.width == 0) return;
@@ -557,6 +564,8 @@ pub fn drawRectangle(
     color_srgb: Color,
 ) void {
     @setFloatMode(.optimized);
+    const trace = profile.begin(.renderer_draw_rectangle);
+    defer profile.end(trace);
     const back_buffer = &renderer.back_buffer;
     const rounding: PreparedRectangle.BoundsRounding = if (angle_radians == 0) .pixel_centres else .outward;
     const rectangle = PreparedRectangle.init(back_buffer, x, y, width, height, angle_radians, rounding) orelse return;
