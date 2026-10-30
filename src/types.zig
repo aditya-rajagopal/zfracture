@@ -49,4 +49,14 @@ pub const Color = struct {
     pub const purple = Self{ .r = 0.627, .g = 0.125, .b = 0.941, .a = 1.0 };
     pub const brown = Self{ .r = 0.52, .g = 0.415, .b = 0.30, .a = 1.0 };
     pub const dark_brown = Self{ .r = 0.286, .g = 0.216, .b = 0.145, .a = 1.0 };
+
+    pub fn toARGB(self: Color) u32 {
+        const color = [_]u8{
+            @truncate(@as(u32, @intFromFloat(@round(self.b * 255.0)))),
+            @truncate(@as(u32, @intFromFloat(@round(self.g * 255.0)))),
+            @truncate(@as(u32, @intFromFloat(@round(self.r * 255.0)))),
+            @truncate(@as(u32, @intFromFloat(@round(self.a * 255.0)))),
+        };
+        return @bitCast(color);
+    }
 };

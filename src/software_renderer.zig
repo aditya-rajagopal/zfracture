@@ -5,14 +5,161 @@ const profile = @import("profiling.zig");
 const types = @import("types.zig");
 const Color = types.Color;
 const Bitmap = @import("bitmap.zig");
+const png = @import("stdx/png.zig");
 
 const AABB = @import("shapes.zig").AABB;
 
-const Renderer = @This();
+const Renderer = @import("renderer.zig");
+
+const Self = @This();
 
 back_buffer: FrameBuffer,
 pixels_per_meter: f32,
 camera_position: struct { x: f32, y: f32 },
+textures: [32]Bitmap,
+head: u8 = 1,
+debug_color: u32,
+
+pub const Config = struct {
+    width: u16,
+    height: u16,
+    pixels_per_meter: f32,
+};
+
+pub fn init(
+    self: *Self,
+    gpa: std.mem.Allocator,
+    config: Config,
+) !void {
+    self.back_buffer = .{
+        .width = config.width,
+        .height = config.height,
+        .data = try gpa.alignedAlloc(
+            u8,
+            .fromByteUnits(4096),
+            @as(usize, config.width) * config.height * bytes_per_pixel,
+        ),
+    };
+    self.pixels_per_meter = config.pixels_per_meter;
+    self.camera_position.x = 0;
+    self.camera_position.y = 0;
+    self.debug_color = Color.magenta.toARGB();
+    self.textures = @splat(.{ .width = 1, .height = 1, .pixels = @as([*]u32, @ptrCast(&self.debug_color))[0..1] });
+    self.head = 1;
+}
+
+pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+    gpa.free(self.back_buffer.data);
+    for (self.textures[1..self.head]) |texture| {
+        gpa.free(texture.pixels);
+    }
+}
+
+pub fn submit(self: *Self, command: Renderer.Command) void {
+    switch (command) {
+        .clear_screen => |cc| self.clearScreen(
+            cc.r,
+            cc.g,
+            cc.b,
+        ),
+        .set_view => |view| self.setView(
+            view.meters_per_pixel,
+            view.camera_x,
+            view.camera_y,
+        ),
+        .draw_rectangle => |rect| self.drawRectangle(
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            rect.angle_radians,
+            rect.color_srgb,
+        ),
+        .draw_sprite => |sprite| self.drawSprite(
+            sprite.x,
+            sprite.y,
+            sprite.width,
+            sprite.height,
+            self.getTexture(sprite.texture),
+        ),
+        .draw_textured_rectangle => |trect| self.drawTexturedRectangle(
+            trect.x,
+            trect.y,
+            trect.width,
+            trect.height,
+            trect.angle_radians,
+            self.getTexture(trect.texture),
+            trect.tint_srgb,
+        ),
+    }
+}
+
+pub fn getTexture(self: *const Self, texture: Renderer.Texture) Bitmap {
+    const index: u32 = @backingInt(texture);
+    if (index >= self.head) return self.textures[0];
+    return self.textures[index];
+}
+
+pub fn createTextureCopy(self: *Self, gpa: std.mem.Allocator, texture: Bitmap) Renderer.Texture {
+    if (self.head >= self.textures.len) {
+        std.log.err("Texture slots full", .{});
+        return @fromBackingInt(0);
+    }
+    const t: *Bitmap = &self.textures[self.head];
+    t.pixels = gpa.dupe(u32, texture.pixels) catch {
+        std.log.err("Failed to allocate memory for texture", .{});
+        return @fromBackingInt(0);
+    };
+    defer self.head += 1;
+    t.width = texture.width;
+    t.height = texture.height;
+    return @fromBackingInt(self.head);
+}
+
+pub fn loadAndCreateTexture(
+    self: *Self,
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    file_path: []const u8,
+) Renderer.Texture {
+    if (self.head >= self.textures.len) {
+        std.log.err("Texture slots full", .{});
+        return @fromBackingInt(0);
+    }
+    const texture: *Bitmap = &self.textures[self.head];
+    texture.* = loadTexture(io, gpa, arena, file_path) orelse return @fromBackingInt(0);
+    defer self.head += 1;
+    return @fromBackingInt(@intCast(self.head));
+}
+
+pub fn loadTexture(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    file_path: []const u8,
+) ?Bitmap {
+    const file = std.Io.Dir.cwd().openFile(io, file_path, .{}) catch {
+        std.log.err("Failed to open texture: {s}", .{file_path});
+        return null;
+    };
+    defer file.close(io);
+    var diagnostic: ?[]const u8 = null;
+    const image = png.fromFile(
+        file,
+        io,
+        arena,
+        gpa,
+        &diagnostic,
+        .{ .flip_vertical_on_load = false, .requested_channels = 4 },
+    ) catch {
+        if (diagnostic) |d| {
+            std.log.err("Failed to load texture png: {s}", .{d});
+        }
+        return null;
+    };
+    return Bitmap.prepareFromPNG(image);
+}
 
 pub const FrameBuffer = struct {
     width: u16,
@@ -27,14 +174,14 @@ pub const FrameBuffer = struct {
 
 pub const bytes_per_pixel: usize = 4;
 
-// TODO: This is basically setting the viewmatrix
-pub fn setMetersPerPixel(renderer: *Renderer, meters_per_pixel: f32) void {
+pub fn setView(self: *Self, meters_per_pixel: f32, camera_x: f32, camera_y: f32) void {
     assert(meters_per_pixel != 0);
-    renderer.pixels_per_meter = 1.0 / meters_per_pixel;
+    self.pixels_per_meter = 1.0 / meters_per_pixel;
+    self.camera_position = .{ .x = camera_x, .y = camera_y };
 }
 
 /// Convert world meters to framebuffer pixels, with the camera at the image center.
-pub fn screenFromWorld(self: *Renderer, x: f32, y: f32) struct { x: f32, y: f32 } {
+pub fn screenFromWorld(self: *Self, x: f32, y: f32) struct { x: f32, y: f32 } {
     assert(self.pixels_per_meter > 0);
     return .{
         .x = (x - self.camera_position.x) * self.pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.width)) / 2.0,
@@ -43,7 +190,7 @@ pub fn screenFromWorld(self: *Renderer, x: f32, y: f32) struct { x: f32, y: f32 
 }
 
 /// Convert framebuffer pixels to world meters using the current camera and scale.
-pub fn worldFromScreen(self: *Renderer, x: f32, y: f32) struct { x: f32, y: f32 } {
+pub fn worldFromScreen(self: *Self, x: f32, y: f32) struct { x: f32, y: f32 } {
     assert(self.pixels_per_meter > 0);
     return .{
         .x = (x - @as(f32, @floatFromInt(self.back_buffer.width)) / 2.0) / self.pixels_per_meter + self.camera_position.x,
@@ -51,11 +198,7 @@ pub fn worldFromScreen(self: *Renderer, x: f32, y: f32) struct { x: f32, y: f32 
     };
 }
 
-pub fn updateCameraTo(renderer: *Renderer, x: f32, y: f32) void {
-    renderer.camera_position = .{ .x = x, .y = y };
-}
-
-pub fn visibleWorldBounds(self: *Renderer) AABB {
+pub fn visibleWorldBounds(self: *Self) AABB {
     assert(self.pixels_per_meter > 0);
     const half_width: f32 = @as(f32, @floatFromInt(self.back_buffer.width)) / self.pixels_per_meter / 2.0;
     const half_height: f32 = @as(f32, @floatFromInt(self.back_buffer.height)) / self.pixels_per_meter / 2.0;
@@ -67,7 +210,7 @@ pub fn visibleWorldBounds(self: *Renderer) AABB {
     };
 }
 
-pub fn clearScreen(renderer: *Renderer, r: f32, g: f32, b: f32) void {
+pub fn clearScreen(renderer: *Self, r: f32, g: f32, b: f32) void {
     const trace = profile.begin(.renderer_clear);
     defer profile.end(trace);
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
@@ -190,7 +333,7 @@ fn fillSolidRows(buffer: *FrameBuffer, bounds: AABB, packed_color: u32) void {
 
 // TODO(adi): Maybe have nearest-neighbour sampling and bilinear sampling as options?
 pub fn drawTexturedRectangle(
-    renderer: *Renderer,
+    renderer: *Self,
     // x position in frame buffer coordinate
     x: f32,
     // y position in frame buffer coordinate
@@ -359,7 +502,7 @@ pub fn drawTexturedRectangle(
 /// Draw an untinted, axis-aligned texture in framebuffer pixels.
 /// Retains bilinear filtering, premultiplied alpha and gamma-2 conversion.
 pub fn drawSprite(
-    renderer: *Renderer,
+    renderer: *Self,
     x: f32,
     y: f32,
     width: f32,
@@ -553,7 +696,7 @@ pub fn drawSprite(
 /// Draw in framebuffer pixels, independent of the camera and world scale.
 /// Positive angles rotate clockwise around (x, y), like drawTexturedRectangle.
 pub fn drawRectangle(
-    renderer: *Renderer,
+    renderer: *Self,
     // x position in frame buffer coordinate
     x: f32,
     // y position in frame buffer coordinate
@@ -570,13 +713,11 @@ pub fn drawRectangle(
     const rounding: PreparedRectangle.BoundsRounding = if (angle_radians == 0) .pixel_centres else .outward;
     const rectangle = PreparedRectangle.init(back_buffer, x, y, width, height, angle_radians, rounding) orelse return;
 
-    // Gamma-2 decode and premultiply once for the entire solid draw.
     const source_r = color_srgb.r * color_srgb.r * color_srgb.a;
     const source_g = color_srgb.g * color_srgb.g * color_srgb.a;
     const source_b = color_srgb.b * color_srgb.b * color_srgb.a;
     const source_a = color_srgb.a;
     if (angle_radians == 0 and source_a == 1) {
-        // An opaque source replaces destination RGB; encode once for the row fills.
         const packed_color: u32 = @bitCast([_]u8{
             @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_b) * 255.0)))),
             @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_g) * 255.0)))),
@@ -635,10 +776,12 @@ pub fn drawRectangle(
 test "native size texture preserves pixel channels and row stride" {
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff204080, 0xff000000, 0xffffffff };
     var pixels: [6]u32 align(4096) = @splat(0);
-    var renderer: Renderer = .{
+    var renderer: Self = .{
         .back_buffer = .{ .width = 3, .height = 2, .data = std.mem.sliceAsBytes(&pixels) },
         .pixels_per_meter = 1,
         .camera_position = .{ .x = 0, .y = 0 },
+        .textures = undefined,
+        .debug_color = Color.magenta.toARGB(),
     };
     renderer.drawTexturedRectangle(0, 0, 3, 2, 0, .{ .width = 3, .height = 2, .pixels = &texels }, null);
     try std.testing.expectEqualSlices(u32, &texels, &pixels);
@@ -648,10 +791,12 @@ test "bilinear texture filtering averages linear colors and clamps edge texels" 
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff };
     const texture: Bitmap = .{ .width = 2, .height = 2, .pixels = &texels };
     var pixels: [16]u32 align(4096) = @splat(0);
-    var renderer: Renderer = .{
+    var renderer: Self = .{
         .back_buffer = .{ .width = 4, .height = 4, .data = std.mem.sliceAsBytes(&pixels) },
         .pixels_per_meter = 1,
         .camera_position = .{ .x = 0, .y = 0 },
+        .textures = undefined,
+        .debug_color = undefined,
     };
     // The centre averages all four texels: each linear RGB channel is 0.5.
     renderer.drawTexturedRectangle(0, 0, 1, 1, 0, texture, null);
@@ -722,7 +867,7 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
         // The trailing pixels detect writes past the framebuffer in fast builds too.
         var pixels: [16 * 16 + 16]u32 align(4096) = @splat(0);
         @memset(pixels[16 * 16 ..], 0x12345678);
-        var renderer: Renderer = .{
+        var renderer: Self = .{
             .back_buffer = .{
                 .width = 16,
                 .height = 16,
@@ -730,6 +875,8 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
             },
             .pixels_per_meter = 48,
             .camera_position = .{ .x = 10, .y = -4 },
+            .textures = undefined,
+            .debug_color = undefined,
         };
 
         renderer.drawRectangle(case.x, case.y, case.width, case.height, case.angle_radians, .white);
@@ -802,7 +949,7 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
             }
             var pixels: [48 * 48 + 16]u32 align(4096) = @splat(0);
             @memset(pixels[48 * 48 ..], 0x12345678);
-            var renderer: Renderer = .{
+            var renderer: Self = .{
                 .back_buffer = .{
                     .width = 48,
                     .height = 48,
@@ -810,6 +957,8 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
                 },
                 .pixels_per_meter = 1,
                 .camera_position = .{ .x = 0, .y = 0 },
+                .textures = undefined,
+                .debug_color = undefined,
             };
             const texture: Bitmap = .{
                 .width = case.texture_width,
@@ -837,10 +986,12 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
 
 test "rotated rectangles blend only covered pixel centres" {
     var pixels: [8 * 8]u32 align(4096) = @splat(0xff0000ff);
-    var renderer: Renderer = .{
+    var renderer: Self = .{
         .back_buffer = .{ .width = 8, .height = 8, .data = std.mem.sliceAsBytes(&pixels) },
         .pixels_per_meter = 1,
         .camera_position = .{ .x = 0, .y = 0 },
+        .textures = undefined,
+        .debug_color = undefined,
     };
     renderer.drawRectangle(4, 1.25, 3, 3, std.math.pi / 4.0, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
 
@@ -861,33 +1012,3 @@ test "rotated rectangles blend only covered pixel centres" {
         try std.testing.expectEqual(expected, pixel);
     }
 }
-
-// INCOMPLETE
-pub const CommandType = enum(u8) {
-    set_view,
-    clear_screen,
-    draw_rectangle,
-};
-
-pub const SetViewCommand = struct {
-    meters_per_pixel: f32,
-};
-
-pub const ClearCommand = struct {
-    clear_color: Color,
-};
-
-pub const DrawRectangleCommand = struct {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: Color,
-};
-
-pub const RenderQueue = struct {
-    commands: std.ArrayList(CommandType),
-    data: std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-};
-// INCOMPLETE

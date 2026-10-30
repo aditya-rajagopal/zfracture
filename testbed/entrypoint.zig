@@ -12,57 +12,6 @@ const DrawCase = struct {
     height: f32,
 };
 
-fn fillTestBitmap(bitmap: Bitmap) void {
-    std.debug.assert(bitmap.width == bitmap_size);
-    std.debug.assert(bitmap.height == bitmap_size);
-    std.debug.assert(bitmap.pixels.len == bitmap_size * bitmap_size);
-
-    for (0..bitmap.height) |y| {
-        for (0..bitmap.width) |x| {
-            // Eight-pixel squares reveal sampling and row-stride mistakes.
-            const checker = (x / 8 + y / 8) % 2;
-            var pixel: u32 = if (checker == 0) 0xffe0e0e0 else 0xff202020;
-
-            // Opaque corner markers reveal orientation and channel swaps.
-            if (y < 8) {
-                if (x < 8) pixel = 0xffff0000;
-                if (x >= bitmap_size - 8) pixel = 0xff00ff00;
-            }
-            if (y >= bitmap_size - 8) {
-                if (x < 8) pixel = 0xff0000ff;
-                if (x >= bitmap_size - 8) pixel = 0xffffff00;
-            }
-
-            // A white centre band fades from transparent to opaque.
-            // RGB stays white even at zero alpha, as this is straight alpha.
-            if (y >= 24) {
-                if (y < 40) {
-                    const alpha: u32 = @intCast(x * 255 / (bitmap.width - 1));
-                    pixel = (alpha << 24) | 0x00ffffff;
-                }
-            }
-            const color: [4]u8 = @bitCast(pixel);
-            var b: f32 = @as(f32, @floatFromInt(color[0])) / 255.0;
-            var g: f32 = @as(f32, @floatFromInt(color[1])) / 255.0;
-            var r: f32 = @as(f32, @floatFromInt(color[2])) / 255.0;
-            const a: f32 = @as(f32, @floatFromInt(color[3])) / 255.0;
-
-            r = @sqrt(r * r * a);
-            g = @sqrt(g * g * a);
-            b = @sqrt(b * b * a);
-
-            const final = [_]u8{
-                @truncate(@as(u32, @intFromFloat(@round(b * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(g * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(r * 255.0)))),
-                color[3],
-            };
-
-            bitmap.pixels[y * bitmap.width + x] = @bitCast(final);
-        }
-    }
-}
-
 pub fn main(init: std.process.Init) !void {
     var platform: fr.Platform = .{};
     try platform.init();
@@ -106,54 +55,20 @@ pub fn main(init: std.process.Init) !void {
     };
 
     const allocator = std.heap.page_allocator;
-    const pixels = try allocator.alignedAlloc(
-        u8,
-        .fromByteUnits(4096),
-        width * height * fr.Renderer.bytes_per_pixel,
-    );
-    defer allocator.free(pixels);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const image_file = try std.Io.Dir.cwd().openFile(init.io, "assets/textures/paving2.png", .{});
-    defer image_file.close(init.io);
+    var renderer: fr.Renderer = undefined;
+    try renderer.init(allocator, .{ .width = width, .height = height, .pixels_per_meter = 1 });
 
-    var diagnostic: ?[]const u8 = null;
-    const image = fr.png.fromFile(
-        image_file,
+    const bitmap = renderer.loadAndCreateTexture(
         init.io,
+        allocator,
         arena.allocator(),
-        std.heap.page_allocator,
-        &diagnostic,
-        .{
-            .flip_vertical_on_load = false,
-            .requested_channels = 4,
-        },
-    ) catch |err| {
-        if (diagnostic) |d| std.debug.print("Failed to load image: {s}\n", .{d});
-        return err;
-    };
-    std.debug.assert(image.channels == 4);
-    defer std.heap.page_allocator.free(image.data);
-
-    // The pixel storage lives for the entire testbed; creation happens once.
-    // var bitmap_pixels: [bitmap_size * bitmap_size]u32 = undefined;
-    // const bitmap: Bitmap = .{
-    //     .width = bitmap_size,
-    //     .height = bitmap_size,
-    //     .pixels = &bitmap_pixels,
-    // };
-    // fillTestBitmap(bitmap);
-
-    const bitmap: Bitmap = .prepareFromPNG(image);
-
-    var renderer: fr.Renderer = .{
-        .back_buffer = .{ .width = width, .height = height, .data = pixels },
-        .pixels_per_meter = 1,
-        .camera_position = .{ .x = 0, .y = 0 },
-    };
-    renderer.clearScreen(0.08, 0.08, 0.08);
+        "assets/textures/paving2.png",
+    );
+    renderer.submit(.{ .clear_screen = .{ .r = 0.08, .g = 0.08, .b = 0.08 } });
 
     try platform.createWindow(.{
         .title = "Testbed - left click or Space: next texture case",
@@ -220,16 +135,16 @@ pub fn main(init: std.process.Init) !void {
         const origin_x = draw_case.x + half_width - (cosine * half_width - sine * half_height);
         const origin_y = draw_case.y + half_height - (sine * half_width + cosine * half_height);
 
-        renderer.clearScreen(0.08, 0.08, 0.08);
-        renderer.drawTexturedRectangle(
-            origin_x,
-            origin_y,
-            draw_case.width,
-            draw_case.height,
-            angle_radians,
-            bitmap,
-            null,
-        );
+        renderer.submit(.{ .clear_screen = .{ .r = 0.08, .g = 0.08, .b = 0.08 } });
+        renderer.submit(.{ .draw_textured_rectangle = .{
+            .x = origin_x,
+            .y = origin_y,
+            .width = draw_case.width,
+            .height = draw_case.height,
+            .angle_radians = angle_radians,
+            .texture = bitmap,
+            .tint_srgb = null,
+        } });
         platform.present();
     }
 }
