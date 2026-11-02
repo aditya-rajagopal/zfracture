@@ -136,6 +136,7 @@ pub fn main(init: std.process.Init) !void {
         const origin_y = draw_case.y + half_height - (sine * half_width + cosine * half_height);
 
         renderer.submit(.{ .clear_screen = .{ .r = 0.08, .g = 0.08, .b = 0.08 } });
+        renderer.submit(.{ .set_view = .{ .meters_per_pixel = 1, .camera_x = centre_x, .camera_y = centre_y } });
         renderer.submit(.{ .draw_textured_rectangle = .{
             .x = origin_x,
             .y = origin_y,

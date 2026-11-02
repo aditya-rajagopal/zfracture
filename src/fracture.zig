@@ -22,6 +22,7 @@ pub const event = @import("event.zig");
 
 // TODO: Make a switch for which type of renderer we want to use
 pub const Renderer = @import("software_renderer.zig");
+pub const Texture = @import("renderer.zig").Texture;
 
 pub const SoundSystem = @import("sound.zig");
 pub const PlaybackHandle = SoundSystem.PlaybackHandle;

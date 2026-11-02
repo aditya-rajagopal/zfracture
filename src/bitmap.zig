@@ -1,7 +1,7 @@
 pub const Bitmap = @This();
 
-width: usize,
-height: usize,
+width: u16,
+height: u16,
 // Top-down rows of tightly packed 0xAARRGGBB pixels.
 // RGB is premultiplied in linear space, then encoded; alpha is stored unchanged.
 pixels: []u32,
@@ -28,8 +28,8 @@ pub fn prepareFromPNG(image: png.Image) Bitmap {
         }
     }
     return .{
-        .width = image.width,
-        .height = image.height,
+        .width = @intCast(image.width),
+        .height = @intCast(image.height),
         .pixels = @as([*]u32, @ptrCast(image.data.ptr))[0 .. image.height * image.width],
     };
 }

@@ -18,7 +18,7 @@ pixels_per_meter: f32,
 camera_position: struct { x: f32, y: f32 },
 textures: [32]Bitmap,
 head: u8 = 1,
-debug_color: u32,
+debug_color: u32 = Color.magenta.toARGB(),
 
 pub const Config = struct {
     width: u16,
@@ -107,6 +107,30 @@ pub fn getTexture(self: *const Self, texture: Renderer.Texture) Bitmap {
     const index: u32 = @backingInt(texture);
     if (index >= self.head) return self.textures[0];
     return self.textures[index];
+}
+
+pub fn getTextureOrNull(self: *const Self, texture: Renderer.Texture) ?Bitmap {
+    const index: u32 = @backingInt(texture);
+    if (index >= self.head) return null;
+    return self.textures[index];
+}
+
+pub fn allocTexture(
+    self: *Self,
+    gpa: std.mem.Allocator,
+    width: u16,
+    height: u16,
+) error{ TextureFull, OutOfMemory }!Renderer.Texture {
+    if (self.head >= self.textures.len) {
+        std.log.err("Texture slots full", .{});
+        return error.TextureFull;
+    }
+    const t: *Bitmap = &self.textures[self.head];
+    t.pixels = try gpa.alloc(u32, @as(u64, width) * height);
+    defer self.head += 1;
+    t.width = width;
+    t.height = height;
+    return @fromBackingInt(self.head);
 }
 
 pub fn createTextureCopy(self: *Self, gpa: std.mem.Allocator, texture: Bitmap) Renderer.Texture {
@@ -209,15 +233,16 @@ pub fn worldFromScreen(self: *Self, x: f32, y: f32) struct { x: f32, y: f32 } {
     };
 }
 
-pub fn visibleWorldBounds(self: *Self) AABB {
-    assert(self.pixels_per_meter > 0);
-    const half_width: f32 = @as(f32, @floatFromInt(self.back_buffer.width)) / self.pixels_per_meter / 2.0;
-    const half_height: f32 = @as(f32, @floatFromInt(self.back_buffer.height)) / self.pixels_per_meter / 2.0;
+pub fn visibleWorldBounds(self: *Self, camera_x: f32, camera_y: f32, meters_per_pixel: f32) AABB {
+    assert(meters_per_pixel > 0);
+    const pixels_per_meter = 1.0 / meters_per_pixel;
+    const half_width: f32 = @as(f32, @floatFromInt(self.back_buffer.width)) / pixels_per_meter / 2.0;
+    const half_height: f32 = @as(f32, @floatFromInt(self.back_buffer.height)) / pixels_per_meter / 2.0;
     return .{
-        .min_x = self.camera_position.x - half_width,
-        .min_y = self.camera_position.y - half_height,
-        .max_x = self.camera_position.x + half_width,
-        .max_y = self.camera_position.y + half_height,
+        .min_x = camera_x - half_width,
+        .min_y = camera_y - half_height,
+        .max_x = camera_x + half_width,
+        .max_y = camera_y + half_height,
     };
 }
 
@@ -972,8 +997,8 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
                 .debug_color = undefined,
             };
             const texture: Bitmap = .{
-                .width = case.texture_width,
-                .height = case.texture_height,
+                .width = @intCast(case.texture_width),
+                .height = @intCast(case.texture_height),
                 .pixels = texels[0 .. case.texture_width * case.texture_height],
             };
 
