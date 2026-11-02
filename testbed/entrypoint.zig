@@ -60,7 +60,12 @@ pub fn main(init: std.process.Init) !void {
     defer arena.deinit();
 
     var renderer: fr.Renderer = undefined;
-    try renderer.init(allocator, .{ .width = width, .height = height, .pixels_per_meter = 1 });
+    try renderer.init(allocator, .{
+        .width = width,
+        .height = height,
+        .pixels_per_meter = 1,
+        .missing_texture_color = .magenta,
+    });
 
     const bitmap = renderer.loadAndCreateTexture(
         init.io,

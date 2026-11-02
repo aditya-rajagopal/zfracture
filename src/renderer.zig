@@ -1,5 +1,3 @@
-const std = @import("std");
-
 const types = @import("types.zig");
 const Color = types.Color;
 
@@ -58,4 +56,7 @@ pub const DrawRectangleCommand = struct {
     color_srgb: Color,
 };
 
-pub const Texture = enum(u32) { _ };
+pub const Texture = enum(u32) {
+    missing_texture = 0,
+    _,
+};
