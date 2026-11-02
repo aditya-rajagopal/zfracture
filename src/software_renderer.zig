@@ -18,6 +18,24 @@ pixels_per_meter: f32,
 camera_position: struct { x: f32, y: f32 },
 textures: [32]Bitmap,
 head: u8 = 1,
+command_buffer: CommandBuffer,
+
+pub const CommandBuffer = struct {
+    pub const data_alignment = @max(
+        @alignOf(Internal.ClearCommand),
+        @alignOf(Internal.DrawRectangleCommand),
+        @alignOf(Internal.DrawSpriteCommand),
+        @alignOf(Internal.DrawTexturedRectangleCommand),
+    );
+
+    const Header = struct {
+        tag: Internal.CommandType,
+        offset: u32,
+    };
+
+    headers: []Header,
+    data: []align(data_alignment) u8,
+};
 
 pub const Config = struct {
     width: u16,
@@ -26,15 +44,39 @@ pub const Config = struct {
     missing_texture_color: Color,
 };
 
+const MAX_COMMANDS = 4096;
+const max_command_size = std.mem.alignForward(
+    usize,
+    @max(
+        @sizeOf(Internal.ClearCommand),
+        @sizeOf(Internal.DrawRectangleCommand),
+        @sizeOf(Internal.DrawSpriteCommand),
+        @sizeOf(Internal.DrawTexturedRectangleCommand),
+    ),
+    CommandBuffer.data_alignment,
+);
+// HACK: Figure out a better estimate. We should proabbly use stdx.GrowingBuffer
+const MAX_DATA = MAX_COMMANDS * max_command_size;
+
 pub fn init(
     self: *Self,
     gpa: std.mem.Allocator,
     config: Config,
 ) !void {
-    const data = try gpa.alignedAlloc(
+    const pixels = try gpa.alignedAlloc(
         u8,
         .fromByteUnits(4096),
         @as(usize, config.width) * config.height * bytes_per_pixel,
+    );
+    errdefer gpa.free(pixels);
+
+    const headers = try gpa.alloc(CommandBuffer.Header, MAX_COMMANDS);
+    errdefer gpa.free(headers);
+
+    const data = try gpa.alignedAlloc(
+        u8,
+        .fromByteUnits(CommandBuffer.data_alignment),
+        MAX_DATA,
     );
     errdefer gpa.free(data);
 
@@ -44,8 +86,11 @@ pub fn init(
     self.back_buffer = .{
         .width = config.width,
         .height = config.height,
-        .data = data,
+        .data = pixels,
     };
+    self.command_buffer = .{ .headers = headers, .data = data };
+    self.command_buffer.headers.len = 0;
+    self.command_buffer.data.len = 0;
     self.pixels_per_meter = config.pixels_per_meter;
     self.camera_position.x = 0;
     self.camera_position.y = 0;
@@ -55,57 +100,193 @@ pub fn init(
 
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
     gpa.free(self.back_buffer.data);
+    self.command_buffer.headers.len = MAX_COMMANDS;
+    self.command_buffer.data.len = MAX_DATA;
+    gpa.free(self.command_buffer.headers);
+    gpa.free(self.command_buffer.data);
     for (self.textures[0..self.head]) |texture| {
         gpa.free(texture.pixels);
     }
 }
 
-/// Project world-space commands through the active view before rasterizing in pixels.
+const Internal = struct {
+    pub const CommandType = enum(u8) {
+        clear_screen,
+        draw_rectangle,
+        draw_sprite,
+        draw_textured_rectangle,
+    };
+
+    pub const ClearCommand = struct {
+        r: f32,
+        g: f32,
+        b: f32,
+    };
+
+    pub const DrawTexturedRectangleCommand = struct {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        angle_radians: f32,
+        texture: Bitmap,
+        tint_srgb: ?Color,
+    };
+
+    pub const DrawSpriteCommand = struct {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        texture: Bitmap,
+    };
+
+    pub const DrawRectangleCommand = struct {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        angle_radians: f32,
+        color_srgb: Color,
+    };
+};
+
 pub fn submit(self: *Self, command: Renderer.Command) void {
+    assert(self.command_buffer.headers.len < MAX_COMMANDS);
+    assert(self.command_buffer.data.len <= (MAX_COMMANDS - 1) * max_command_size);
+
+    const tag_head = self.command_buffer.headers.len;
+    self.command_buffer.headers.len += 1;
+
     switch (command) {
-        .clear_screen => |cc| self.clearScreen(
-            cc.r,
-            cc.g,
-            cc.b,
-        ),
-        .set_view => |view| self.setView(
-            view.meters_per_pixel,
-            view.camera_x,
-            view.camera_y,
-        ),
+        .clear_screen => |cc| {
+            const bytes = std.mem.asBytes(&Internal.ClearCommand{ .r = cc.r, .g = cc.g, .b = cc.b });
+            const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.ClearCommand));
+            self.command_buffer.data.len = start + bytes.len;
+            assert(self.command_buffer.data.len <= MAX_DATA);
+            const dest: []align(@alignOf(Internal.ClearCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
+            @memcpy(dest, bytes);
+            self.command_buffer.headers[tag_head] = .{ .tag = .clear_screen, .offset = @truncate(start) };
+        },
+        .set_view => |view| {
+            self.command_buffer.headers.len -= 1;
+            self.setView(view.meters_per_pixel, view.camera_x, view.camera_y);
+            return;
+        },
         .draw_rectangle => |rect| {
             const screen = self.screenFromWorld(rect.x, rect.y);
-            self.drawRectangle(
-                screen.x,
-                screen.y,
-                rect.width * self.pixels_per_meter,
-                rect.height * self.pixels_per_meter,
-                rect.angle_radians,
-                rect.color_srgb,
-            );
+            if (rect.texture) |texture| {
+                if (rect.angle_radians == 0 and rect.tint_srgb == null) {
+                    const bytes = std.mem.asBytes(&Internal.DrawSpriteCommand{
+                        .x = screen.x,
+                        .y = screen.y,
+                        .width = rect.width * self.pixels_per_meter,
+                        .height = rect.height * self.pixels_per_meter,
+                        .texture = self.getTexture(texture),
+                    });
+                    const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawSpriteCommand));
+                    self.command_buffer.data.len = start + bytes.len;
+                    assert(self.command_buffer.data.len <= MAX_DATA);
+                    const dest: []align(@alignOf(Internal.DrawSpriteCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
+                    @memcpy(dest, bytes);
+                    self.command_buffer.headers[tag_head] = .{ .tag = .draw_sprite, .offset = @truncate(start) };
+                } else {
+                    const bytes = std.mem.asBytes(&Internal.DrawTexturedRectangleCommand{
+                        .x = screen.x,
+                        .y = screen.y,
+                        .width = rect.width * self.pixels_per_meter,
+                        .height = rect.height * self.pixels_per_meter,
+                        .angle_radians = rect.angle_radians,
+                        .texture = self.getTexture(texture),
+                        .tint_srgb = rect.tint_srgb,
+                    });
+                    const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawTexturedRectangleCommand));
+                    self.command_buffer.data.len = start + bytes.len;
+                    assert(self.command_buffer.data.len <= MAX_DATA);
+                    const dest: []align(@alignOf(Internal.DrawTexturedRectangleCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
+                    @memcpy(dest, bytes);
+                    self.command_buffer.headers[tag_head] = .{ .tag = .draw_textured_rectangle, .offset = @truncate(start) };
+                }
+            } else {
+                const colour = if (rect.tint_srgb) |tint| tint else Color.magenta;
+                const bytes = std.mem.asBytes(&Internal.DrawRectangleCommand{
+                    .x = screen.x,
+                    .y = screen.y,
+                    .width = rect.width * self.pixels_per_meter,
+                    .height = rect.height * self.pixels_per_meter,
+                    .angle_radians = rect.angle_radians,
+                    .color_srgb = colour,
+                });
+                const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawRectangleCommand));
+                self.command_buffer.data.len = start + bytes.len;
+                assert(self.command_buffer.data.len <= MAX_DATA);
+                const dest: []align(@alignOf(Internal.DrawRectangleCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
+                @memcpy(dest, bytes);
+                self.command_buffer.headers[tag_head] = .{ .tag = .draw_rectangle, .offset = @truncate(start) };
+            }
         },
-        .draw_sprite => |sprite| {
-            const screen = self.screenFromWorld(sprite.x, sprite.y);
-            self.drawSprite(
-                screen.x,
-                screen.y,
-                sprite.width * self.pixels_per_meter,
-                sprite.height * self.pixels_per_meter,
-                self.getTexture(sprite.texture),
-            );
-        },
-        .draw_textured_rectangle => |trect| {
-            const screen = self.screenFromWorld(trect.x, trect.y);
-            self.drawTexturedRectangle(
-                screen.x,
-                screen.y,
-                trect.width * self.pixels_per_meter,
-                trect.height * self.pixels_per_meter,
-                trect.angle_radians,
-                self.getTexture(trect.texture),
-                trect.tint_srgb,
-            );
-        },
+    }
+}
+
+pub fn beginDrawing(self: *Self, clear_color: Color) void {
+    self.command_buffer.headers.len = 0;
+    self.command_buffer.data.len = 0;
+    self.submit(.{ .clear_screen = .{ .r = clear_color.r, .g = clear_color.g, .b = clear_color.b } });
+}
+
+pub fn endDrawing(self: *Self) void {
+    for (self.command_buffer.headers) |header| {
+        switch (header.tag) {
+            .clear_screen => {
+                const size = @sizeOf(Internal.ClearCommand);
+                assert(self.command_buffer.data.len >= header.offset);
+                assert(self.command_buffer.data.len - header.offset >= size);
+                const cc: *const Internal.ClearCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
+                self.clearScreen(cc.r, cc.g, cc.b);
+            },
+            .draw_rectangle => {
+                const size = @sizeOf(Internal.DrawRectangleCommand);
+                assert(self.command_buffer.data.len >= header.offset);
+                assert(self.command_buffer.data.len - header.offset >= size);
+                const rect: *const Internal.DrawRectangleCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
+                self.drawRectangle(
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    rect.angle_radians,
+                    rect.color_srgb,
+                );
+            },
+            .draw_sprite => {
+                const size = @sizeOf(Internal.DrawSpriteCommand);
+                assert(self.command_buffer.data.len >= header.offset);
+                assert(self.command_buffer.data.len - header.offset >= size);
+                const sprite: *const Internal.DrawSpriteCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
+                self.drawSprite(
+                    sprite.x,
+                    sprite.y,
+                    sprite.width,
+                    sprite.height,
+                    sprite.texture,
+                );
+            },
+            .draw_textured_rectangle => {
+                const size = @sizeOf(Internal.DrawTexturedRectangleCommand);
+                assert(self.command_buffer.data.len >= header.offset);
+                assert(self.command_buffer.data.len - header.offset >= size);
+                const trect: *const Internal.DrawTexturedRectangleCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
+                self.drawTexturedRectangle(
+                    trect.x,
+                    trect.y,
+                    trect.width,
+                    trect.height,
+                    trect.angle_radians,
+                    trect.texture,
+                    trect.tint_srgb,
+                );
+            },
+        }
     }
 }
 

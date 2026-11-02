@@ -5,16 +5,12 @@ pub const Command = union(CommandType) {
     set_view: SetViewCommand,
     clear_screen: ClearCommand,
     draw_rectangle: DrawRectangleCommand,
-    draw_sprite: DrawSpriteCommand,
-    draw_textured_rectangle: DrawTexturedRectangleCommand,
 };
 
 pub const CommandType = enum(u8) {
     set_view,
     clear_screen,
     draw_rectangle,
-    draw_sprite,
-    draw_textured_rectangle,
 };
 
 pub const SetViewCommand = struct {
@@ -29,31 +25,14 @@ pub const ClearCommand = struct {
     b: f32,
 };
 
-pub const DrawTexturedRectangleCommand = struct {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    angle_radians: f32,
-    texture: Texture,
-    tint_srgb: ?Color,
-};
-
-pub const DrawSpriteCommand = struct {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    texture: Texture,
-};
-
 pub const DrawRectangleCommand = struct {
     x: f32,
     y: f32,
     width: f32,
     height: f32,
     angle_radians: f32,
-    color_srgb: Color,
+    texture: ?Texture,
+    tint_srgb: ?Color,
 };
 
 pub const Texture = enum(u32) {
