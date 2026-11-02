@@ -30,9 +30,9 @@ pub const DrawRectangleCommand = struct {
     y: f32,
     width: f32,
     height: f32,
-    angle_radians: f32,
-    texture: ?Texture,
-    tint_srgb: ?Color,
+    angle_radians: f32 = 0,
+    texture: ?Texture = null,
+    tint_srgb: ?Color = null,
 };
 
 pub const Texture = enum(u32) {

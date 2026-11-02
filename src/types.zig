@@ -6,7 +6,7 @@ pub const Color = struct {
     r: f32,
     g: f32,
     b: f32,
-    a: f32,
+    a: f32 = 1.0,
 
     const Self = @This();
 
