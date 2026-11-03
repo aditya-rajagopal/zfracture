@@ -26,10 +26,16 @@ pub const ClearCommand = struct {
 };
 
 pub const DrawRectangleCommand = struct {
-    x: f32,
-    y: f32,
+    /// World position that stays fixed during rotation.
+    pivot_world_x: f32,
+    pivot_world_y: f32,
     width: f32,
     height: f32,
+    /// Fraction of width/height measured from the unrotated top-left corner.
+    /// Values outside [0, 1] place the pivot outside the rectangle.
+    pivot_fraction_x: f32 = 0.5,
+    pivot_fraction_y: f32 = 0.5,
+    /// Positive angles rotate clockwise in the renderer's Y-down coordinates.
     angle_radians: f32 = 0,
     texture: ?Texture = null,
     tint_srgb: ?Color = null,

@@ -6,8 +6,8 @@ const bitmap_size = 64;
 
 const DrawCase = struct {
     name: []const u8,
-    x: f32,
-    y: f32,
+    pivot_world_x: f32,
+    pivot_world_y: f32,
     width: f32,
     height: f32,
 };
@@ -23,35 +23,35 @@ pub fn main(init: std.process.Init) !void {
     const centre_y = height / 2;
     const draw_cases = [_]DrawCase{
         // Keep the image centred while changing the destination dimensions.
-        .{ .name = "Native (1x)", .x = centre_x - 32, .y = centre_y - 32, .width = 64, .height = 64 },
-        .{ .name = "Half size (0.5x)", .x = centre_x - 16, .y = centre_y - 16, .width = 32, .height = 32 },
-        .{ .name = "Fractional scale (1.5x)", .x = centre_x - 48, .y = centre_y - 48, .width = 96, .height = 96 },
-        .{ .name = "Double size (2x)", .x = centre_x - 64, .y = centre_y - 64, .width = 128, .height = 128 },
-        .{ .name = "Quadruple size (4x)", .x = centre_x - 128, .y = centre_y - 128, .width = 256, .height = 256 },
-        .{ .name = "Wide (2x, 0.5x)", .x = centre_x - 64, .y = centre_y - 16, .width = 128, .height = 32 },
-        .{ .name = "Tall (0.5x, 2x)", .x = centre_x - 16, .y = centre_y - 64, .width = 32, .height = 128 },
+        .{ .name = "Native (1x)", .pivot_world_x = centre_x, .pivot_world_y = centre_y, .width = 64, .height = 64 },
+        .{ .name = "Half size (0.5x)", .pivot_world_x = centre_x, .pivot_world_y = centre_y, .width = 32, .height = 32 },
+        .{ .name = "Fractional scale (1.5x)", .pivot_world_x = centre_x, .pivot_world_y = centre_y, .width = 96, .height = 96 },
+        .{ .name = "Double size (2x)", .pivot_world_x = centre_x, .pivot_world_y = centre_y, .width = 128, .height = 128 },
+        .{ .name = "Quadruple size (4x)", .pivot_world_x = centre_x, .pivot_world_y = centre_y, .width = 256, .height = 256 },
+        .{ .name = "Wide (2x, 0.5x)", .pivot_world_x = centre_x, .pivot_world_y = centre_y, .width = 128, .height = 32 },
+        .{ .name = "Tall (0.5x, 2x)", .pivot_world_x = centre_x, .pivot_world_y = centre_y, .width = 32, .height = 128 },
 
-        // Half-pixel origins put pixel centres exactly on the starting edges.
-        .{ .name = "Native, quarter-pixel origin", .x = centre_x - 32 + 0.25, .y = centre_y - 32 + 0.25, .width = 64, .height = 64 },
-        .{ .name = "Native, half-pixel origin", .x = centre_x - 32 + 0.5, .y = centre_y - 32 + 0.5, .width = 64, .height = 64 },
-        .{ .name = "1.5x, half-pixel origin", .x = centre_x - 48 + 0.5, .y = centre_y - 48 + 0.5, .width = 96, .height = 96 },
-        .{ .name = "0.5x, quarter-pixel origin", .x = centre_x - 16 + 0.25, .y = centre_y - 16 + 0.25, .width = 32, .height = 32 },
+        // At zero rotation, half-pixel pivots put pixel centres on the starting edges.
+        .{ .name = "Native, quarter-pixel pivot", .pivot_world_x = centre_x + 0.25, .pivot_world_y = centre_y + 0.25, .width = 64, .height = 64 },
+        .{ .name = "Native, half-pixel pivot", .pivot_world_x = centre_x + 0.5, .pivot_world_y = centre_y + 0.5, .width = 64, .height = 64 },
+        .{ .name = "1.5x, half-pixel pivot", .pivot_world_x = centre_x + 0.5, .pivot_world_y = centre_y + 0.5, .width = 96, .height = 96 },
+        .{ .name = "0.5x, quarter-pixel pivot", .pivot_world_x = centre_x + 0.25, .pivot_world_y = centre_y + 0.25, .width = 32, .height = 32 },
 
         // Clipping must preserve the scale and the original texture position.
-        .{ .name = "2x, left edge, half-pixel origin", .x = -63.5, .y = centre_y - 64, .width = 128, .height = 128 },
-        .{ .name = "2x, right edge, half-pixel origin", .x = width - 63.5, .y = centre_y - 64, .width = 128, .height = 128 },
-        .{ .name = "2x, top edge, half-pixel origin", .x = centre_x - 64, .y = -63.5, .width = 128, .height = 128 },
-        .{ .name = "2x, bottom edge, half-pixel origin", .x = centre_x - 64, .y = height - 63.5, .width = 128, .height = 128 },
-        .{ .name = "1.5x, top-left corner, quarter-pixel origin", .x = -47.75, .y = -47.75, .width = 96, .height = 96 },
-        .{ .name = "1.5x, top-right corner, quarter-pixel origin", .x = width - 47.75, .y = -47.75, .width = 96, .height = 96 },
-        .{ .name = "1.5x, bottom-left corner, quarter-pixel origin", .x = -47.75, .y = height - 47.75, .width = 96, .height = 96 },
-        .{ .name = "1.5x, bottom-right corner, quarter-pixel origin", .x = width - 47.75, .y = height - 47.75, .width = 96, .height = 96 },
+        .{ .name = "2x, left edge, half-pixel pivot", .pivot_world_x = 0.5, .pivot_world_y = centre_y, .width = 128, .height = 128 },
+        .{ .name = "2x, right edge, half-pixel pivot", .pivot_world_x = width + 0.5, .pivot_world_y = centre_y, .width = 128, .height = 128 },
+        .{ .name = "2x, top edge, half-pixel pivot", .pivot_world_x = centre_x, .pivot_world_y = 0.5, .width = 128, .height = 128 },
+        .{ .name = "2x, bottom edge, half-pixel pivot", .pivot_world_x = centre_x, .pivot_world_y = height + 0.5, .width = 128, .height = 128 },
+        .{ .name = "1.5x, top-left corner, quarter-pixel pivot", .pivot_world_x = 0.25, .pivot_world_y = 0.25, .width = 96, .height = 96 },
+        .{ .name = "1.5x, top-right corner, quarter-pixel pivot", .pivot_world_x = width + 0.25, .pivot_world_y = 0.25, .width = 96, .height = 96 },
+        .{ .name = "1.5x, bottom-left corner, quarter-pixel pivot", .pivot_world_x = 0.25, .pivot_world_y = height + 0.25, .width = 96, .height = 96 },
+        .{ .name = "1.5x, bottom-right corner, quarter-pixel pivot", .pivot_world_x = width + 0.25, .pivot_world_y = height + 0.25, .width = 96, .height = 96 },
 
         // These are offscreen at zero rotation; rotating corners can enter the screen.
-        .{ .name = "2x, fully offscreen left", .x = -128, .y = centre_y - 64, .width = 128, .height = 128 },
-        .{ .name = "2x, fully offscreen right", .x = width, .y = centre_y - 64, .width = 128, .height = 128 },
-        .{ .name = "2x, fully offscreen top", .x = centre_x - 64, .y = -128, .width = 128, .height = 128 },
-        .{ .name = "2x, fully offscreen bottom", .x = centre_x - 64, .y = height, .width = 128, .height = 128 },
+        .{ .name = "2x, fully offscreen left", .pivot_world_x = -64, .pivot_world_y = centre_y, .width = 128, .height = 128 },
+        .{ .name = "2x, fully offscreen right", .pivot_world_x = width + 64, .pivot_world_y = centre_y, .width = 128, .height = 128 },
+        .{ .name = "2x, fully offscreen top", .pivot_world_x = centre_x, .pivot_world_y = -64, .width = 128, .height = 128 },
+        .{ .name = "2x, fully offscreen bottom", .pivot_world_x = centre_x, .pivot_world_y = height + 64, .width = 128, .height = 128 },
     };
 
     const allocator = std.heap.page_allocator;
@@ -123,8 +123,8 @@ pub fn main(init: std.process.Init) !void {
 
         const draw_case = draw_cases[case_index];
         if (case_index != previous_case_index) {
-            std.debug.print("Texture {d}/{d}: {s}, position ({d}, {d}), size {d} x {d}\n", .{
-                case_index + 1, draw_cases.len, draw_case.name, draw_case.x, draw_case.y, draw_case.width, draw_case.height,
+            std.debug.print("Texture {d}/{d}: {s}, pivot ({d}, {d}), size {d} x {d}\n", .{
+                case_index + 1, draw_cases.len, draw_case.name, draw_case.pivot_world_x, draw_case.pivot_world_y, draw_case.width, draw_case.height,
             });
             previous_case_index = case_index;
         }
@@ -133,21 +133,15 @@ pub fn main(init: std.process.Init) !void {
         const angle_radians: f32 = @as(f32, @floatFromInt(rotation_ns)) /
             @as(f32, @floatFromInt(rotation_period_ns)) * std.math.tau;
 
-        const half_width = draw_case.width * 0.5;
-        const half_height = draw_case.height * 0.5;
-        const cosine = @cos(angle_radians);
-        const sine = @sin(angle_radians);
-        const origin_x = draw_case.x + half_width - (cosine * half_width - sine * half_height);
-        const origin_y = draw_case.y + half_height - (sine * half_width + cosine * half_height);
-
-        renderer.beginDrawing();
-        renderer.submit(.{ .clear_screen = .{ .r = 0.08, .g = 0.08, .b = 0.08 } });
+        renderer.beginDrawing(.{ .r = 0.08, .g = 0.08, .b = 0.08 });
         renderer.submit(.{ .set_view = .{ .meters_per_pixel = 1, .camera_x = centre_x, .camera_y = centre_y } });
         renderer.submit(.{ .draw_rectangle = .{
-            .x = origin_x,
-            .y = origin_y,
+            .pivot_world_x = draw_case.pivot_world_x,
+            .pivot_world_y = draw_case.pivot_world_y,
             .width = draw_case.width,
             .height = draw_case.height,
+            .pivot_fraction_x = 0.5,
+            .pivot_fraction_y = 0.5,
             .angle_radians = angle_radians,
             .texture = bitmap,
             .tint_srgb = null,

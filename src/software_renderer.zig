@@ -124,28 +124,34 @@ const Internal = struct {
     };
 
     pub const DrawTexturedRectangleCommand = struct {
-        x: f32,
-        y: f32,
+        pivot_screen_x: f32,
+        pivot_screen_y: f32,
         width: f32,
         height: f32,
+        pivot_fraction_x: f32,
+        pivot_fraction_y: f32,
         angle_radians: f32,
         texture: Bitmap,
         tint_srgb: ?Color,
     };
 
     pub const DrawSpriteCommand = struct {
-        x: f32,
-        y: f32,
+        pivot_screen_x: f32,
+        pivot_screen_y: f32,
         width: f32,
         height: f32,
+        pivot_fraction_x: f32,
+        pivot_fraction_y: f32,
         texture: Bitmap,
     };
 
     pub const DrawRectangleCommand = struct {
-        x: f32,
-        y: f32,
+        pivot_screen_x: f32,
+        pivot_screen_y: f32,
         width: f32,
         height: f32,
+        pivot_fraction_x: f32,
+        pivot_fraction_y: f32,
         angle_radians: f32,
         color_srgb: Color,
     };
@@ -174,14 +180,16 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
             return;
         },
         .draw_rectangle => |rect| {
-            const screen = self.screenFromWorld(rect.x, rect.y);
+            const pivot_screen = self.screenFromWorld(rect.pivot_world_x, rect.pivot_world_y);
             if (rect.texture) |texture| {
                 if (rect.angle_radians == 0 and rect.tint_srgb == null) {
                     const bytes = std.mem.asBytes(&Internal.DrawSpriteCommand{
-                        .x = screen.x,
-                        .y = screen.y,
+                        .pivot_screen_x = pivot_screen.x,
+                        .pivot_screen_y = pivot_screen.y,
                         .width = rect.width * self.pixels_per_meter,
                         .height = rect.height * self.pixels_per_meter,
+                        .pivot_fraction_x = rect.pivot_fraction_x,
+                        .pivot_fraction_y = rect.pivot_fraction_y,
                         .texture = self.getTexture(texture),
                     });
                     const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawSpriteCommand));
@@ -192,10 +200,12 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
                     self.command_buffer.headers[tag_head] = .{ .tag = .draw_sprite, .offset = @truncate(start) };
                 } else {
                     const bytes = std.mem.asBytes(&Internal.DrawTexturedRectangleCommand{
-                        .x = screen.x,
-                        .y = screen.y,
+                        .pivot_screen_x = pivot_screen.x,
+                        .pivot_screen_y = pivot_screen.y,
                         .width = rect.width * self.pixels_per_meter,
                         .height = rect.height * self.pixels_per_meter,
+                        .pivot_fraction_x = rect.pivot_fraction_x,
+                        .pivot_fraction_y = rect.pivot_fraction_y,
                         .angle_radians = rect.angle_radians,
                         .texture = self.getTexture(texture),
                         .tint_srgb = rect.tint_srgb,
@@ -210,10 +220,12 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
             } else {
                 const colour = if (rect.tint_srgb) |tint| tint else Color.magenta;
                 const bytes = std.mem.asBytes(&Internal.DrawRectangleCommand{
-                    .x = screen.x,
-                    .y = screen.y,
+                    .pivot_screen_x = pivot_screen.x,
+                    .pivot_screen_y = pivot_screen.y,
                     .width = rect.width * self.pixels_per_meter,
                     .height = rect.height * self.pixels_per_meter,
+                    .pivot_fraction_x = rect.pivot_fraction_x,
+                    .pivot_fraction_y = rect.pivot_fraction_y,
                     .angle_radians = rect.angle_radians,
                     .color_srgb = colour,
                 });
@@ -250,10 +262,12 @@ pub fn endDrawing(self: *Self) void {
                 assert(self.command_buffer.data.len - header.offset >= size);
                 const rect: *const Internal.DrawRectangleCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
                 self.drawRectangle(
-                    rect.x,
-                    rect.y,
+                    rect.pivot_screen_x,
+                    rect.pivot_screen_y,
                     rect.width,
                     rect.height,
+                    rect.pivot_fraction_x,
+                    rect.pivot_fraction_y,
                     rect.angle_radians,
                     rect.color_srgb,
                 );
@@ -264,10 +278,12 @@ pub fn endDrawing(self: *Self) void {
                 assert(self.command_buffer.data.len - header.offset >= size);
                 const sprite: *const Internal.DrawSpriteCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
                 self.drawSprite(
-                    sprite.x,
-                    sprite.y,
+                    sprite.pivot_screen_x,
+                    sprite.pivot_screen_y,
                     sprite.width,
                     sprite.height,
+                    sprite.pivot_fraction_x,
+                    sprite.pivot_fraction_y,
                     sprite.texture,
                 );
             },
@@ -277,10 +293,12 @@ pub fn endDrawing(self: *Self) void {
                 assert(self.command_buffer.data.len - header.offset >= size);
                 const trect: *const Internal.DrawTexturedRectangleCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
                 self.drawTexturedRectangle(
-                    trect.x,
-                    trect.y,
+                    trect.pivot_screen_x,
+                    trect.pivot_screen_y,
                     trect.width,
                     trect.height,
+                    trect.pivot_fraction_x,
+                    trect.pivot_fraction_y,
                     trect.angle_radians,
                     trect.texture,
                     trect.tint_srgb,
@@ -479,10 +497,12 @@ const PreparedRectangle = struct {
 
     fn init(
         buffer: *const FrameBuffer,
-        x: f32,
-        y: f32,
+        pivot_screen_x: f32,
+        pivot_screen_y: f32,
         width: f32,
         height: f32,
+        pivot_fraction_x: f32,
+        pivot_fraction_y: f32,
         angle_radians: f32,
         rounding: BoundsRounding,
     ) ?PreparedRectangle {
@@ -495,6 +515,11 @@ const PreparedRectangle = struct {
         const right_y = @sin(angle_radians);
         const down_x = -right_y;
         const down_y = right_x;
+
+        const pivot_offset_x = pivot_fraction_x * width;
+        const pivot_offset_y = pivot_fraction_y * height;
+        const x = pivot_screen_x - (pivot_offset_x * right_x + pivot_offset_y * down_x);
+        const y = pivot_screen_y - (pivot_offset_x * right_y + pivot_offset_y * down_y);
 
         const p1_x = x + width * right_x;
         const p1_y = y + width * right_y;
@@ -555,14 +580,17 @@ fn fillSolidRows(buffer: *FrameBuffer, bounds: AABB, packed_color: u32) void {
 }
 
 // TODO(adi): Maybe have nearest-neighbour sampling and bilinear sampling as options?
+/// Draw with a pivot and dimensions in framebuffer pixels, independent of the camera.
+/// Pivot fractions are measured from the unrotated top-left and may be outside [0, 1].
+/// Positive angles rotate clockwise around the pivot.
 pub fn drawTexturedRectangle(
     renderer: *Self,
-    // x position in frame buffer coordinate
-    x: f32,
-    // y position in frame buffer coordinate
-    y: f32,
+    pivot_screen_x: f32,
+    pivot_screen_y: f32,
     width: f32,
     height: f32,
+    pivot_fraction_x: f32,
+    pivot_fraction_y: f32,
     angle_radians: f32,
     texture: Bitmap,
     tint_srgb: ?Color,
@@ -572,7 +600,7 @@ pub fn drawTexturedRectangle(
     defer profile.end(trace);
     if (angle_radians == 0) {
         if (tint_srgb == null) {
-            drawSprite(renderer, x, y, width, height, texture);
+            drawSprite(renderer, pivot_screen_x, pivot_screen_y, width, height, pivot_fraction_x, pivot_fraction_y, texture);
             return;
         }
     }
@@ -580,7 +608,7 @@ pub fn drawTexturedRectangle(
     if (texture.width == 0 or texture.height == 0) return;
     const back_buffer = &renderer.back_buffer;
 
-    const rectangle = PreparedRectangle.init(back_buffer, x, y, width, height, angle_radians, .outward) orelse return;
+    const rectangle = PreparedRectangle.init(back_buffer, pivot_screen_x, pivot_screen_y, width, height, pivot_fraction_x, pivot_fraction_y, angle_radians, .outward) orelse return;
 
     const bounds = rectangle.bounds;
     const x_min: usize = @intFromFloat(bounds.min_x);
@@ -723,13 +751,17 @@ pub fn drawTexturedRectangle(
 }
 
 /// Draw an untinted, axis-aligned texture in framebuffer pixels.
+/// The pivot fractions locate the fixed screen pivot relative to the top-left.
+/// Fractions may be outside [0, 1].
 /// Retains bilinear filtering, premultiplied alpha and gamma-2 conversion.
 pub fn drawSprite(
     renderer: *Self,
-    x: f32,
-    y: f32,
+    pivot_screen_x: f32,
+    pivot_screen_y: f32,
     width: f32,
     height: f32,
+    pivot_fraction_x: f32,
+    pivot_fraction_y: f32,
     texture: Bitmap,
 ) void {
     @setFloatMode(.optimized);
@@ -740,6 +772,8 @@ pub fn drawSprite(
     if (texture.width == 0) return;
     if (texture.height == 0) return;
     const back_buffer = &renderer.back_buffer;
+    const x = pivot_screen_x - pivot_fraction_x * width;
+    const y = pivot_screen_y - pivot_fraction_y * height;
     // Clip before converting potentially large coordinates to integers.
     const bounds = clipped(
         back_buffer,
@@ -916,16 +950,17 @@ pub fn drawSprite(
     }
 }
 
-/// Draw in framebuffer pixels, independent of the camera and world scale.
-/// Positive angles rotate clockwise around (x, y), like drawTexturedRectangle.
+/// Draw with a pivot and dimensions in framebuffer pixels, independent of the camera.
+/// Pivot fractions are measured from the unrotated top-left and may be outside [0, 1].
+/// Positive angles rotate clockwise around the pivot, like drawTexturedRectangle.
 pub fn drawRectangle(
     renderer: *Self,
-    // x position in frame buffer coordinate
-    x: f32,
-    // y position in frame buffer coordinate
-    y: f32,
+    pivot_screen_x: f32,
+    pivot_screen_y: f32,
     width: f32,
     height: f32,
+    pivot_fraction_x: f32,
+    pivot_fraction_y: f32,
     angle_radians: f32,
     color_srgb: Color,
 ) void {
@@ -934,7 +969,7 @@ pub fn drawRectangle(
     defer profile.end(trace);
     const back_buffer = &renderer.back_buffer;
     const rounding: PreparedRectangle.BoundsRounding = if (angle_radians == 0) .pixel_centres else .outward;
-    const rectangle = PreparedRectangle.init(back_buffer, x, y, width, height, angle_radians, rounding) orelse return;
+    const rectangle = PreparedRectangle.init(back_buffer, pivot_screen_x, pivot_screen_y, width, height, pivot_fraction_x, pivot_fraction_y, angle_radians, rounding) orelse return;
 
     const source_r = color_srgb.r * color_srgb.r * color_srgb.a;
     const source_g = color_srgb.g * color_srgb.g * color_srgb.a;
@@ -1006,7 +1041,7 @@ test "native size texture preserves pixel channels and row stride" {
         .textures = undefined,
         .command_buffer = undefined,
     };
-    renderer.drawTexturedRectangle(0, 0, 3, 2, 0, .{ .width = 3, .height = 2, .pixels = &texels }, null);
+    renderer.drawTexturedRectangle(0, 0, 3, 2, 0, 0, 0, .{ .width = 3, .height = 2, .pixels = &texels }, null);
     try std.testing.expectEqualSlices(u32, &texels, &pixels);
 }
 
@@ -1022,10 +1057,10 @@ test "bilinear texture filtering averages linear colors and clamps edge texels" 
         .command_buffer = undefined,
     };
     // The centre averages all four texels: each linear RGB channel is 0.5.
-    renderer.drawTexturedRectangle(0, 0, 1, 1, 0, texture, null);
+    renderer.drawTexturedRectangle(0, 0, 1, 1, 0, 0, 0, texture, null);
     try std.testing.expectEqual(@as(u32, 0xffb4b4b4), pixels[0]);
 
-    renderer.drawTexturedRectangle(0, 0, 4, 4, 0, texture, null);
+    renderer.drawTexturedRectangle(0, 0, 4, 4, 0, 0, 0, texture, null);
     try std.testing.expectEqual(@as(u32, 0xffff0000), pixels[0]);
     try std.testing.expectEqual(@as(u32, 0xff00ff00), pixels[3]);
     try std.testing.expectEqual(@as(u32, 0xff0000ff), pixels[12]);
@@ -1102,7 +1137,7 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
             .command_buffer = undefined,
         };
 
-        renderer.drawRectangle(case.x, case.y, case.width, case.height, case.angle_radians, .white);
+        renderer.drawRectangle(case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, .white);
 
         for (pixels[0 .. 16 * 16], 0..) |pixel, index| {
             const x = index % 16;
@@ -1190,9 +1225,9 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
             };
 
             if (direct_tile) {
-                renderer.drawSprite(case.x, case.y, case.width, case.height, texture);
+                renderer.drawSprite(case.x, case.y, case.width, case.height, 0, 0, texture);
             } else {
-                renderer.drawTexturedRectangle(case.x, case.y, case.width, case.height, case.angle_radians, texture, null);
+                renderer.drawTexturedRectangle(case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, texture, null);
             }
 
             for (pixels[0 .. 48 * 48], 0..) |pixel, index| {
@@ -1216,7 +1251,7 @@ test "rotated rectangles blend only covered pixel centres" {
         .textures = undefined,
         .command_buffer = undefined,
     };
-    renderer.drawRectangle(4, 1.25, 3, 3, std.math.pi / 4.0, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
+    renderer.drawRectangle(4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
 
     // A 45-degree square forms a diamond. These pixel centres are strictly
     // inside it; the other pixels in its bounding box must remain blue.
