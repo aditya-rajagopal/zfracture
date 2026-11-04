@@ -206,18 +206,72 @@ const Internal = struct {
     pub const DrawTexturedRectangleCommand = struct {
         rectangle: PreparedRectangle,
         texture: Bitmap,
-        tint_srgb: ?Color,
+        tint: LinearColor,
+        scale: TextureScale,
     };
 
     pub const DrawSpriteCommand = struct {
-        rectangle: PreparedRectangle,
+        rectangle: PreparedSprite,
         texture: Bitmap,
+        scale: TextureScale,
     };
 
     pub const DrawRectangleCommand = struct {
         rectangle: PreparedRectangle,
-        color_srgb: Color,
+        color: PreparedSolidColor,
     };
+};
+
+/// Gamma-2 decoded RGB, premultiplied by alpha; also used as a texture tint.
+const LinearColor = struct {
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+
+    fn init(color: Color) LinearColor {
+        @setFloatMode(.optimized);
+        return .{
+            .r = color.r * color.r * color.a,
+            .g = color.g * color.g * color.a,
+            .b = color.b * color.b * color.a,
+            .a = color.a,
+        };
+    }
+};
+
+const PreparedSolidColor = struct {
+    linear: LinearColor,
+    opaque_pixel: u32,
+
+    fn init(color: Color) PreparedSolidColor {
+        @setFloatMode(.optimized);
+        const linear = LinearColor.init(color);
+        return .{
+            .linear = linear,
+            // Preserve the rasterizer's gamma-2 round trip and quantization.
+            .opaque_pixel = if (linear.a == 1) @bitCast([_]u8{
+                @truncate(@as(u32, @intFromFloat(@round(@sqrt(linear.b) * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(@sqrt(linear.g) * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(@sqrt(linear.r) * 255.0)))),
+                255,
+            }) else 0,
+        };
+    }
+};
+
+const TextureScale = struct {
+    x: f32,
+    y: f32,
+
+    fn init(texture: Bitmap, width: f32, height: f32) TextureScale {
+        @setFloatMode(.optimized);
+        assert(width > 0 and height > 0);
+        return .{
+            .x = @as(f32, @floatFromInt(texture.width)) / width,
+            .y = @as(f32, @floatFromInt(texture.height)) / height,
+        };
+    }
 };
 
 pub fn submit(self: *Self, command: Renderer.Command) void {
@@ -270,10 +324,13 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
             tile_bounds = TileBounds.init(rectangle.bounds);
 
             if (rect.texture) |texture| {
+                const bitmap = self.getTexture(texture);
+                const scale = TextureScale.init(bitmap, rectangle.width, rectangle.height);
                 if (rect.angle_radians == 0 and rect.tint_srgb == null) {
                     const bytes = std.mem.asBytes(&Internal.DrawSpriteCommand{
-                        .rectangle = rectangle,
-                        .texture = self.getTexture(texture),
+                        .rectangle = PreparedSprite.fromRectangle(rectangle),
+                        .texture = bitmap,
+                        .scale = scale,
                     });
                     const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawSpriteCommand));
                     self.command_buffer.data.len = start + bytes.len;
@@ -284,8 +341,9 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
                 } else {
                     const bytes = std.mem.asBytes(&Internal.DrawTexturedRectangleCommand{
                         .rectangle = rectangle,
-                        .texture = self.getTexture(texture),
-                        .tint_srgb = rect.tint_srgb,
+                        .texture = bitmap,
+                        .scale = scale,
+                        .tint = LinearColor.init(rect.tint_srgb orelse .white),
                     });
                     const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawTexturedRectangleCommand));
                     self.command_buffer.data.len = start + bytes.len;
@@ -298,7 +356,7 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
                 const colour = if (rect.tint_srgb) |tint| tint else Color.magenta;
                 const bytes = std.mem.asBytes(&Internal.DrawRectangleCommand{
                     .rectangle = rectangle,
-                    .color_srgb = colour,
+                    .color = PreparedSolidColor.init(colour),
                 });
                 const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawRectangleCommand));
                 self.command_buffer.data.len = start + bytes.len;
@@ -349,7 +407,7 @@ pub fn renderTile(
                 assert(command_data.len - header.offset >= size);
                 const rect: *const Internal.DrawRectangleCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
                 const rectangle = rect.rectangle.forTile(tile_x, tile_y) orelse continue;
-                drawRectangle(&tile_pixels, rectangle, rect.color_srgb);
+                drawRectangle(&tile_pixels, rectangle, rect.color);
             },
             .draw_sprite => {
                 const size = @sizeOf(Internal.DrawSpriteCommand);
@@ -357,7 +415,7 @@ pub fn renderTile(
                 assert(command_data.len - header.offset >= size);
                 const sprite: *const Internal.DrawSpriteCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
                 const rectangle = sprite.rectangle.forTile(tile_x, tile_y) orelse continue;
-                drawSprite(&tile_pixels, rectangle, sprite.texture);
+                drawSprite(&tile_pixels, rectangle, sprite.texture, sprite.scale);
             },
             .draw_textured_rectangle => {
                 const size = @sizeOf(Internal.DrawTexturedRectangleCommand);
@@ -365,7 +423,7 @@ pub fn renderTile(
                 assert(command_data.len - header.offset >= size);
                 const trect: *const Internal.DrawTexturedRectangleCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
                 const rectangle = trect.rectangle.forTile(tile_x, tile_y) orelse continue;
-                drawTexturedRectangle(&tile_pixels, rectangle, trect.texture, trect.tint_srgb);
+                drawTexturedRectangle(&tile_pixels, rectangle, trect.texture, trect.scale, trect.tint);
             },
         }
     }
@@ -577,6 +635,41 @@ fn clipped(width: u16, height: u16, left: f32, top: f32, right: f32, bottom: f32
     return bounds;
 }
 
+/// Unrotated sprite geometry needs no stored basis or bounds-rounding mode.
+const PreparedSprite = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    bounds: AABB,
+
+    fn fromRectangle(rectangle: PreparedRectangle) PreparedSprite {
+        assert(rectangle.right_x == 1 and rectangle.right_y == 0);
+        return .{
+            .x = rectangle.x,
+            .y = rectangle.y,
+            .width = rectangle.width,
+            .height = rectangle.height,
+            .bounds = rectangle.bounds,
+        };
+    }
+
+    fn forTile(self: PreparedSprite, tile_x: f32, tile_y: f32) ?PreparedSprite {
+        var sprite = self;
+        sprite.x -= tile_x;
+        sprite.y -= tile_y;
+        sprite.bounds = clipped(
+            render_tile_size,
+            render_tile_size,
+            self.bounds.min_x - tile_x,
+            self.bounds.min_y - tile_y,
+            self.bounds.max_x - tile_x,
+            self.bounds.max_y - tile_y,
+        ) orelse return null;
+        return sprite;
+    }
+};
+
 /// Rectangle geometry in framebuffer pixels, clipped to the preparation target.
 const PreparedRectangle = struct {
     x: f32,
@@ -585,8 +678,6 @@ const PreparedRectangle = struct {
     height: f32,
     right_x: f32,
     right_y: f32,
-    down_x: f32,
-    down_y: f32,
 
     bounds: AABB,
     bounds_rounding: BoundsRounding,
@@ -647,8 +738,6 @@ const PreparedRectangle = struct {
             .height = height,
             .right_x = right_x,
             .right_y = right_y,
-            .down_x = down_x,
-            .down_y = down_y,
             .bounds = clipped(buffer.width, buffer.height, left, top, right, bottom) orelse return null,
             .bounds_rounding = rounding,
         };
@@ -676,7 +765,7 @@ const PreparedRectangle = struct {
         const translated_y = pixel_y - self.y;
         return .{
             .x = translated_x * self.right_x + translated_y * self.right_y,
-            .y = translated_x * self.down_x + translated_y * self.down_y,
+            .y = translated_x * -self.right_y + translated_y * self.right_x,
         };
     }
 
@@ -739,7 +828,8 @@ fn drawTexturedRectangle(
     pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
     texture: Bitmap,
-    tint_srgb: ?Color,
+    scale: TextureScale,
+    tint: LinearColor,
 ) void {
     @setFloatMode(.optimized);
     const trace = profile.begin(.renderer_draw_textured_rectangle);
@@ -750,8 +840,8 @@ fn drawTexturedRectangle(
 
     switch (rectangle.classifyCoverage()) {
         .outside => return,
-        .full => drawTexturedRectanglePixels(true, pixels, rectangle, texture, tint_srgb),
-        .partial => drawTexturedRectanglePixels(false, pixels, rectangle, texture, tint_srgb),
+        .full => drawTexturedRectanglePixels(true, pixels, rectangle, texture, scale, tint),
+        .partial => drawTexturedRectanglePixels(false, pixels, rectangle, texture, scale, tint),
     }
 }
 
@@ -760,7 +850,8 @@ fn drawTexturedRectanglePixels(
     pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
     texture: Bitmap,
-    tint_srgb: ?Color,
+    scale: TextureScale,
+    tint: LinearColor,
 ) void {
     @setFloatMode(.optimized);
 
@@ -772,14 +863,8 @@ fn drawTexturedRectanglePixels(
 
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
-    const texels_per_pixel_x = texture_width / rectangle.width;
-    const texels_per_pixel_y = texture_height / rectangle.height;
-
-    const tint_r: f32, const tint_g: f32, const tint_b: f32, const tint_a: f32 = if (tint_srgb) |tint| blk: {
-        break :blk .{ tint.r * tint.r * tint.a, tint.g * tint.g * tint.a, tint.b * tint.b * tint.a, tint.a };
-    } else blk: {
-        break :blk .{ 1.0, 1.0, 1.0, 1.0 };
-    };
+    const texels_per_pixel_x = scale.x;
+    const texels_per_pixel_y = scale.y;
 
     for (y_min..y_max) |j| {
         const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
@@ -868,10 +953,10 @@ fn drawTexturedRectanglePixels(
             const bottom_b = std.math.lerp(pixel_c_b, pixel_d_b, dx);
             const bottom_a = std.math.lerp(pixel_c_a, pixel_d_a, dx);
 
-            const source_r = std.math.lerp(top_r, bottom_r, dy) * tint_r;
-            const source_g = std.math.lerp(top_g, bottom_g, dy) * tint_g;
-            const source_b = std.math.lerp(top_b, bottom_b, dy) * tint_b;
-            const source_a = std.math.lerp(top_a, bottom_a, dy) * tint_a;
+            const source_r = std.math.lerp(top_r, bottom_r, dy) * tint.r;
+            const source_g = std.math.lerp(top_g, bottom_g, dy) * tint.g;
+            const source_b = std.math.lerp(top_b, bottom_b, dy) * tint.b;
+            const source_a = std.math.lerp(top_a, bottom_a, dy) * tint.a;
 
             if (source_a == 0) continue;
             const index = j * render_tile_size + i;
@@ -909,8 +994,9 @@ fn drawTexturedRectanglePixels(
 /// Retains bilinear filtering, premultiplied alpha and gamma-2 conversion.
 fn drawSprite(
     pixels: *align(tile_alignment) Tile,
-    rectangle: PreparedRectangle,
+    rectangle: PreparedSprite,
     texture: Bitmap,
+    scale: TextureScale,
 ) void {
     @setFloatMode(.optimized);
     const trace = profile.begin(.renderer_draw_sprite);
@@ -926,8 +1012,8 @@ fn drawSprite(
     const y_max: usize = @intFromFloat(bounds.max_y);
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
-    const texels_per_pixel_x = texture_width / rectangle.width;
-    const texels_per_pixel_y = texture_height / rectangle.height;
+    const texels_per_pixel_x = scale.x;
+    const texels_per_pixel_y = scale.y;
 
     // At most one tile's columns; no chunking or frame allocation.
     var cached_x0: [render_tile_size]usize = undefined;
@@ -1085,7 +1171,7 @@ fn drawSprite(
 fn drawRectangle(
     pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
-    color_srgb: Color,
+    color: PreparedSolidColor,
 ) void {
     @setFloatMode(.optimized);
     const trace = profile.begin(.renderer_draw_rectangle);
@@ -1096,8 +1182,8 @@ fn drawRectangle(
     const coverage = if (rectangle.bounds_rounding == .pixel_centres) .full else rectangle.classifyCoverage();
     switch (coverage) {
         .outside => return,
-        .full => drawRectanglePixels(true, pixels, rectangle, color_srgb),
-        .partial => drawRectanglePixels(false, pixels, rectangle, color_srgb),
+        .full => drawRectanglePixels(true, pixels, rectangle, color),
+        .partial => drawRectanglePixels(false, pixels, rectangle, color),
     }
 }
 
@@ -1105,25 +1191,32 @@ fn drawRectanglePixels(
     comptime fully_covered: bool,
     pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
-    color_srgb: Color,
+    color: PreparedSolidColor,
 ) void {
     @setFloatMode(.optimized);
 
-    const source_r = color_srgb.r * color_srgb.r * color_srgb.a;
-    const source_g = color_srgb.g * color_srgb.g * color_srgb.a;
-    const source_b = color_srgb.b * color_srgb.b * color_srgb.a;
-    const source_a = color_srgb.a;
-    if (fully_covered) {
-        if (source_a == 1) {
-            const packed_color: u32 = @bitCast([_]u8{
-                @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_b) * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_g) * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_r) * 255.0)))),
-                255,
-            });
-            fillSolidRows(pixels, rectangle.bounds, packed_color);
-            return;
+    const source_r = color.linear.r;
+    const source_g = color.linear.g;
+    const source_b = color.linear.b;
+    const source_a = color.linear.a;
+    if (source_a == 1) {
+        if (fully_covered) {
+            fillSolidRows(pixels, rectangle.bounds, color.opaque_pixel);
+        } else {
+            const x_min: usize = @intFromFloat(rectangle.bounds.min_x);
+            const y_min: usize = @intFromFloat(rectangle.bounds.min_y);
+            const x_max: usize = @intFromFloat(rectangle.bounds.max_x);
+            const y_max: usize = @intFromFloat(rectangle.bounds.max_y);
+            for (y_min..y_max) |y| {
+                const pixel_y = @as(f32, @floatFromInt(y)) + 0.5;
+                for (x_min..x_max) |x| {
+                    const pixel_x = @as(f32, @floatFromInt(x)) + 0.5;
+                    _ = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
+                    pixels[y * render_tile_size + x] = color.opaque_pixel;
+                }
+            }
         }
+        return;
     }
 
     const bounds = rectangle.bounds;
@@ -1394,15 +1487,15 @@ test "classified rectangle kernels match per-pixel coverage across rotated tile 
                 for ([_]Color{ .white, .{ .r = 0.8, .g = 0.3, .b = 0.1, .a = 0.5 } }) |color| {
                     @memset(&actual, 0xff183a71);
                     @memset(&expected, 0xff183a71);
-                    drawRectangle(&actual, rectangle, color);
-                    drawRectanglePixels(false, &expected, rectangle, color);
+                    drawRectangle(&actual, rectangle, PreparedSolidColor.init(color));
+                    drawRectanglePixels(false, &expected, rectangle, PreparedSolidColor.init(color));
                     try std.testing.expectEqualSlices(u32, &expected, &actual);
                 }
                 for ([_]?Color{ null, .{ .r = 0.7, .g = 0.3, .b = 0.9, .a = 0.5 } }) |tint| {
                     @memset(&actual, 0xff183a71);
                     @memset(&expected, 0xff183a71);
-                    drawTexturedRectangle(&actual, rectangle, texture, tint);
-                    drawTexturedRectanglePixels(false, &expected, rectangle, texture, tint);
+                    drawTexturedRectangle(&actual, rectangle, texture, TextureScale.init(texture, rectangle.width, rectangle.height), LinearColor.init(tint orelse .white));
+                    drawTexturedRectanglePixels(false, &expected, rectangle, texture, TextureScale.init(texture, rectangle.width, rectangle.height), LinearColor.init(tint orelse .white));
                     try std.testing.expectEqualSlices(u32, &expected, &actual);
                 }
             }
@@ -1551,12 +1644,45 @@ test "tiled playback preserves alpha order clear barriers and partial edge tiles
     for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0), pixel);
 }
 
+test "submitted sprites preserve texel positions across partial tile boundaries" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    renderer.setView(1, 32.5, 32.5);
+    const texture = try renderer.allocTexture(std.testing.allocator, 3, 2);
+    const texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff204080, 0xff000000, 0xffffffff };
+    @memcpy(renderer.getTexture(texture).pixels, &texels);
+    for ([_]?Color{ null, .white }) |tint| {
+        renderer.beginDrawing(.black);
+        renderer.submit(.{ .draw_rectangle = .{
+            .pivot_world_x = 63,
+            .pivot_world_y = 63,
+            .pivot_fraction_x = 0,
+            .pivot_fraction_y = 0,
+            .width = 3,
+            .height = 2,
+            .texture = texture,
+            .tint_srgb = tint,
+        } });
+        renderer.endDrawing(arena.allocator());
+        for (renderer.back_buffer.pixels(), 0..) |pixel, index| {
+            const x = index % 65;
+            const y = index / 65;
+            const expected: u32 = if (x >= 63 and y >= 63) texels[(y - 63) * 3 + x - 63] else 0;
+            try std.testing.expectEqual(expected, pixel);
+        }
+    }
+}
+
 test "native size texture preserves pixel channels and row stride" {
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff204080, 0xff000000, 0xffffffff };
     var pixels: Tile align(tile_alignment) = @splat(0);
     const buffer: FrameBuffer = .{ .width = 3, .height = 2, .data = undefined };
     const rectangle = PreparedRectangle.init(buffer, 0, 0, 3, 2, 0, 0, 0, .outward).?;
-    drawTexturedRectangle(&pixels, rectangle, .{ .width = 3, .height = 2, .pixels = &texels }, null);
+    const texture: Bitmap = .{ .width = 3, .height = 2, .pixels = &texels };
+    drawTexturedRectangle(&pixels, rectangle, texture, TextureScale.init(texture, rectangle.width, rectangle.height), LinearColor.init(.white));
     for (pixels, 0..) |pixel, index| {
         const x = index % render_tile_size;
         const y = index / render_tile_size;
@@ -1572,11 +1698,11 @@ test "bilinear texture filtering averages linear colors and clamps edge texels" 
     const buffer: FrameBuffer = .{ .width = 4, .height = 4, .data = undefined };
     // The centre averages all four texels: each linear RGB channel is 0.5.
     const small_rectangle = PreparedRectangle.init(buffer, 0, 0, 1, 1, 0, 0, 0, .outward).?;
-    drawTexturedRectangle(&pixels, small_rectangle, texture, null);
+    drawTexturedRectangle(&pixels, small_rectangle, texture, TextureScale.init(texture, small_rectangle.width, small_rectangle.height), LinearColor.init(.white));
     try std.testing.expectEqual(@as(u32, 0xffb4b4b4), pixels[0]);
 
     const large_rectangle = PreparedRectangle.init(buffer, 0, 0, 4, 4, 0, 0, 0, .outward).?;
-    drawTexturedRectangle(&pixels, large_rectangle, texture, null);
+    drawTexturedRectangle(&pixels, large_rectangle, texture, TextureScale.init(texture, large_rectangle.width, large_rectangle.height), LinearColor.init(.white));
     try std.testing.expectEqual(@as(u32, 0xffff0000), pixels[0]);
     try std.testing.expectEqual(@as(u32, 0xff00ff00), pixels[3]);
     try std.testing.expectEqual(@as(u32, 0xff0000ff), pixels[3 * render_tile_size]);
@@ -1645,7 +1771,7 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
 
         const rounding: PreparedRectangle.BoundsRounding = if (case.angle_radians == 0) .pixel_centres else .outward;
         if (PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, rounding)) |rectangle| {
-            drawRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, .white);
+            drawRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, PreparedSolidColor.init(.white));
         }
 
         for (pixels[0 .. render_tile_size * render_tile_size], 0..) |pixel, index| {
@@ -1725,9 +1851,9 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
 
             if (PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, .outward)) |rectangle| {
                 if (direct_tile) {
-                    drawSprite(pixels[0 .. render_tile_size * render_tile_size], rectangle, texture);
+                    drawSprite(pixels[0 .. render_tile_size * render_tile_size], PreparedSprite.fromRectangle(rectangle), texture, TextureScale.init(texture, rectangle.width, rectangle.height));
                 } else {
-                    drawTexturedRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, texture, null);
+                    drawTexturedRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, texture, TextureScale.init(texture, rectangle.width, rectangle.height), LinearColor.init(.white));
                 }
             }
 
@@ -1743,11 +1869,34 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
     }
 }
 
+test "opaque rotated rectangles overwrite only covered pixels" {
+    const buffer: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const color: Color = .{ .r = 0.1, .g = 0.4, .b = 0.8, .a = 1 };
+    const expected_color = color.toARGB();
+    for ([_]f32{ 0.2, -0.7, std.math.pi / 4.0 }) |angle| {
+        const rectangle = PreparedRectangle.init(buffer, 32, 32, 60, 3, 0.5, 0.5, angle, .outward).?;
+        try std.testing.expectEqual(PreparedRectangle.Coverage.partial, rectangle.classifyCoverage());
+        for ([_]u32{ 0x12345678, 0xffabcdef }) |background| {
+            var pixels: Tile align(tile_alignment) = @splat(background);
+            drawRectangle(&pixels, rectangle, PreparedSolidColor.init(color));
+            var covered: usize = 0;
+            for (pixels, 0..) |pixel, index| {
+                const x = @as(f32, @floatFromInt(index % render_tile_size)) + 0.5;
+                const y = @as(f32, @floatFromInt(index / render_tile_size)) + 0.5;
+                const inside = rectangle.coveredPosition(x, y) != null;
+                if (inside) covered += 1;
+                try std.testing.expectEqual(if (inside) expected_color else background, pixel);
+            }
+            try std.testing.expect(covered > 0 and covered < pixels.len);
+        }
+    }
+}
+
 test "rotated rectangles blend only covered pixel centres" {
     var pixels: Tile align(tile_alignment) = @splat(0xff0000ff);
     const buffer: FrameBuffer = .{ .width = 8, .height = 8, .data = undefined };
     const rectangle = PreparedRectangle.init(buffer, 4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0, .outward).?;
-    drawRectangle(&pixels, rectangle, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
+    drawRectangle(&pixels, rectangle, PreparedSolidColor.init(.{ .r = 1, .g = 0, .b = 0, .a = 0.5 }));
 
     // A 45-degree square forms a diamond. These pixel centres are strictly
     // inside it; the other pixels in its bounding box must remain blue.
