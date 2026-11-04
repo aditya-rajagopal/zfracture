@@ -207,13 +207,15 @@ const Internal = struct {
         rectangle: PreparedRectangle,
         texture: Bitmap,
         tint: LinearColor,
-        scale: TextureScale,
+        texels_per_pixel_x: f32,
+        texels_per_pixel_y: f32,
     };
 
     pub const DrawSpriteCommand = struct {
         rectangle: PreparedSprite,
         texture: Bitmap,
-        scale: TextureScale,
+        texels_per_pixel_x: f32,
+        texels_per_pixel_y: f32,
     };
 
     pub const DrawRectangleCommand = struct {
@@ -222,7 +224,7 @@ const Internal = struct {
     };
 };
 
-/// Gamma-2 decoded RGB, premultiplied by alpha; also used as a texture tint.
+/// Gamma-2 decoded RGB, premultiplied by alpha
 const LinearColor = struct {
     r: f32,
     g: f32,
@@ -256,20 +258,6 @@ const PreparedSolidColor = struct {
                 @truncate(@as(u32, @intFromFloat(@round(@sqrt(linear.r) * 255.0)))),
                 255,
             }) else 0,
-        };
-    }
-};
-
-const TextureScale = struct {
-    x: f32,
-    y: f32,
-
-    fn init(texture: Bitmap, width: f32, height: f32) TextureScale {
-        @setFloatMode(.optimized);
-        assert(width > 0 and height > 0);
-        return .{
-            .x = @as(f32, @floatFromInt(texture.width)) / width,
-            .y = @as(f32, @floatFromInt(texture.height)) / height,
         };
     }
 };
@@ -324,13 +312,17 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
             tile_bounds = TileBounds.init(rectangle.bounds);
 
             if (rect.texture) |texture| {
+                @setFloatMode(.optimized);
                 const bitmap = self.getTexture(texture);
-                const scale = TextureScale.init(bitmap, rectangle.width, rectangle.height);
+                assert(rectangle.width > 0 and rectangle.height > 0);
+                const texels_per_pixel_x = @as(f32, @floatFromInt(bitmap.width)) / rectangle.width;
+                const texels_per_pixel_y = @as(f32, @floatFromInt(bitmap.height)) / rectangle.height;
                 if (rect.angle_radians == 0 and rect.tint_srgb == null) {
                     const bytes = std.mem.asBytes(&Internal.DrawSpriteCommand{
                         .rectangle = PreparedSprite.fromRectangle(rectangle),
                         .texture = bitmap,
-                        .scale = scale,
+                        .texels_per_pixel_x = texels_per_pixel_x,
+                        .texels_per_pixel_y = texels_per_pixel_y,
                     });
                     const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawSpriteCommand));
                     self.command_buffer.data.len = start + bytes.len;
@@ -342,7 +334,8 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
                     const bytes = std.mem.asBytes(&Internal.DrawTexturedRectangleCommand{
                         .rectangle = rectangle,
                         .texture = bitmap,
-                        .scale = scale,
+                        .texels_per_pixel_x = texels_per_pixel_x,
+                        .texels_per_pixel_y = texels_per_pixel_y,
                         .tint = LinearColor.init(rect.tint_srgb orelse .white),
                     });
                     const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawTexturedRectangleCommand));
@@ -446,7 +439,7 @@ pub fn renderTile(
                 assert(command_data.len - header.offset >= size);
                 const sprite: *const Internal.DrawSpriteCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
                 const rectangle = sprite.rectangle.forTile(tile_x, tile_y) orelse continue;
-                drawSprite(&tile_pixels, rectangle, sprite.texture, sprite.scale);
+                drawSprite(&tile_pixels, rectangle, sprite.texture, sprite.texels_per_pixel_x, sprite.texels_per_pixel_y);
             },
             .draw_textured_rectangle => {
                 const size = @sizeOf(Internal.DrawTexturedRectangleCommand);
@@ -454,7 +447,7 @@ pub fn renderTile(
                 assert(command_data.len - header.offset >= size);
                 const trect: *const Internal.DrawTexturedRectangleCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
                 const rectangle = trect.rectangle.forTile(tile_x, tile_y) orelse continue;
-                drawTexturedRectangle(&tile_pixels, rectangle, trect.texture, trect.scale, trect.tint);
+                drawTexturedRectangle(&tile_pixels, rectangle, trect.texture, trect.texels_per_pixel_x, trect.texels_per_pixel_y, trect.tint);
             },
         }
     }
@@ -851,7 +844,8 @@ fn drawTexturedRectangle(
     pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
     texture: Bitmap,
-    scale: TextureScale,
+    texels_per_pixel_x: f32,
+    texels_per_pixel_y: f32,
     tint: LinearColor,
 ) void {
     @setFloatMode(.optimized);
@@ -863,8 +857,8 @@ fn drawTexturedRectangle(
 
     switch (rectangle.classifyCoverage()) {
         .outside => return,
-        .full => drawTexturedRectanglePixels(true, pixels, rectangle, texture, scale, tint),
-        .partial => drawTexturedRectanglePixels(false, pixels, rectangle, texture, scale, tint),
+        .full => drawTexturedRectanglePixels(true, pixels, rectangle, texture, texels_per_pixel_x, texels_per_pixel_y, tint),
+        .partial => drawTexturedRectanglePixels(false, pixels, rectangle, texture, texels_per_pixel_x, texels_per_pixel_y, tint),
     }
 }
 
@@ -873,7 +867,8 @@ fn drawTexturedRectanglePixels(
     pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
     texture: Bitmap,
-    scale: TextureScale,
+    texels_per_pixel_x: f32,
+    texels_per_pixel_y: f32,
     tint: LinearColor,
 ) void {
     @setFloatMode(.optimized);
@@ -886,8 +881,6 @@ fn drawTexturedRectanglePixels(
 
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
-    const texels_per_pixel_x = scale.x;
-    const texels_per_pixel_y = scale.y;
 
     for (y_min..y_max) |j| {
         const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
@@ -1020,7 +1013,8 @@ fn drawSprite(
     pixels: *align(tile_alignment) Tile,
     rectangle: PreparedSprite,
     texture: Bitmap,
-    scale: TextureScale,
+    texels_per_pixel_x: f32,
+    texels_per_pixel_y: f32,
 ) void {
     @setFloatMode(.optimized);
     const trace = profile.begin(.renderer_draw_sprite);
@@ -1036,8 +1030,6 @@ fn drawSprite(
     const y_max: usize = @intFromFloat(bounds.max_y);
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
-    const texels_per_pixel_x = scale.x;
-    const texels_per_pixel_y = scale.y;
 
     // At most one tile's columns; no chunking or frame allocation.
     var cached_x0: [render_tile_size]usize = undefined;
@@ -1207,83 +1199,146 @@ fn drawRectangle(
     const coverage = if (rectangle.bounds_rounding == .pixel_centres) .full else rectangle.classifyCoverage();
     switch (coverage) {
         .outside => return,
-        .full => drawRectanglePixels(true, pixels, rectangle, color),
-        .partial => drawRectanglePixels(false, pixels, rectangle, color),
+        .full => if (color.linear.a == 1)
+            fillSolidRows(pixels, rectangle.bounds, color.opaque_pixel)
+        else
+            drawRectangleWide(true, false, pixels, rectangle, color),
+        .partial => if (color.linear.a == 1)
+            drawRectangleWide(false, true, pixels, rectangle, color)
+        else
+            drawRectangleWide(false, false, pixels, rectangle, color),
     }
 }
 
-fn drawRectanglePixels(
+const rectangle_lanes = 16;
+const LaneF32 = @Vector(rectangle_lanes, f32);
+const LaneU32 = @Vector(rectangle_lanes, u32);
+const LaneShift = @Vector(rectangle_lanes, u5);
+const LaneMask = @Vector(rectangle_lanes, bool);
+const lane_index = std.simd.iota(u32, rectangle_lanes);
+const lane_centers: LaneF32 = @as(LaneF32, @floatFromInt(lane_index)) + @as(LaneF32, @splat(0.5));
+
+comptime {
+    // A chunk slid back to the end of a row still fits inside that row.
+    assert(render_tile_size >= rectangle_lanes);
+}
+
+// NOTE(adi): Things I did in case i forget:
+// 1. the comptime paths were tested to be faster in general because it allows LLVM to do better register management
+//     based on reading some of the disassembly. IDK why llvm does that, it is above my pay grade.
+// 2. we start with x_min and take lane strides steps untill we get to the last stride which probably is less than lanes
+//    and we just slide back till we have lane count and we just mask out the parts that have already been drawn.
+fn drawRectangleWide(
     comptime fully_covered: bool,
+    comptime opaque_source: bool,
     pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
     color: PreparedSolidColor,
 ) void {
     @setFloatMode(.optimized);
-
-    // Match the unnormalized destination RGB; scale once outside the pixel loop.
-    const source_r = color.linear.r * (255.0 * 255.0);
-    const source_g = color.linear.g * (255.0 * 255.0);
-    const source_b = color.linear.b * (255.0 * 255.0);
-    const source_a = color.linear.a;
-    if (source_a == 1) {
-        if (fully_covered) {
-            fillSolidRows(pixels, rectangle.bounds, color.opaque_pixel);
-        } else {
-            const x_min: usize = @intFromFloat(rectangle.bounds.min_x);
-            const y_min: usize = @intFromFloat(rectangle.bounds.min_y);
-            const x_max: usize = @intFromFloat(rectangle.bounds.max_x);
-            const y_max: usize = @intFromFloat(rectangle.bounds.max_y);
-            for (y_min..y_max) |y| {
-                const pixel_y = @as(f32, @floatFromInt(y)) + 0.5;
-                for (x_min..x_max) |x| {
-                    const pixel_x = @as(f32, @floatFromInt(x)) + 0.5;
-                    _ = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
-                    pixels[y * render_tile_size + x] = color.opaque_pixel;
-                }
-            }
-        }
-        return;
-    }
+    comptime assert(!(fully_covered and opaque_source));
 
     const bounds = rectangle.bounds;
     const x_min: usize = @intFromFloat(bounds.min_x);
     const y_min: usize = @intFromFloat(bounds.min_y);
     const x_max: usize = @intFromFloat(bounds.max_x);
     const y_max: usize = @intFromFloat(bounds.max_y);
-    for (y_min..y_max) |j| {
-        const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
-        for (x_min..x_max) |i| {
-            if (!fully_covered) {
-                const pixel_x = @as(f32, @floatFromInt(i)) + 0.5;
-                _ = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
+    assert(x_min < x_max and x_max <= render_tile_size);
+    assert(y_min < y_max and y_max <= render_tile_size);
+
+    // Scale the premultiplied source once; destination RGB stays in byte units.
+    const source_r: LaneF32 = @splat(color.linear.r * (255.0 * 255.0));
+    const source_g: LaneF32 = @splat(color.linear.g * (255.0 * 255.0));
+    const source_b: LaneF32 = @splat(color.linear.b * (255.0 * 255.0));
+
+    const x_high: LaneU32 = @splat(@intCast(x_max));
+    const zero: LaneF32 = @splat(0);
+    const origin_x: LaneF32 = @splat(rectangle.x);
+    const width: LaneF32 = @splat(rectangle.width);
+    const height: LaneF32 = @splat(rectangle.height);
+    const right_x: LaneF32 = @splat(rectangle.right_x);
+    const right_y: LaneF32 = @splat(rectangle.right_y);
+
+    const negative_right_y: LaneF32 = @splat(-rectangle.right_y);
+    const inverse_alpha: LaneF32 = @splat(1.0 - color.linear.a);
+    const opaque_pixel: LaneU32 = @splat(color.opaque_pixel);
+    const alpha_bits: LaneU32 = @splat(0xff00_0000);
+    const channel: LaneU32 = @splat(0xff);
+    const shift_g: LaneShift = @splat(8);
+    const shift_r: LaneShift = @splat(16);
+
+    for (y_min..y_max) |y| {
+        const row: *align(@alignOf(u32)) [render_tile_size]u32 = pixels[y * render_tile_size ..][0..render_tile_size];
+        const pixel_y = @as(f32, @floatFromInt(y)) + 0.5;
+        const translated_y: LaneF32 = @splat(pixel_y - rectangle.y);
+
+        var x = x_min;
+        const row_local_x = translated_y * right_y;
+        const row_local_y = translated_y * right_x;
+        // NOTE(adi): I will forget why i did this so... we take as many full strides of our lanes as we can
+        // and reduce the need for the select and masking. This actually does reduce the number of instructions
+        // for most of teh common cases.
+        if (fully_covered) {
+            while (x + rectangle_lanes <= x_max) : (x += rectangle_lanes) {
+                const destination: LaneU32 = row[x..][0..rectangle_lanes].*;
+                var result = opaque_pixel;
+                if (!opaque_source) {
+                    var destination_b: LaneF32 = @floatFromInt(destination & channel);
+                    var destination_g: LaneF32 = @floatFromInt((destination >> shift_g) & channel);
+                    var destination_r: LaneF32 = @floatFromInt((destination >> shift_r) & channel);
+
+                    destination_r = destination_r * destination_r;
+                    destination_g = destination_g * destination_g;
+                    destination_b = destination_b * destination_b;
+
+                    const blended_r = @sqrt(source_r + destination_r * inverse_alpha);
+                    const blended_g = @sqrt(source_g + destination_g * inverse_alpha);
+                    const blended_b = @sqrt(source_b + destination_b * inverse_alpha);
+
+                    const final_r: LaneU32 = @intFromFloat(@round(blended_r));
+                    const final_g: LaneU32 = @intFromFloat(@round(blended_g));
+                    const final_b: LaneU32 = @intFromFloat(@round(blended_b));
+                    result = alpha_bits | (final_r << shift_r) | (final_g << shift_g) | final_b;
+                }
+                row[x..][0..rectangle_lanes].* = result;
             }
-            const index = j * render_tile_size + i;
-            const destination_u8: [4]u8 = @bitCast(pixels[index]);
+        }
+        while (x < x_max) : (x += rectangle_lanes) {
+            const start = @min(x, render_tile_size - rectangle_lanes);
+            const lane_x = @as(LaneU32, @splat(@intCast(start))) + lane_index;
+            var mask: LaneMask = (lane_x >= @as(LaneU32, @splat(@intCast(x)))) & (lane_x < x_high);
+            if (!fully_covered) {
+                const pixel_x = @as(LaneF32, @splat(@as(f32, @floatFromInt(start)))) + lane_centers;
+                const translated_x = pixel_x - origin_x;
+                const local_x = translated_x * right_x + row_local_x;
+                const local_y = translated_x * negative_right_y + row_local_y;
+                const outside = (local_x < zero) | (local_x >= width) |
+                    (local_y < zero) | (local_y >= height);
+                mask &= ~outside;
+                if (!@reduce(.Or, mask)) continue;
+            }
 
-            var destination_b: f32 = @floatFromInt(destination_u8[0]);
-            var destination_g: f32 = @floatFromInt(destination_u8[1]);
-            var destination_r: f32 = @floatFromInt(destination_u8[2]);
+            const destination: LaneU32 = row[start..][0..rectangle_lanes].*;
+            var result = opaque_pixel;
+            if (!opaque_source) {
+                var destination_b: LaneF32 = @floatFromInt(destination & channel);
+                var destination_g: LaneF32 = @floatFromInt((destination >> shift_g) & channel);
+                var destination_r: LaneF32 = @floatFromInt((destination >> shift_r) & channel);
 
-            destination_r = destination_r * destination_r;
-            destination_g = destination_g * destination_g;
-            destination_b = destination_b * destination_b;
+                destination_r = destination_r * destination_r;
+                destination_g = destination_g * destination_g;
+                destination_b = destination_b * destination_b;
 
-            var blended_r = source_r + destination_r * (1.0 - source_a);
-            var blended_g = source_g + destination_g * (1.0 - source_a);
-            var blended_b = source_b + destination_b * (1.0 - source_a);
+                const blended_r = @sqrt(source_r + destination_r * inverse_alpha);
+                const blended_g = @sqrt(source_g + destination_g * inverse_alpha);
+                const blended_b = @sqrt(source_b + destination_b * inverse_alpha);
 
-            blended_r = @sqrt(blended_r);
-            blended_g = @sqrt(blended_g);
-            blended_b = @sqrt(blended_b);
-
-            const final = [_]u8{
-                @truncate(@as(u32, @intFromFloat(@round(blended_b)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_g)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_r)))),
-                255,
-            };
-
-            pixels[index] = @bitCast(final);
+                const final_r: LaneU32 = @intFromFloat(@round(blended_r));
+                const final_g: LaneU32 = @intFromFloat(@round(blended_g));
+                const final_b: LaneU32 = @intFromFloat(@round(blended_b));
+                result = alpha_bits | (final_r << shift_r) | (final_g << shift_g) | final_b;
+            }
+            row[start..][0..rectangle_lanes].* = @select(u32, mask, result, destination);
         }
     }
 }
@@ -1536,28 +1591,76 @@ test "classified rectangle kernels match per-pixel coverage across rotated tile 
     var classifications: [3]usize = @splat(0);
     for (cases) |case| {
         const prepared = PreparedRectangle.init(screen, case.x, case.y, case.width, case.height, 0.5, 0.5, case.angle, .outward) orelse continue;
+        const texels_per_pixel_x = @as(f32, @floatFromInt(texture.width)) / prepared.width;
+        const texels_per_pixel_y = @as(f32, @floatFromInt(texture.height)) / prepared.height;
         for (0..2) |row| {
             for (0..3) |col| {
                 const rectangle = prepared.forTile(@floatFromInt(col * 64), @floatFromInt(row * 64)) orelse continue;
                 classifications[@backingInt(rectangle.classifyCoverage())] += 1;
-                for ([_]Color{ .white, .{ .r = 0.8, .g = 0.3, .b = 0.1, .a = 0.5 } }) |color| {
+                // Fixed gamma-2 blend results over 0xff183a71, independent of
+                // the rasterizer; the per-pixel check remains the coverage oracle.
+                for (
+                    [_]Color{ .white, .{ .r = 0.8, .g = 0.3, .b = 0.1, .a = 0.5 } },
+                    [_]u32{ 0xffffffff, 0xff914452 },
+                ) |color, blended| {
                     @memset(&actual, 0xff183a71);
                     @memset(&expected, 0xff183a71);
                     drawRectangle(&actual, rectangle, PreparedSolidColor.init(color));
-                    drawRectanglePixels(false, &expected, rectangle, PreparedSolidColor.init(color));
+                    for (&expected, 0..) |*pixel, index| {
+                        const x = @as(f32, @floatFromInt(index % render_tile_size)) + 0.5;
+                        const y = @as(f32, @floatFromInt(index / render_tile_size)) + 0.5;
+                        if (x < rectangle.bounds.min_x or x >= rectangle.bounds.max_x) continue;
+                        if (y < rectangle.bounds.min_y or y >= rectangle.bounds.max_y) continue;
+                        if (rectangle.coveredPosition(x, y) != null) pixel.* = blended;
+                    }
                     try std.testing.expectEqualSlices(u32, &expected, &actual);
                 }
                 for ([_]?Color{ null, .{ .r = 0.7, .g = 0.3, .b = 0.9, .a = 0.5 } }) |tint| {
                     @memset(&actual, 0xff183a71);
                     @memset(&expected, 0xff183a71);
-                    drawTexturedRectangle(&actual, rectangle, texture, TextureScale.init(texture, rectangle.width, rectangle.height), LinearColor.init(tint orelse .white));
-                    drawTexturedRectanglePixels(false, &expected, rectangle, texture, TextureScale.init(texture, rectangle.width, rectangle.height), LinearColor.init(tint orelse .white));
+                    drawTexturedRectangle(&actual, rectangle, texture, texels_per_pixel_x, texels_per_pixel_y, LinearColor.init(tint orelse .white));
+                    drawTexturedRectanglePixels(false, &expected, rectangle, texture, texels_per_pixel_x, texels_per_pixel_y, LinearColor.init(tint orelse .white));
                     try std.testing.expectEqualSlices(u32, &expected, &actual);
                 }
             }
         }
     }
     for (classifications) |count| try std.testing.expect(count > 0);
+}
+
+test "solid blends preserve byte-squared rounding at full and partial row tails" {
+    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const background: u32 = 0xfffeeffe;
+    // Before quantization, red/blue are 251.49997 and green is 238.49997.
+    // Normalizing the destination by 255 pushes them across the half-byte edge.
+    var color: Color = .{ .r = 8.0 / 255.0, .g = 212.0 / 255.0, .b = 8.0 / 255.0, .a = 5.0 / 255.0 };
+    std.mem.doNotOptimizeAway(&color);
+    const Case = struct {
+        x: f32,
+        width: f32,
+        height: f32,
+        rounding: PreparedRectangle.BoundsRounding,
+        first_x: usize,
+        end_x: usize,
+        end_y: usize,
+    };
+    const cases = [_]Case{
+        .{ .x = 0, .width = 64, .height = 4, .rounding = .pixel_centres, .first_x = 0, .end_x = 64, .end_y = 4 },
+        .{ .x = 1, .width = 63, .height = 4, .rounding = .pixel_centres, .first_x = 1, .end_x = 64, .end_y = 4 },
+        .{ .x = 1, .width = 62.5, .height = 3.5, .rounding = .outward, .first_x = 1, .end_x = 63, .end_y = 3 },
+        .{ .x = 63, .width = 1, .height = 4, .rounding = .pixel_centres, .first_x = 63, .end_x = 64, .end_y = 4 },
+    };
+    for (cases) |case| {
+        var pixels: Tile align(tile_alignment) = @splat(background);
+        const rectangle = PreparedRectangle.init(screen, case.x, 0, case.width, case.height, 0, 0, 0, case.rounding).?;
+        drawRectangle(&pixels, rectangle, PreparedSolidColor.init(color));
+        for (pixels, 0..) |pixel, index| {
+            const x = index % render_tile_size;
+            const y = index / render_tile_size;
+            const expected: u32 = if (x >= case.first_x and x < case.end_x and y < case.end_y) 0xfffbeefb else background;
+            try std.testing.expectEqual(expected, pixel);
+        }
+    }
 }
 
 test "recorded tile ranges produce compact bins in submission order" {
@@ -1738,7 +1841,7 @@ test "native size texture preserves pixel channels and row stride" {
     const buffer: FrameBuffer = .{ .width = 3, .height = 2, .data = undefined };
     const rectangle = PreparedRectangle.init(buffer, 0, 0, 3, 2, 0, 0, 0, .outward).?;
     const texture: Bitmap = .{ .width = 3, .height = 2, .pixels = &texels };
-    drawTexturedRectangle(&pixels, rectangle, texture, TextureScale.init(texture, rectangle.width, rectangle.height), LinearColor.init(.white));
+    drawTexturedRectangle(&pixels, rectangle, texture, 1, 1, LinearColor.init(.white));
     for (pixels, 0..) |pixel, index| {
         const x = index % render_tile_size;
         const y = index / render_tile_size;
@@ -1754,11 +1857,11 @@ test "bilinear texture filtering averages linear colors and clamps edge texels" 
     const buffer: FrameBuffer = .{ .width = 4, .height = 4, .data = undefined };
     // The centre averages all four texels: each linear RGB channel is 0.5.
     const small_rectangle = PreparedRectangle.init(buffer, 0, 0, 1, 1, 0, 0, 0, .outward).?;
-    drawTexturedRectangle(&pixels, small_rectangle, texture, TextureScale.init(texture, small_rectangle.width, small_rectangle.height), LinearColor.init(.white));
+    drawTexturedRectangle(&pixels, small_rectangle, texture, 2, 2, LinearColor.init(.white));
     try std.testing.expectEqual(@as(u32, 0xffb4b4b4), pixels[0]);
 
     const large_rectangle = PreparedRectangle.init(buffer, 0, 0, 4, 4, 0, 0, 0, .outward).?;
-    drawTexturedRectangle(&pixels, large_rectangle, texture, TextureScale.init(texture, large_rectangle.width, large_rectangle.height), LinearColor.init(.white));
+    drawTexturedRectangle(&pixels, large_rectangle, texture, 0.5, 0.5, LinearColor.init(.white));
     try std.testing.expectEqual(@as(u32, 0xffff0000), pixels[0]);
     try std.testing.expectEqual(@as(u32, 0xff00ff00), pixels[3]);
     try std.testing.expectEqual(@as(u32, 0xff0000ff), pixels[3 * render_tile_size]);
@@ -1906,10 +2009,12 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
             };
 
             if (PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, .outward)) |rectangle| {
+                const texels_per_pixel_x = @as(f32, @floatFromInt(texture.width)) / rectangle.width;
+                const texels_per_pixel_y = @as(f32, @floatFromInt(texture.height)) / rectangle.height;
                 if (direct_tile) {
-                    drawSprite(pixels[0 .. render_tile_size * render_tile_size], PreparedSprite.fromRectangle(rectangle), texture, TextureScale.init(texture, rectangle.width, rectangle.height));
+                    drawSprite(pixels[0 .. render_tile_size * render_tile_size], PreparedSprite.fromRectangle(rectangle), texture, texels_per_pixel_x, texels_per_pixel_y);
                 } else {
-                    drawTexturedRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, texture, TextureScale.init(texture, rectangle.width, rectangle.height), LinearColor.init(.white));
+                    drawTexturedRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, texture, texels_per_pixel_x, texels_per_pixel_y, LinearColor.init(.white));
                 }
             }
 
