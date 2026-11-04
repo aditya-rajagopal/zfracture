@@ -1,18 +1,21 @@
 const std = @import("std");
-const objc = @import("objc");
+pub const WaitError = std.Io.Cancelable;
+
 const c = @import("macos-c");
-const Platform = @import("../platform.zig");
-const appkit = @import("appkit.zig");
-const Renderer = @import("../software_renderer.zig");
+const Rect = c.CGRect;
+const Point = c.CGPoint;
+const objc = @import("objc");
+const Object = objc.Object;
+
 const event_types = @import("../event.zig");
 const Key = event_types.Key;
 const Event = event_types.Event;
 const MouseButton = event_types.MouseButton;
-const max_messages_per_frame = 1024;
-const Object = objc.Object;
-const Rect = c.CGRect;
-const Point = c.CGPoint;
+const Platform = @import("../platform.zig");
+const FrameBuffer = @import("../FrameBuffer.zig");
+const appkit = @import("appkit.zig");
 
+const max_messages_per_frame = 1024;
 const window_style: appkit.NSWindowStyleMask = .{
     .titled = true,
     .closable = true,
@@ -35,10 +38,10 @@ pub const State = struct {
     event_storage: [2][1024]Event = undefined,
     event_lists: [2]std.ArrayList(Event) = undefined,
     pending_event_buffer: u1 = 0,
-    back_buffer: *Renderer.FrameBuffer = undefined,
+    back_buffer: *FrameBuffer = undefined,
     // NOTE(adi): We store a snapshot of the framebuffer that was bound when the CGBitmapContext was created.
     // If the back buffer changes we need to reflect that in the bound_frame_buffer.
-    bound_frame_buffer: Renderer.FrameBuffer = undefined,
+    bound_frame_buffer: FrameBuffer = undefined,
     window_placement: Rect = std.mem.zeroes(Rect),
     presentation_options: appkit.NSApplicationPresentationOptions = .{},
     fullscreen: bool = false,
@@ -588,7 +591,7 @@ fn drawRect(receiver: objc.c.id, _: objc.c.SEL, _: Rect) callconv(.c) void {
     std.debug.assert(buffer.width == platform.bound_frame_buffer.width);
     std.debug.assert(buffer.height == platform.bound_frame_buffer.height);
     std.debug.assert(buffer.data.ptr == platform.bound_frame_buffer.data.ptr);
-    const required_bytes = @as(usize, buffer.width) * buffer.height * Renderer.bytes_per_pixel;
+    const required_bytes = @as(usize, buffer.width) * buffer.height * FrameBuffer.bytes_per_pixel;
     std.debug.assert(buffer.data.len >= required_bytes);
 
     const graphics = objc.getClass("NSGraphicsContext").?.msgSend(Object, "currentContext", .{});
@@ -1370,7 +1373,7 @@ test "tracking preserves mouse ownership and accepts new client presses on exit"
 
 // Native integration tests need a desktop session to create and activate a window.
 const TestWindow = struct {
-    buffer: Renderer.FrameBuffer,
+    buffer: FrameBuffer,
     platform: State,
 
     // Initialize in place: the native callbacks retain pointers into this fixture.
@@ -1793,7 +1796,6 @@ test "client click focuses the window and its drag releases outside the view" {
 }
 
 pub const InitError = error{};
-pub const WaitError = std.Io.Cancelable;
 pub const CreateWindowError = error{
     FailedToRegisterClass,
     FailedToRegisterIvar,
