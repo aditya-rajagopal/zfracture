@@ -4,7 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const Renderer = @import("software_renderer.zig");
+const FrameBuffer = @import("FrameBuffer.zig");
 const Event = @import("event.zig").Event;
 const Platform = @This();
 const backend = switch (builtin.os.tag) {
@@ -20,7 +20,7 @@ frame_active: bool = false,
 
 pub const WindowConfig = struct {
     title: [:0]const u8,
-    frame_buffer: *Renderer.FrameBuffer,
+    frame_buffer: *FrameBuffer,
     windowed_frame_margin: u16 = 10,
 };
 
@@ -58,7 +58,7 @@ pub fn createWindow(self: *Platform, config: WindowConfig) CreateWindowError!voi
     const buffer = config.frame_buffer;
     if (buffer.width == 0) return error.InvalidFramebuffer;
     if (buffer.height == 0) return error.InvalidFramebuffer;
-    const required_bytes = @as(usize, buffer.width) * buffer.height * Renderer.bytes_per_pixel;
+    const required_bytes = @as(usize, buffer.width) * buffer.height * FrameBuffer.bytes_per_pixel;
     if (buffer.data.len < required_bytes) return error.InvalidFramebuffer;
     try self.native.createWindow(config);
     self.window_live = true;
@@ -150,7 +150,7 @@ test "invalid framebuffer dimensions and storage are rejected" {
     try platform.init();
     defer platform.deinit();
     var pixels: [4]u8 align(4096) = @splat(0);
-    var cases = [_]Renderer.FrameBuffer{
+    var cases = [_]FrameBuffer{
         .{ .width = 0, .height = 1, .data = &pixels },
         .{ .width = 1, .height = 0, .data = &pixels },
         .{ .width = 1, .height = 2, .data = &pixels }, // Storage fits only one pixel.

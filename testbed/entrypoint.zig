@@ -91,6 +91,7 @@ pub fn main(init: std.process.Init) !void {
     const rotation_start = std.Io.Clock.awake.now(init.io);
     var pacing_error: ?fr.Platform.PaceFrameError = null;
     while (true) {
+        _ = arena.reset(.retain_capacity);
         const frame_start = std.Io.Clock.awake.now(init.io);
         defer {
             platform.paceFrame(init.io, frame_start, frame_duration) catch |err| {
@@ -146,7 +147,7 @@ pub fn main(init: std.process.Init) !void {
             .texture = bitmap,
             .tint_srgb = null,
         } });
-        renderer.endDrawing();
+        renderer.endDrawing(arena.allocator());
         platform.present();
     }
 }

@@ -1,12 +1,15 @@
 const std = @import("std");
 const windows = std.os.windows;
-const Platform = @import("../platform.zig");
-const Renderer = @import("../software_renderer.zig");
-const win32 = @import("win32.zig");
+
 const event_types = @import("../event.zig");
 const Key = event_types.Key;
 const Event = event_types.Event;
 const MouseButton = event_types.MouseButton;
+const Platform = @import("../platform.zig");
+const Renderer = @import("../software_renderer.zig");
+const win32 = @import("win32.zig");
+const FrameBuffer = @import("../FrameBuffer.zig");
+
 const max_messages_per_frame = 1024;
 const frame_spin_margin_ns = 500_000;
 
@@ -26,7 +29,7 @@ pub const State = struct {
     owns_mouse_capture: bool = false,
     reset_frame_clock: bool = false,
 
-    back_buffer: *Renderer.FrameBuffer = undefined,
+    back_buffer: *FrameBuffer = undefined,
 
     buffer_info: win32.BITMAPINFO = undefined,
     windowed_frame_margin: u16 = 10,
@@ -145,7 +148,7 @@ pub const State = struct {
         const buffer = self.back_buffer;
         std.debug.assert(@as(i32, buffer.width) == self.buffer_info.bmiHeader.biWidth);
         std.debug.assert(-@as(i32, buffer.height) == self.buffer_info.bmiHeader.biHeight);
-        const required_bytes = @as(usize, buffer.width) * buffer.height * Renderer.bytes_per_pixel;
+        const required_bytes = @as(usize, buffer.width) * buffer.height * FrameBuffer.bytes_per_pixel;
         std.debug.assert(buffer.data.len >= required_bytes);
 
         var rect: win32.RECT = undefined;
@@ -677,7 +680,7 @@ fn mousePosition(platform: *State, client: win32.POINT) event_types.MousePositio
 
 const TestWindow = struct {
     platform: State,
-    buffer: Renderer.FrameBuffer,
+    buffer: FrameBuffer,
     pixels: [320 * 180 * 4]u8 align(4096),
 
     fn init(self: *TestWindow) !void {
