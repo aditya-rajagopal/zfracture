@@ -929,27 +929,28 @@ fn drawTexturedRectanglePixels(
             const pixel_c: [4]u8 = @bitCast(texture.pixels[y1 * texture.width + x0]);
             const pixel_d: [4]u8 = @bitCast(texture.pixels[y1 * texture.width + x1]);
 
-            var pixel_a_b: f32 = @as(f32, @floatFromInt(pixel_a[0])) / 255.0;
-            var pixel_a_g: f32 = @as(f32, @floatFromInt(pixel_a[1])) / 255.0;
-            var pixel_a_r: f32 = @as(f32, @floatFromInt(pixel_a[2])) / 255.0;
-            const pixel_a_a: f32 = @as(f32, @floatFromInt(pixel_a[3])) / 255.0;
+            var pixel_a_b: f32 = @floatFromInt(pixel_a[0]);
+            var pixel_a_g: f32 = @floatFromInt(pixel_a[1]);
+            var pixel_a_r: f32 = @floatFromInt(pixel_a[2]);
+            const pixel_a_a: f32 = @as(f32, @floatFromInt(pixel_a[3])) * (1.0 / 255.0);
 
-            var pixel_b_b: f32 = @as(f32, @floatFromInt(pixel_b[0])) / 255.0;
-            var pixel_b_g: f32 = @as(f32, @floatFromInt(pixel_b[1])) / 255.0;
-            var pixel_b_r: f32 = @as(f32, @floatFromInt(pixel_b[2])) / 255.0;
-            const pixel_b_a: f32 = @as(f32, @floatFromInt(pixel_b[3])) / 255.0;
+            var pixel_b_b: f32 = @floatFromInt(pixel_b[0]);
+            var pixel_b_g: f32 = @floatFromInt(pixel_b[1]);
+            var pixel_b_r: f32 = @floatFromInt(pixel_b[2]);
+            const pixel_b_a: f32 = @as(f32, @floatFromInt(pixel_b[3])) * (1.0 / 255.0);
 
-            var pixel_c_b: f32 = @as(f32, @floatFromInt(pixel_c[0])) / 255.0;
-            var pixel_c_g: f32 = @as(f32, @floatFromInt(pixel_c[1])) / 255.0;
-            var pixel_c_r: f32 = @as(f32, @floatFromInt(pixel_c[2])) / 255.0;
-            const pixel_c_a: f32 = @as(f32, @floatFromInt(pixel_c[3])) / 255.0;
+            var pixel_c_b: f32 = @floatFromInt(pixel_c[0]);
+            var pixel_c_g: f32 = @floatFromInt(pixel_c[1]);
+            var pixel_c_r: f32 = @floatFromInt(pixel_c[2]);
+            const pixel_c_a: f32 = @as(f32, @floatFromInt(pixel_c[3])) * (1.0 / 255.0);
 
-            var pixel_d_b: f32 = @as(f32, @floatFromInt(pixel_d[0])) / 255.0;
-            var pixel_d_g: f32 = @as(f32, @floatFromInt(pixel_d[1])) / 255.0;
-            var pixel_d_r: f32 = @as(f32, @floatFromInt(pixel_d[2])) / 255.0;
-            const pixel_d_a: f32 = @as(f32, @floatFromInt(pixel_d[3])) / 255.0;
+            var pixel_d_b: f32 = @floatFromInt(pixel_d[0]);
+            var pixel_d_g: f32 = @floatFromInt(pixel_d[1]);
+            var pixel_d_r: f32 = @floatFromInt(pixel_d[2]);
+            const pixel_d_a: f32 = @as(f32, @floatFromInt(pixel_d[3])) * (1.0 / 255.0);
 
-            // Gamma-2 decode. Bitmap RGB was premultiplied before encoding;
+            // Gamma-2 decode in byte-squared units; the RGB /255 and final *255
+            // cancel. Bitmap RGB was premultiplied before encoding.
             pixel_a_b = pixel_a_b * pixel_a_b;
             pixel_a_g = pixel_a_g * pixel_a_g;
             pixel_a_r = pixel_a_r * pixel_a_r;
@@ -985,9 +986,9 @@ fn drawTexturedRectanglePixels(
             const index = j * render_tile_size + i;
             const destination_u8: [4]u8 = @bitCast(pixels[index]);
 
-            var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
-            var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
-            var destination_r: f32 = @as(f32, @floatFromInt(destination_u8[2])) / 255.0;
+            var destination_b: f32 = @floatFromInt(destination_u8[0]);
+            var destination_g: f32 = @floatFromInt(destination_u8[1]);
+            var destination_r: f32 = @floatFromInt(destination_u8[2]);
 
             destination_r = destination_r * destination_r;
             destination_g = destination_g * destination_g;
@@ -1002,9 +1003,9 @@ fn drawTexturedRectanglePixels(
             blended_b = @sqrt(blended_b);
 
             const final = [_]u8{
-                @truncate(@as(u32, @intFromFloat(@round(blended_b * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_g * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_r * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_b)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_g)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_r)))),
                 255,
             };
 
@@ -1103,27 +1104,28 @@ fn drawSprite(
             const pixel_c: [4]u8 = @bitCast(texel_c);
             const pixel_d: [4]u8 = @bitCast(texel_d);
 
-            var pixel_a_b: f32 = @as(f32, @floatFromInt(pixel_a[0])) / 255.0;
-            var pixel_a_g: f32 = @as(f32, @floatFromInt(pixel_a[1])) / 255.0;
-            var pixel_a_r: f32 = @as(f32, @floatFromInt(pixel_a[2])) / 255.0;
-            const pixel_a_a: f32 = @as(f32, @floatFromInt(pixel_a[3])) / 255.0;
+            var pixel_a_b: f32 = @floatFromInt(pixel_a[0]);
+            var pixel_a_g: f32 = @floatFromInt(pixel_a[1]);
+            var pixel_a_r: f32 = @floatFromInt(pixel_a[2]);
+            const pixel_a_a: f32 = @as(f32, @floatFromInt(pixel_a[3])) * (1.0 / 255.0);
 
-            var pixel_b_b: f32 = @as(f32, @floatFromInt(pixel_b[0])) / 255.0;
-            var pixel_b_g: f32 = @as(f32, @floatFromInt(pixel_b[1])) / 255.0;
-            var pixel_b_r: f32 = @as(f32, @floatFromInt(pixel_b[2])) / 255.0;
-            const pixel_b_a: f32 = @as(f32, @floatFromInt(pixel_b[3])) / 255.0;
+            var pixel_b_b: f32 = @floatFromInt(pixel_b[0]);
+            var pixel_b_g: f32 = @floatFromInt(pixel_b[1]);
+            var pixel_b_r: f32 = @floatFromInt(pixel_b[2]);
+            const pixel_b_a: f32 = @as(f32, @floatFromInt(pixel_b[3])) * (1.0 / 255.0);
 
-            var pixel_c_b: f32 = @as(f32, @floatFromInt(pixel_c[0])) / 255.0;
-            var pixel_c_g: f32 = @as(f32, @floatFromInt(pixel_c[1])) / 255.0;
-            var pixel_c_r: f32 = @as(f32, @floatFromInt(pixel_c[2])) / 255.0;
-            const pixel_c_a: f32 = @as(f32, @floatFromInt(pixel_c[3])) / 255.0;
+            var pixel_c_b: f32 = @floatFromInt(pixel_c[0]);
+            var pixel_c_g: f32 = @floatFromInt(pixel_c[1]);
+            var pixel_c_r: f32 = @floatFromInt(pixel_c[2]);
+            const pixel_c_a: f32 = @as(f32, @floatFromInt(pixel_c[3])) * (1.0 / 255.0);
 
-            var pixel_d_b: f32 = @as(f32, @floatFromInt(pixel_d[0])) / 255.0;
-            var pixel_d_g: f32 = @as(f32, @floatFromInt(pixel_d[1])) / 255.0;
-            var pixel_d_r: f32 = @as(f32, @floatFromInt(pixel_d[2])) / 255.0;
-            const pixel_d_a: f32 = @as(f32, @floatFromInt(pixel_d[3])) / 255.0;
+            var pixel_d_b: f32 = @floatFromInt(pixel_d[0]);
+            var pixel_d_g: f32 = @floatFromInt(pixel_d[1]);
+            var pixel_d_r: f32 = @floatFromInt(pixel_d[2]);
+            const pixel_d_a: f32 = @as(f32, @floatFromInt(pixel_d[3])) * (1.0 / 255.0);
 
-            // Gamma-2 decode. Bitmap RGB was premultiplied before encoding;
+            // Gamma-2 decode in byte-squared units; the RGB /255 and final *255
+            // cancel. Bitmap RGB was premultiplied before encoding.
             pixel_a_b = pixel_a_b * pixel_a_b;
             pixel_a_g = pixel_a_g * pixel_a_g;
             pixel_a_r = pixel_a_r * pixel_a_r;
@@ -1161,9 +1163,9 @@ fn drawSprite(
             var blended_b = source_b;
             if (source_a != 1) {
                 const destination_u8: [4]u8 = @bitCast(pixels[index]);
-                var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
-                var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
-                var destination_r: f32 = @as(f32, @floatFromInt(destination_u8[2])) / 255.0;
+                var destination_b: f32 = @floatFromInt(destination_u8[0]);
+                var destination_g: f32 = @floatFromInt(destination_u8[1]);
+                var destination_r: f32 = @floatFromInt(destination_u8[2]);
 
                 destination_r = destination_r * destination_r;
                 destination_g = destination_g * destination_g;
@@ -1179,9 +1181,9 @@ fn drawSprite(
             blended_b = @sqrt(blended_b);
 
             const final = [_]u8{
-                @truncate(@as(u32, @intFromFloat(@round(blended_b * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_g * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_r * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_b)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_g)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_r)))),
                 255,
             };
 
@@ -1218,9 +1220,10 @@ fn drawRectanglePixels(
 ) void {
     @setFloatMode(.optimized);
 
-    const source_r = color.linear.r;
-    const source_g = color.linear.g;
-    const source_b = color.linear.b;
+    // Match the unnormalized destination RGB; scale once outside the pixel loop.
+    const source_r = color.linear.r * (255.0 * 255.0);
+    const source_g = color.linear.g * (255.0 * 255.0);
+    const source_b = color.linear.b * (255.0 * 255.0);
     const source_a = color.linear.a;
     if (source_a == 1) {
         if (fully_covered) {
@@ -1257,9 +1260,9 @@ fn drawRectanglePixels(
             const index = j * render_tile_size + i;
             const destination_u8: [4]u8 = @bitCast(pixels[index]);
 
-            var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
-            var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
-            var destination_r: f32 = @as(f32, @floatFromInt(destination_u8[2])) / 255.0;
+            var destination_b: f32 = @floatFromInt(destination_u8[0]);
+            var destination_g: f32 = @floatFromInt(destination_u8[1]);
+            var destination_r: f32 = @floatFromInt(destination_u8[2]);
 
             destination_r = destination_r * destination_r;
             destination_g = destination_g * destination_g;
@@ -1274,9 +1277,9 @@ fn drawRectanglePixels(
             blended_b = @sqrt(blended_b);
 
             const final = [_]u8{
-                @truncate(@as(u32, @intFromFloat(@round(blended_b * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_g * 255.0)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_r * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_b)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_g)))),
+                @truncate(@as(u32, @intFromFloat(@round(blended_r)))),
                 255,
             };
 
