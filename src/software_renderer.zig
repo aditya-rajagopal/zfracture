@@ -768,9 +768,28 @@ fn fillSolidRows(pixels: *align(tile_alignment) Tile, bounds: AABB, packed_color
     const y_min: usize = @intFromFloat(bounds.min_y);
     const x_max: usize = @intFromFloat(bounds.max_x);
     const y_max: usize = @intFromFloat(bounds.max_y);
+    assert(x_min < x_max and x_max <= render_tile_size);
+    assert(y_min < y_max and y_max <= render_tile_size);
+
+    // Explicit chunks keep long fills simple when inlined with the other tile
+    // kernels; a generic row memset generated costly per-row stack restores.
+    if (x_max - x_min < rectangle_lanes) {
+        for (y_min..y_max) |y| {
+            const offset = y * render_tile_size;
+            @memset(pixels[offset + x_min .. offset + x_max], packed_color);
+        }
+        return;
+    }
+
+    const color: LaneU32 = @splat(packed_color);
     for (y_min..y_max) |y| {
-        const offset = y * render_tile_size;
-        @memset(pixels[offset + x_min .. offset + x_max], packed_color);
+        const row = pixels[y * render_tile_size ..][0..render_tile_size];
+        var x = x_min;
+        while (x + rectangle_lanes <= x_max) : (x += rectangle_lanes) {
+            row[x..][0..rectangle_lanes].* = color;
+        }
+        // Repeating an opaque store is harmless. Keep the tail inside the span.
+        if (x < x_max) row[x_max - rectangle_lanes ..][0..rectangle_lanes].* = color;
     }
 }
 
@@ -1605,6 +1624,34 @@ test "solid blends preserve byte-squared rounding at full and partial row tails"
             const y = index / render_tile_size;
             const expected: u32 = if (x >= case.first_x and x < case.end_x and y < case.end_y) 0xfffbeefb else background;
             try std.testing.expectEqual(expected, pixel);
+        }
+    }
+}
+
+test "opaque solid rows fill every span without touching neighboring pixels" {
+    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const background: u32 = 0x12345678;
+    for (0..render_tile_size) |start| {
+        for (start + 1..render_tile_size + 1) |end| {
+            for ([_]usize{ 1, render_tile_size - 3 }) |first_y| {
+                const rectangle = PreparedRectangle.init(screen, Renderer.RectangleGeometry.init(
+                    @floatFromInt(start),
+                    @floatFromInt(first_y),
+                    @floatFromInt(end - start),
+                    3,
+                    0,
+                    0,
+                    0,
+                ), .pixel_centres).?;
+                var pixels: Tile align(tile_alignment) = @splat(background);
+                drawRectangle(&pixels, rectangle, PreparedSolidColor.init(.{ .r = 1, .g = 0, .b = 1, .a = 1 }));
+                for (pixels, 0..) |pixel, index| {
+                    const x = index % render_tile_size;
+                    const y = index / render_tile_size;
+                    const covered = x >= start and x < end and y >= first_y and y < first_y + 3;
+                    try std.testing.expectEqual(if (covered) @as(u32, 0xffff00ff) else background, pixel);
+                }
+            }
         }
     }
 }
