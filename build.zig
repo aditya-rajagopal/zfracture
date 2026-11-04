@@ -64,17 +64,54 @@ pub fn build(b: *std.Build) !void {
 
     run_cmd.addPassthruArgs();
 
+    // Triangle
+    const triangle = b.createModule(.{
+        .root_source_file = b.path("testbed/triangle.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "fracture", .module = fracture },
+        },
+    });
+
+    const tri = b.addExecutable(.{
+        .name = "triangle",
+        .root_module = triangle,
+    });
+
+    if (optimize == .fast and target.result.os.tag == .windows) {
+        // NOTE(adi): Disables debug console on windows
+        exe.subsystem = .windows;
+    }
+
+    b.installArtifact(exe);
+
+    const triangle_step = b.step("triangle", "Run the app");
+
+    const triangle_cmd = b.addRunArtifact(tri);
+    triangle_cmd.setCwd(b.path("."));
+    triangle_step.dependOn(&triangle_cmd.step);
+
+    // Keep an installed executable available alongside the development run.
+    triangle_cmd.step.dependOn(b.getInstallStep());
+
     // ==================================== CHECK STEP ==================================/
     const exe_check = b.addExecutable(.{
         .name = "check",
         .root_module = entrypoint,
     });
+    const triangle_check = b.addExecutable(.{
+        .name = "tricheck",
+        .root_module = triangle,
+    });
+    triangle_check.subsystem = tri.subsystem;
     exe_check.subsystem = exe.subsystem;
     const check = b.step(
         "check",
         "Check the testbed and tests without running them",
     );
     check.dependOn(&exe_check.step);
+    check.dependOn(&triangle_check.step);
 
     // ==================================== TESTS ==================================/
     const test_step = b.step(

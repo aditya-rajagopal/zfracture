@@ -16,6 +16,8 @@ const Self = @This();
 back_buffer: FrameBuffer,
 pixels_per_meter: f32,
 camera_position: struct { x: f32, y: f32 },
+front_face_winding_order: @FieldType(Config, "front_face_winding_order") = .clockwise,
+cull_mode: @FieldType(Config, "cull_mode") = .back,
 textures: [32]Bitmap,
 head: u8 = 1,
 command_buffer: CommandBuffer,
@@ -42,6 +44,8 @@ pub const Config = struct {
     height: u16,
     pixels_per_meter: f32,
     missing_texture_color: Color,
+    front_face_winding_order: enum { clockwise, anticlockwise } = .clockwise,
+    cull_mode: enum { none, front, back } = .back,
 };
 
 const MAX_COMMANDS = 4096;
@@ -94,6 +98,8 @@ pub fn init(
     self.pixels_per_meter = config.pixels_per_meter;
     self.camera_position.x = 0;
     self.camera_position.y = 0;
+    self.front_face_winding_order = config.front_face_winding_order;
+    self.cull_mode = config.cull_mode;
     self.textures = @splat(.{ .width = 1, .height = 1, .pixels = missing_pixels });
     self.head = 1;
 }
@@ -491,6 +497,7 @@ const PreparedRectangle = struct {
     right_y: f32,
     down_x: f32,
     down_y: f32,
+
     bounds: AABB,
 
     const BoundsRounding = enum { pixel_centres, outward };
@@ -1028,6 +1035,175 @@ pub fn drawRectangle(
 
             pixels[index] = @bitCast(final);
         }
+    }
+}
+
+const SubpixelPoint = struct {
+    x: i64,
+    y: i64,
+
+    const subpixel_scale: i64 = 256;
+    const max_pixel_coordinate: f32 = 2_097_152;
+
+    fn init(x: f32, y: f32) ?SubpixelPoint {
+        if (@abs(x) > max_pixel_coordinate) return null;
+        if (@abs(y) > max_pixel_coordinate) return null;
+
+        // Coordinates fit +/-2^29 subpixels. Differences fit +/-2^30,
+        // leaving room for both products, their difference, and edge bias in i64.
+        const scale: f32 = @floatFromInt(subpixel_scale);
+        return .{
+            .x = @intFromFloat(@round(x * scale)),
+            .y = @intFromFloat(@round(y * scale)),
+        };
+    }
+};
+
+fn triangleEdgeBias(dx: i64, dy: i64) i64 {
+    // With Y down and positive-inside edges, upward and rightward-horizontal
+    // edges own their boundary samples. Subtract one for all other edges.
+    if (dy < 0) return 0;
+    if (dy == 0) {
+        if (dx > 0) return 0;
+    }
+    return -1;
+}
+
+/// Draw at pixel centers with top-left ownership on a 1/256-pixel grid.
+/// Non-finite vertices or coordinates outside +/-2,097,152 pixels are ignored.
+pub fn drawTriangle(
+    self: *Self,
+    a_x: f32,
+    a_y: f32,
+    b_x: f32,
+    b_y: f32,
+    c_x: f32,
+    c_y: f32,
+    color_srgb: Color,
+) void {
+    const back_buffer = &self.back_buffer;
+    const subpixel_scale = SubpixelPoint.subpixel_scale;
+    const a = SubpixelPoint.init(a_x, a_y) orelse return;
+    const b = SubpixelPoint.init(b_x, b_y) orelse return;
+    const c = SubpixelPoint.init(c_x, c_y) orelse return;
+
+    const signed_double_area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+
+    if (signed_double_area == 0) return;
+
+    // Framebuffer Y increases downward, so positive area is clockwise.
+    const is_clockwise = signed_double_area > 0;
+    const is_front_facing = switch (self.front_face_winding_order) {
+        .clockwise => is_clockwise,
+        .anticlockwise => !is_clockwise,
+    };
+    switch (self.cull_mode) {
+        .none => {},
+        .front => {
+            if (is_front_facing) return;
+        },
+        .back => {
+            if (!is_front_facing) return;
+        },
+    }
+
+    // Bound the snapped geometry, then clip before converting to unsigned indices.
+    const left = @max(
+        @divFloor(@min(a.x, b.x, c.x), subpixel_scale),
+        0,
+    );
+    const right = @min(
+        @divFloor(@max(a.x, b.x, c.x) + subpixel_scale - 1, subpixel_scale),
+        @as(i64, back_buffer.width),
+    );
+    const top = @max(@divFloor(@min(a.y, b.y, c.y), subpixel_scale), 0);
+    const bottom = @min(
+        @divFloor(@max(a.y, b.y, c.y) + subpixel_scale - 1, subpixel_scale),
+        @as(i64, back_buffer.height),
+    );
+    if (right <= left) return;
+    if (bottom <= top) return;
+
+    // Keep the inside test positive for either surviving winding.
+    const edge_sign: i64 = if (is_clockwise) 1 else -1;
+    const @"a->b_x" = (b.x - a.x) * edge_sign;
+    const @"a->b_y" = (b.y - a.y) * edge_sign;
+    const @"b->c_x" = (c.x - b.x) * edge_sign;
+    const @"b->c_y" = (c.y - b.y) * edge_sign;
+    const @"c->a_x" = (a.x - c.x) * edge_sign;
+    const @"c->a_y" = (a.y - c.y) * edge_sign;
+
+    const ab_bias = triangleEdgeBias(@"a->b_x", @"a->b_y");
+    const bc_bias = triangleEdgeBias(@"b->c_x", @"b->c_y");
+    const ca_bias = triangleEdgeBias(@"c->a_x", @"c->a_y");
+    const ab_step_right = -@"a->b_y" * subpixel_scale;
+    const bc_step_right = -@"b->c_y" * subpixel_scale;
+    const ca_step_right = -@"c->a_y" * subpixel_scale;
+    const ab_step_down = @"a->b_x" * subpixel_scale;
+    const bc_step_down = @"b->c_x" * subpixel_scale;
+    const ca_step_down = @"c->a_x" * subpixel_scale;
+
+    const source_r = color_srgb.r * color_srgb.r * color_srgb.a;
+    const source_g = color_srgb.g * color_srgb.g * color_srgb.a;
+    const source_b = color_srgb.b * color_srgb.b * color_srgb.a;
+    const source_a = color_srgb.a;
+
+    const sample_x = left * subpixel_scale + subpixel_scale / 2;
+    const sample_y = top * subpixel_scale + subpixel_scale / 2;
+    var ab_check = @"a->b_x" * (sample_y - a.y) - @"a->b_y" * (sample_x - a.x) + ab_bias;
+    var bc_check = @"b->c_x" * (sample_y - b.y) - @"b->c_y" * (sample_x - b.x) + bc_bias;
+    var ca_check = @"c->a_x" * (sample_y - c.y) - @"c->a_y" * (sample_x - c.x) + ca_bias;
+
+    const min_x: usize = @intCast(left);
+    const min_y: usize = @intCast(top);
+    const max_x: usize = @intCast(right);
+    const max_y: usize = @intCast(bottom);
+
+    const pixels = back_buffer.pixels();
+    for (min_y..max_y) |row| {
+        var ab_check_row = ab_check;
+        var bc_check_row = bc_check;
+        var ca_check_row = ca_check;
+        for (min_x..max_x) |col| {
+            draw_pixel: {
+                if (ab_check_row < 0) break :draw_pixel;
+                if (bc_check_row < 0) break :draw_pixel;
+                if (ca_check_row < 0) break :draw_pixel;
+                const index = row * @as(usize, back_buffer.width) + col;
+                const destination_u8: [4]u8 = @bitCast(pixels[index]);
+
+                var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
+                var destination_g: f32 = @as(f32, @floatFromInt(destination_u8[1])) / 255.0;
+                var destination_r: f32 = @as(f32, @floatFromInt(destination_u8[2])) / 255.0;
+
+                destination_r = destination_r * destination_r;
+                destination_g = destination_g * destination_g;
+                destination_b = destination_b * destination_b;
+
+                var blended_r = source_r + destination_r * (1.0 - source_a);
+                var blended_g = source_g + destination_g * (1.0 - source_a);
+                var blended_b = source_b + destination_b * (1.0 - source_a);
+
+                blended_r = @sqrt(blended_r);
+                blended_g = @sqrt(blended_g);
+                blended_b = @sqrt(blended_b);
+
+                const final = [_]u8{
+                    @truncate(@as(u32, @intFromFloat(@round(blended_b * 255.0)))),
+                    @truncate(@as(u32, @intFromFloat(@round(blended_g * 255.0)))),
+                    @truncate(@as(u32, @intFromFloat(@round(blended_r * 255.0)))),
+                    255,
+                };
+
+                pixels[index] = @bitCast(final);
+            }
+            ab_check_row += ab_step_right;
+            bc_check_row += bc_step_right;
+            ca_check_row += ca_step_right;
+        }
+        ab_check += ab_step_down;
+        bc_check += bc_step_down;
+        ca_check += ca_step_down;
     }
 }
 
