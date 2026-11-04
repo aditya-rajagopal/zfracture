@@ -130,35 +130,18 @@ const Internal = struct {
     };
 
     pub const DrawTexturedRectangleCommand = struct {
-        pivot_screen_x: f32,
-        pivot_screen_y: f32,
-        width: f32,
-        height: f32,
-        pivot_fraction_x: f32,
-        pivot_fraction_y: f32,
-        angle_radians: f32,
+        rectangle: PreparedRectangle,
         texture: Bitmap,
         tint_srgb: ?Color,
     };
 
     pub const DrawSpriteCommand = struct {
-        pivot_screen_x: f32,
-        pivot_screen_y: f32,
-        width: f32,
-        height: f32,
-        pivot_fraction_x: f32,
-        pivot_fraction_y: f32,
+        rectangle: PreparedRectangle,
         texture: Bitmap,
     };
 
     pub const DrawRectangleCommand = struct {
-        pivot_screen_x: f32,
-        pivot_screen_y: f32,
-        width: f32,
-        height: f32,
-        pivot_fraction_x: f32,
-        pivot_fraction_y: f32,
-        angle_radians: f32,
+        rectangle: PreparedRectangle,
         color_srgb: Color,
     };
 };
@@ -168,7 +151,7 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
     assert(self.command_buffer.data.len <= (MAX_COMMANDS - 1) * max_command_size);
 
     const tag_head = self.command_buffer.headers.len;
-    self.command_buffer.headers.len += 1;
+    var header: CommandBuffer.Header = undefined;
 
     switch (command) {
         .clear_screen => |cc| {
@@ -178,24 +161,34 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
             assert(self.command_buffer.data.len <= MAX_DATA);
             const dest: []align(@alignOf(Internal.ClearCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
             @memcpy(dest, bytes);
-            self.command_buffer.headers[tag_head] = .{ .tag = .clear_screen, .offset = @truncate(start) };
+            header = .{ .tag = .clear_screen, .offset = @truncate(start) };
         },
         .set_view => |view| {
-            self.command_buffer.headers.len -= 1;
             self.setView(view.meters_per_pixel, view.camera_x, view.camera_y);
             return;
         },
         .draw_rectangle => |rect| {
             const pivot_screen = self.screenFromWorld(rect.pivot_world_x, rect.pivot_world_y);
+            var rounding: PreparedRectangle.BoundsRounding = .outward;
+            if (rect.texture == null) {
+                if (rect.angle_radians == 0) rounding = .pixel_centres;
+            }
+            const rectangle = PreparedRectangle.init(
+                &self.back_buffer,
+                pivot_screen.x,
+                pivot_screen.y,
+                rect.width * self.pixels_per_meter,
+                rect.height * self.pixels_per_meter,
+                rect.pivot_fraction_x,
+                rect.pivot_fraction_y,
+                rect.angle_radians,
+                rounding,
+            ) orelse return;
+
             if (rect.texture) |texture| {
                 if (rect.angle_radians == 0 and rect.tint_srgb == null) {
                     const bytes = std.mem.asBytes(&Internal.DrawSpriteCommand{
-                        .pivot_screen_x = pivot_screen.x,
-                        .pivot_screen_y = pivot_screen.y,
-                        .width = rect.width * self.pixels_per_meter,
-                        .height = rect.height * self.pixels_per_meter,
-                        .pivot_fraction_x = rect.pivot_fraction_x,
-                        .pivot_fraction_y = rect.pivot_fraction_y,
+                        .rectangle = rectangle,
                         .texture = self.getTexture(texture),
                     });
                     const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawSpriteCommand));
@@ -203,16 +196,10 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
                     assert(self.command_buffer.data.len <= MAX_DATA);
                     const dest: []align(@alignOf(Internal.DrawSpriteCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
                     @memcpy(dest, bytes);
-                    self.command_buffer.headers[tag_head] = .{ .tag = .draw_sprite, .offset = @truncate(start) };
+                    header = .{ .tag = .draw_sprite, .offset = @truncate(start) };
                 } else {
                     const bytes = std.mem.asBytes(&Internal.DrawTexturedRectangleCommand{
-                        .pivot_screen_x = pivot_screen.x,
-                        .pivot_screen_y = pivot_screen.y,
-                        .width = rect.width * self.pixels_per_meter,
-                        .height = rect.height * self.pixels_per_meter,
-                        .pivot_fraction_x = rect.pivot_fraction_x,
-                        .pivot_fraction_y = rect.pivot_fraction_y,
-                        .angle_radians = rect.angle_radians,
+                        .rectangle = rectangle,
                         .texture = self.getTexture(texture),
                         .tint_srgb = rect.tint_srgb,
                     });
@@ -221,18 +208,12 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
                     assert(self.command_buffer.data.len <= MAX_DATA);
                     const dest: []align(@alignOf(Internal.DrawTexturedRectangleCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
                     @memcpy(dest, bytes);
-                    self.command_buffer.headers[tag_head] = .{ .tag = .draw_textured_rectangle, .offset = @truncate(start) };
+                    header = .{ .tag = .draw_textured_rectangle, .offset = @truncate(start) };
                 }
             } else {
                 const colour = if (rect.tint_srgb) |tint| tint else Color.magenta;
                 const bytes = std.mem.asBytes(&Internal.DrawRectangleCommand{
-                    .pivot_screen_x = pivot_screen.x,
-                    .pivot_screen_y = pivot_screen.y,
-                    .width = rect.width * self.pixels_per_meter,
-                    .height = rect.height * self.pixels_per_meter,
-                    .pivot_fraction_x = rect.pivot_fraction_x,
-                    .pivot_fraction_y = rect.pivot_fraction_y,
-                    .angle_radians = rect.angle_radians,
+                    .rectangle = rectangle,
                     .color_srgb = colour,
                 });
                 const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawRectangleCommand));
@@ -240,10 +221,12 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
                 assert(self.command_buffer.data.len <= MAX_DATA);
                 const dest: []align(@alignOf(Internal.DrawRectangleCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
                 @memcpy(dest, bytes);
-                self.command_buffer.headers[tag_head] = .{ .tag = .draw_rectangle, .offset = @truncate(start) };
+                header = .{ .tag = .draw_rectangle, .offset = @truncate(start) };
             }
         },
     }
+    self.command_buffer.headers.len += 1;
+    self.command_buffer.headers[tag_head] = header;
 }
 
 pub fn beginDrawing(self: *Self, clear_color: Color) void {
@@ -267,48 +250,21 @@ pub fn endDrawing(self: *Self) void {
                 assert(self.command_buffer.data.len >= header.offset);
                 assert(self.command_buffer.data.len - header.offset >= size);
                 const rect: *const Internal.DrawRectangleCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
-                self.drawRectangle(
-                    rect.pivot_screen_x,
-                    rect.pivot_screen_y,
-                    rect.width,
-                    rect.height,
-                    rect.pivot_fraction_x,
-                    rect.pivot_fraction_y,
-                    rect.angle_radians,
-                    rect.color_srgb,
-                );
+                self.drawRectangle(rect.rectangle, rect.color_srgb);
             },
             .draw_sprite => {
                 const size = @sizeOf(Internal.DrawSpriteCommand);
                 assert(self.command_buffer.data.len >= header.offset);
                 assert(self.command_buffer.data.len - header.offset >= size);
                 const sprite: *const Internal.DrawSpriteCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
-                self.drawSprite(
-                    sprite.pivot_screen_x,
-                    sprite.pivot_screen_y,
-                    sprite.width,
-                    sprite.height,
-                    sprite.pivot_fraction_x,
-                    sprite.pivot_fraction_y,
-                    sprite.texture,
-                );
+                self.drawSprite(sprite.rectangle, sprite.texture);
             },
             .draw_textured_rectangle => {
                 const size = @sizeOf(Internal.DrawTexturedRectangleCommand);
                 assert(self.command_buffer.data.len >= header.offset);
                 assert(self.command_buffer.data.len - header.offset >= size);
                 const trect: *const Internal.DrawTexturedRectangleCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
-                self.drawTexturedRectangle(
-                    trect.pivot_screen_x,
-                    trect.pivot_screen_y,
-                    trect.width,
-                    trect.height,
-                    trect.pivot_fraction_x,
-                    trect.pivot_fraction_y,
-                    trect.angle_radians,
-                    trect.texture,
-                    trect.tint_srgb,
-                );
+                self.drawTexturedRectangle(trect.rectangle, trect.texture, trect.tint_srgb);
             },
         }
     }
@@ -457,7 +413,7 @@ pub fn visibleWorldBounds(self: *Self, camera_x: f32, camera_y: f32, meters_per_
     };
 }
 
-pub fn clearScreen(renderer: *Self, r: f32, g: f32, b: f32) void {
+fn clearScreen(renderer: *Self, r: f32, g: f32, b: f32) void {
     const trace = profile.begin(.renderer_clear);
     defer profile.end(trace);
     const back_buffer: *FrameBuffer = &renderer.back_buffer;
@@ -488,6 +444,7 @@ fn clipped(buffer: *const FrameBuffer, left: f32, top: f32, right: f32, bottom: 
     return bounds;
 }
 
+/// Rectangle geometry in framebuffer pixels, clipped to the preparation target.
 const PreparedRectangle = struct {
     x: f32,
     y: f32,
@@ -499,9 +456,12 @@ const PreparedRectangle = struct {
     down_y: f32,
 
     bounds: AABB,
+    bounds_rounding: BoundsRounding,
 
     const BoundsRounding = enum { pixel_centres, outward };
 
+    /// Pivot fractions are relative to the unrotated top-left; angles are clockwise.
+    /// Returns null for empty geometry or bounds outside the framebuffer.
     fn init(
         buffer: *const FrameBuffer,
         pivot_screen_x: f32,
@@ -555,6 +515,7 @@ const PreparedRectangle = struct {
             .down_x = down_x,
             .down_y = down_y,
             .bounds = clipped(buffer, left, top, right, bottom) orelse return null,
+            .bounds_rounding = rounding,
         };
     }
 
@@ -587,35 +548,20 @@ fn fillSolidRows(buffer: *FrameBuffer, bounds: AABB, packed_color: u32) void {
 }
 
 // TODO(adi): Maybe have nearest-neighbour sampling and bilinear sampling as options?
-/// Draw with a pivot and dimensions in framebuffer pixels, independent of the camera.
-/// Pivot fractions are measured from the unrotated top-left and may be outside [0, 1].
-/// Positive angles rotate clockwise around the pivot.
-pub fn drawTexturedRectangle(
+/// Rasterize prepared geometry with bilinear filtering and optional tint.
+fn drawTexturedRectangle(
     renderer: *Self,
-    pivot_screen_x: f32,
-    pivot_screen_y: f32,
-    width: f32,
-    height: f32,
-    pivot_fraction_x: f32,
-    pivot_fraction_y: f32,
-    angle_radians: f32,
+    rectangle: PreparedRectangle,
     texture: Bitmap,
     tint_srgb: ?Color,
 ) void {
     @setFloatMode(.optimized);
     const trace = profile.begin(.renderer_draw_textured_rectangle);
     defer profile.end(trace);
-    if (angle_radians == 0) {
-        if (tint_srgb == null) {
-            drawSprite(renderer, pivot_screen_x, pivot_screen_y, width, height, pivot_fraction_x, pivot_fraction_y, texture);
-            return;
-        }
-    }
-    if (width <= 0 or height <= 0) return;
+    assert(rectangle.width > 0);
+    assert(rectangle.height > 0);
     if (texture.width == 0 or texture.height == 0) return;
     const back_buffer = &renderer.back_buffer;
-
-    const rectangle = PreparedRectangle.init(back_buffer, pivot_screen_x, pivot_screen_y, width, height, pivot_fraction_x, pivot_fraction_y, angle_radians, .outward) orelse return;
 
     const bounds = rectangle.bounds;
     const x_min: usize = @intFromFloat(bounds.min_x);
@@ -627,8 +573,8 @@ pub fn drawTexturedRectangle(
 
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
-    const texels_per_pixel_x = texture_width / width;
-    const texels_per_pixel_y = texture_height / height;
+    const texels_per_pixel_x = texture_width / rectangle.width;
+    const texels_per_pixel_y = texture_height / rectangle.height;
 
     const tint_r: f32, const tint_g: f32, const tint_b: f32, const tint_a: f32 = if (tint_srgb) |tint| blk: {
         break :blk .{ tint.r * tint.r * tint.a, tint.g * tint.g * tint.a, tint.b * tint.b * tint.a, tint.a };
@@ -757,38 +703,22 @@ pub fn drawTexturedRectangle(
     }
 }
 
-/// Draw an untinted, axis-aligned texture in framebuffer pixels.
-/// The pivot fractions locate the fixed screen pivot relative to the top-left.
-/// Fractions may be outside [0, 1].
+/// Rasterize an untinted texture using prepared, unrotated geometry.
 /// Retains bilinear filtering, premultiplied alpha and gamma-2 conversion.
-pub fn drawSprite(
+fn drawSprite(
     renderer: *Self,
-    pivot_screen_x: f32,
-    pivot_screen_y: f32,
-    width: f32,
-    height: f32,
-    pivot_fraction_x: f32,
-    pivot_fraction_y: f32,
+    rectangle: PreparedRectangle,
     texture: Bitmap,
 ) void {
     @setFloatMode(.optimized);
     const trace = profile.begin(.renderer_draw_sprite);
     defer profile.end(trace);
-    if (width <= 0) return;
-    if (height <= 0) return;
+    assert(rectangle.width > 0);
+    assert(rectangle.height > 0);
     if (texture.width == 0) return;
     if (texture.height == 0) return;
     const back_buffer = &renderer.back_buffer;
-    const x = pivot_screen_x - pivot_fraction_x * width;
-    const y = pivot_screen_y - pivot_fraction_y * height;
-    // Clip before converting potentially large coordinates to integers.
-    const bounds = clipped(
-        back_buffer,
-        @floor(x),
-        @floor(y),
-        @ceil(x + width),
-        @ceil(y + height),
-    ) orelse return;
+    const bounds = rectangle.bounds;
     const x_min: usize = @intFromFloat(bounds.min_x);
     const y_min: usize = @intFromFloat(bounds.min_y);
     const x_max: usize = @intFromFloat(bounds.max_x);
@@ -796,8 +726,8 @@ pub fn drawSprite(
     const pixels = back_buffer.pixels();
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
-    const texels_per_pixel_x = texture_width / width;
-    const texels_per_pixel_y = texture_height / height;
+    const texels_per_pixel_x = texture_width / rectangle.width;
+    const texels_per_pixel_y = texture_height / rectangle.height;
 
     // Bounded stack storage, independent of framebuffer size; no frame allocation.
     var cached_x0: [256]usize = undefined;
@@ -813,11 +743,11 @@ pub fn drawSprite(
         const column_count = @min(cached_x0.len, x_max - first_x);
         for (0..column_count) |column| {
             const pixel_x = @as(f32, @floatFromInt(first_x + column)) + 0.5;
-            const local_x = pixel_x - x;
+            const local_x = pixel_x - rectangle.x;
 
             covered_x[column] = false;
             if (local_x < 0) continue;
-            if (local_x >= width) continue;
+            if (local_x >= rectangle.width) continue;
             covered_x[column] = true;
 
             const texel_x = local_x * texels_per_pixel_x - 0.5;
@@ -830,9 +760,9 @@ pub fn drawSprite(
 
         for (y_min..y_max) |j| {
             const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
-            const local_y = pixel_y - y;
+            const local_y = pixel_y - rectangle.y;
             if (local_y < 0) continue;
-            if (local_y >= height) continue;
+            if (local_y >= rectangle.height) continue;
 
             const texel_y = local_y * texels_per_pixel_y - 0.5;
             const raw_y0 = @floor(texel_y);
@@ -957,40 +887,34 @@ pub fn drawSprite(
     }
 }
 
-/// Draw with a pivot and dimensions in framebuffer pixels, independent of the camera.
-/// Pivot fractions are measured from the unrotated top-left and may be outside [0, 1].
-/// Positive angles rotate clockwise around the pivot, like drawTexturedRectangle.
-pub fn drawRectangle(
+/// Rasterize a solid color using prepared geometry and coverage bounds.
+fn drawRectangle(
     renderer: *Self,
-    pivot_screen_x: f32,
-    pivot_screen_y: f32,
-    width: f32,
-    height: f32,
-    pivot_fraction_x: f32,
-    pivot_fraction_y: f32,
-    angle_radians: f32,
+    rectangle: PreparedRectangle,
     color_srgb: Color,
 ) void {
     @setFloatMode(.optimized);
     const trace = profile.begin(.renderer_draw_rectangle);
     defer profile.end(trace);
     const back_buffer = &renderer.back_buffer;
-    const rounding: PreparedRectangle.BoundsRounding = if (angle_radians == 0) .pixel_centres else .outward;
-    const rectangle = PreparedRectangle.init(back_buffer, pivot_screen_x, pivot_screen_y, width, height, pivot_fraction_x, pivot_fraction_y, angle_radians, rounding) orelse return;
+    assert(rectangle.width > 0);
+    assert(rectangle.height > 0);
 
     const source_r = color_srgb.r * color_srgb.r * color_srgb.a;
     const source_g = color_srgb.g * color_srgb.g * color_srgb.a;
     const source_b = color_srgb.b * color_srgb.b * color_srgb.a;
     const source_a = color_srgb.a;
-    if (angle_radians == 0 and source_a == 1) {
-        const packed_color: u32 = @bitCast([_]u8{
-            @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_b) * 255.0)))),
-            @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_g) * 255.0)))),
-            @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_r) * 255.0)))),
-            255,
-        });
-        fillSolidRows(back_buffer, rectangle.bounds, packed_color);
-        return;
+    if (rectangle.bounds_rounding == .pixel_centres) {
+        if (source_a == 1) {
+            const packed_color: u32 = @bitCast([_]u8{
+                @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_b) * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_g) * 255.0)))),
+                @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_r) * 255.0)))),
+                255,
+            });
+            fillSolidRows(back_buffer, rectangle.bounds, packed_color);
+            return;
+        }
     }
 
     const bounds = rectangle.bounds;
@@ -1003,7 +927,7 @@ pub fn drawRectangle(
     for (y_min..y_max) |j| {
         const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
         for (x_min..x_max) |i| {
-            if (angle_radians != 0) {
+            if (rectangle.bounds_rounding == .outward) {
                 const pixel_x = @as(f32, @floatFromInt(i)) + 0.5;
                 _ = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
             }
@@ -1217,7 +1141,8 @@ test "native size texture preserves pixel channels and row stride" {
         .textures = undefined,
         .command_buffer = undefined,
     };
-    renderer.drawTexturedRectangle(0, 0, 3, 2, 0, 0, 0, .{ .width = 3, .height = 2, .pixels = &texels }, null);
+    const rectangle = PreparedRectangle.init(&renderer.back_buffer, 0, 0, 3, 2, 0, 0, 0, .outward).?;
+    renderer.drawTexturedRectangle(rectangle, .{ .width = 3, .height = 2, .pixels = &texels }, null);
     try std.testing.expectEqualSlices(u32, &texels, &pixels);
 }
 
@@ -1233,10 +1158,12 @@ test "bilinear texture filtering averages linear colors and clamps edge texels" 
         .command_buffer = undefined,
     };
     // The centre averages all four texels: each linear RGB channel is 0.5.
-    renderer.drawTexturedRectangle(0, 0, 1, 1, 0, 0, 0, texture, null);
+    const small_rectangle = PreparedRectangle.init(&renderer.back_buffer, 0, 0, 1, 1, 0, 0, 0, .outward).?;
+    renderer.drawTexturedRectangle(small_rectangle, texture, null);
     try std.testing.expectEqual(@as(u32, 0xffb4b4b4), pixels[0]);
 
-    renderer.drawTexturedRectangle(0, 0, 4, 4, 0, 0, 0, texture, null);
+    const large_rectangle = PreparedRectangle.init(&renderer.back_buffer, 0, 0, 4, 4, 0, 0, 0, .outward).?;
+    renderer.drawTexturedRectangle(large_rectangle, texture, null);
     try std.testing.expectEqual(@as(u32, 0xffff0000), pixels[0]);
     try std.testing.expectEqual(@as(u32, 0xff00ff00), pixels[3]);
     try std.testing.expectEqual(@as(u32, 0xff0000ff), pixels[12]);
@@ -1313,7 +1240,10 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
             .command_buffer = undefined,
         };
 
-        renderer.drawRectangle(case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, .white);
+        const rounding: PreparedRectangle.BoundsRounding = if (case.angle_radians == 0) .pixel_centres else .outward;
+        if (PreparedRectangle.init(&renderer.back_buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, rounding)) |rectangle| {
+            renderer.drawRectangle(rectangle, .white);
+        }
 
         for (pixels[0 .. 16 * 16], 0..) |pixel, index| {
             const x = index % 16;
@@ -1354,7 +1284,7 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
         // Centres strictly inside the rectangle must remain covered.
         .{ .x = 1, .y = 1, .width = 7, .height = 7, .texture_width = 31, .texture_height = 31, .left = 1, .top = 1, .right = 8, .bottom = 8 },
         .{ .x = 1.75, .y = 1.75, .width = 7, .height = 7, .texture_width = 31, .texture_height = 31, .left = 2, .top = 2, .right = 9, .bottom = 9 },
-        // Both public entry points reject empty or negative destination sizes.
+        // Preparation rejects empty or negative destination sizes.
         .{ .x = 0, .y = 0, .width = 0, .height = 7, .texture_width = 1, .texture_height = 1, .right = 0, .bottom = 0 },
         .{ .x = 0, .y = 0, .width = 7, .height = 0, .texture_width = 1, .texture_height = 1, .right = 0, .bottom = 0 },
         .{ .x = 0, .y = 0, .width = -1, .height = 7, .texture_width = 1, .texture_height = 1, .right = 0, .bottom = 0 },
@@ -1400,10 +1330,12 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
                 .pixels = texels[0 .. case.texture_width * case.texture_height],
             };
 
-            if (direct_tile) {
-                renderer.drawSprite(case.x, case.y, case.width, case.height, 0, 0, texture);
-            } else {
-                renderer.drawTexturedRectangle(case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, texture, null);
+            if (PreparedRectangle.init(&renderer.back_buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, .outward)) |rectangle| {
+                if (direct_tile) {
+                    renderer.drawSprite(rectangle, texture);
+                } else {
+                    renderer.drawTexturedRectangle(rectangle, texture, null);
+                }
             }
 
             for (pixels[0 .. 48 * 48], 0..) |pixel, index| {
@@ -1427,7 +1359,8 @@ test "rotated rectangles blend only covered pixel centres" {
         .textures = undefined,
         .command_buffer = undefined,
     };
-    renderer.drawRectangle(4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
+    const rectangle = PreparedRectangle.init(&renderer.back_buffer, 4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0, .outward).?;
+    renderer.drawRectangle(rectangle, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
 
     // A 45-degree square forms a diamond. These pixel centres are strictly
     // inside it; the other pixels in its bounding box must remain blue.
