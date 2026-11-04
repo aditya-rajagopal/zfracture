@@ -59,11 +59,10 @@ pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    var renderer: fr.Renderer = undefined;
+    var renderer: fr.SoftwareRenderer = undefined;
     try renderer.init(allocator, .{
         .width = width,
         .height = height,
-        .pixels_per_meter = 1,
         .missing_texture_color = .magenta,
     });
 
@@ -73,7 +72,6 @@ pub fn main(init: std.process.Init) !void {
         arena.allocator(),
         "assets/textures/paving2.png",
     );
-    renderer.submit(.{ .clear_screen = .{ .r = 0.08, .g = 0.08, .b = 0.08 } });
 
     try platform.createWindow(.{
         .title = "Testbed - left click or Space: next texture case",
@@ -134,20 +132,18 @@ pub fn main(init: std.process.Init) !void {
         const angle_radians: f32 = @as(f32, @floatFromInt(rotation_ns)) /
             @as(f32, @floatFromInt(rotation_period_ns)) * std.math.tau;
 
-        renderer.beginDrawing(.{ .r = 0.08, .g = 0.08, .b = 0.08 });
-        renderer.submit(.{ .set_view = .{ .meters_per_pixel = 1, .camera_x = centre_x, .camera_y = centre_y } });
-        renderer.submit(.{ .draw_rectangle = .{
-            .pivot_world_x = draw_case.pivot_world_x,
-            .pivot_world_y = draw_case.pivot_world_y,
-            .width = draw_case.width,
-            .height = draw_case.height,
-            .pivot_fraction_x = 0.5,
-            .pivot_fraction_y = 0.5,
-            .angle_radians = angle_radians,
-            .texture = bitmap,
-            .tint_srgb = null,
-        } });
-        renderer.endDrawing(arena.allocator());
+        const commands = renderer.beginDrawing(.{ .r = 0.08, .g = 0.08, .b = 0.08 }, .{ .meters_per_pixel = 1, .camera_x = centre_x, .camera_y = centre_y });
+        commands.pushRect(
+            draw_case.pivot_world_x,
+            draw_case.pivot_world_y,
+            draw_case.width,
+            draw_case.height,
+            .{
+                .angle_radians = angle_radians,
+                .texture = bitmap,
+            },
+        );
+        renderer.endDrawing(arena.allocator(), commands);
         platform.present();
     }
 }

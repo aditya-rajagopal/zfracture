@@ -15,13 +15,12 @@ const Renderer = @import("renderer.zig");
 const Self = @This();
 
 back_buffer: FrameBuffer,
-pixels_per_meter: f32,
-camera_position: struct { x: f32, y: f32 },
 front_face_winding_order: @FieldType(Config, "front_face_winding_order") = .clockwise,
 cull_mode: @FieldType(Config, "cull_mode") = .back,
 textures: [32]Bitmap,
 head: u8 = 1,
-command_buffer: CommandBuffer,
+prepared_commands: PreparedCommandBuffer,
+command_buffer: Renderer.CommandBuffer,
 
 const render_tile_size: u64 = 64;
 
@@ -52,10 +51,10 @@ const TileBounds = struct {
 
 const TileBins = struct {
     offsets: []usize,
-    headers: []CommandBuffer.Header,
+    headers: []PreparedCommandBuffer.Header,
 };
 
-pub const CommandBuffer = struct {
+const PreparedCommandBuffer = struct {
     pub const data_alignment = @max(
         @alignOf(Internal.ClearCommand),
         @alignOf(Internal.DrawRectangleCommand),
@@ -72,7 +71,7 @@ pub const CommandBuffer = struct {
     data: []align(data_alignment) u8,
     tile_bounds: []TileBounds,
 
-    fn bin(self: CommandBuffer, cols: usize, rows: usize, arena: std.mem.Allocator) !TileBins {
+    fn bin(self: PreparedCommandBuffer, cols: usize, rows: usize, arena: std.mem.Allocator) !TileBins {
         assert(self.headers.len == self.tile_bounds.len);
         assert(self.headers.len <= MAX_COMMANDS);
         assert(cols <= 1024 and rows <= 1024); // ceil(maxInt(u16) / 64)
@@ -119,13 +118,13 @@ pub const CommandBuffer = struct {
 pub const Config = struct {
     width: u16,
     height: u16,
-    pixels_per_meter: f32,
     missing_texture_color: Color,
     front_face_winding_order: enum { clockwise, anticlockwise } = .clockwise,
     cull_mode: enum { none, front, back } = .back,
 };
 
 const MAX_COMMANDS = 4096;
+const MAX_FRONTEND_COMMANDS = 8192;
 const max_command_size = std.mem.alignForward(
     usize,
     @max(
@@ -134,7 +133,7 @@ const max_command_size = std.mem.alignForward(
         @sizeOf(Internal.DrawSpriteCommand),
         @sizeOf(Internal.DrawTexturedRectangleCommand),
     ),
-    CommandBuffer.data_alignment,
+    PreparedCommandBuffer.data_alignment,
 );
 // HACK: Figure out a better estimate. We should proabbly use stdx.GrowingBuffer
 const MAX_DATA = MAX_COMMANDS * max_command_size;
@@ -147,7 +146,7 @@ pub fn init(
     self.back_buffer = try .initCapacity(config.width, config.height, gpa);
     errdefer self.back_buffer.deinit(gpa);
 
-    const headers = try gpa.alloc(CommandBuffer.Header, MAX_COMMANDS);
+    const headers = try gpa.alloc(PreparedCommandBuffer.Header, MAX_COMMANDS);
     errdefer gpa.free(headers);
 
     const tile_bounds = try gpa.alloc(TileBounds, MAX_COMMANDS);
@@ -155,21 +154,22 @@ pub fn init(
 
     const data = try gpa.alignedAlloc(
         u8,
-        .fromByteUnits(CommandBuffer.data_alignment),
+        .fromByteUnits(PreparedCommandBuffer.data_alignment),
         MAX_DATA,
     );
     errdefer gpa.free(data);
 
+    var commands = try std.ArrayList(Renderer.Command).initCapacity(gpa, MAX_FRONTEND_COMMANDS);
+    errdefer commands.deinit(gpa);
+
     const missing_pixels = try gpa.alloc(u32, 1);
     missing_pixels[0] = config.missing_texture_color.toARGB();
 
-    self.command_buffer = .{ .headers = headers, .data = data, .tile_bounds = tile_bounds };
-    self.command_buffer.headers.len = 0;
-    self.command_buffer.data.len = 0;
-    self.command_buffer.tile_bounds.len = 0;
-    self.pixels_per_meter = config.pixels_per_meter;
-    self.camera_position.x = 0;
-    self.camera_position.y = 0;
+    self.prepared_commands = .{ .headers = headers, .data = data, .tile_bounds = tile_bounds };
+    self.prepared_commands.headers.len = 0;
+    self.prepared_commands.data.len = 0;
+    self.prepared_commands.tile_bounds.len = 0;
+    self.command_buffer = .{ .commands = commands };
     self.front_face_winding_order = config.front_face_winding_order;
     self.cull_mode = config.cull_mode;
     self.textures = @splat(.{ .width = 1, .height = 1, .pixels = missing_pixels });
@@ -178,12 +178,13 @@ pub fn init(
 
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
     gpa.free(self.back_buffer.data);
-    self.command_buffer.headers.len = MAX_COMMANDS;
-    self.command_buffer.data.len = MAX_DATA;
-    self.command_buffer.tile_bounds.len = MAX_COMMANDS;
-    gpa.free(self.command_buffer.headers);
-    gpa.free(self.command_buffer.data);
-    gpa.free(self.command_buffer.tile_bounds);
+    self.command_buffer.commands.deinit(gpa);
+    self.prepared_commands.headers.len = MAX_COMMANDS;
+    self.prepared_commands.data.len = MAX_DATA;
+    self.prepared_commands.tile_bounds.len = MAX_COMMANDS;
+    gpa.free(self.prepared_commands.headers);
+    gpa.free(self.prepared_commands.data);
+    gpa.free(self.prepared_commands.tile_bounds);
     for (self.textures[0..self.head]) |texture| {
         gpa.free(texture.pixels);
     }
@@ -198,9 +199,7 @@ const Internal = struct {
     };
 
     pub const ClearCommand = struct {
-        r: f32,
-        g: f32,
-        b: f32,
+        color: u32,
     };
 
     pub const DrawTexturedRectangleCommand = struct {
@@ -262,115 +261,124 @@ const PreparedSolidColor = struct {
     }
 };
 
-pub fn submit(self: *Self, command: Renderer.Command) void {
-    assert(self.command_buffer.headers.len == self.command_buffer.tile_bounds.len);
-    assert(self.command_buffer.headers.len < MAX_COMMANDS);
-    assert(self.command_buffer.data.len <= (MAX_COMMANDS - 1) * max_command_size);
-
-    const tag_head = self.command_buffer.headers.len;
-    var header: CommandBuffer.Header = undefined;
-    var tile_bounds: TileBounds = undefined;
-
-    switch (command) {
-        .clear_screen => |cc| {
-            tile_bounds = .{
-                .min_x = 0,
-                .min_y = 0,
-                .max_x = @intCast((self.back_buffer.width + render_tile_size - 1) / render_tile_size),
-                .max_y = @intCast((self.back_buffer.height + render_tile_size - 1) / render_tile_size),
-            };
-            const bytes = std.mem.asBytes(&Internal.ClearCommand{ .r = cc.r, .g = cc.g, .b = cc.b });
-            const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.ClearCommand));
-            self.command_buffer.data.len = start + bytes.len;
-            assert(self.command_buffer.data.len <= MAX_DATA);
-            const dest: []align(@alignOf(Internal.ClearCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
-            @memcpy(dest, bytes);
-            header = .{ .tag = .clear_screen, .offset = @truncate(start) };
-        },
-        .set_view => |view| {
-            self.setView(view.meters_per_pixel, view.camera_x, view.camera_y);
-            return;
-        },
-        .draw_rectangle => |rect| {
-            const pivot_screen = self.screenFromWorld(rect.pivot_world_x, rect.pivot_world_y);
-            var rounding: PreparedRectangle.BoundsRounding = .outward;
-            if (rect.texture == null) {
-                if (rect.angle_radians == 0) rounding = .pixel_centres;
-            }
-            const rectangle = PreparedRectangle.init(
-                self.back_buffer,
-                pivot_screen.x,
-                pivot_screen.y,
-                rect.width * self.pixels_per_meter,
-                rect.height * self.pixels_per_meter,
-                rect.pivot_fraction_x,
-                rect.pivot_fraction_y,
-                rect.angle_radians,
-                rounding,
-            ) orelse return;
-
-            tile_bounds = TileBounds.init(rectangle.bounds);
-
-            if (rect.texture) |texture| {
-                @setFloatMode(.optimized);
-                const bitmap = self.getTexture(texture);
-                assert(rectangle.width > 0 and rectangle.height > 0);
-                const texels_per_pixel_x = @as(f32, @floatFromInt(bitmap.width)) / rectangle.width;
-                const texels_per_pixel_y = @as(f32, @floatFromInt(bitmap.height)) / rectangle.height;
-                if (rect.angle_radians == 0 and rect.tint_srgb == null) {
-                    const bytes = std.mem.asBytes(&Internal.DrawSpriteCommand{
-                        .rectangle = PreparedSprite.fromRectangle(rectangle),
-                        .texture = bitmap,
-                        .texels_per_pixel_x = texels_per_pixel_x,
-                        .texels_per_pixel_y = texels_per_pixel_y,
-                    });
-                    const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawSpriteCommand));
-                    self.command_buffer.data.len = start + bytes.len;
-                    assert(self.command_buffer.data.len <= MAX_DATA);
-                    const dest: []align(@alignOf(Internal.DrawSpriteCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
-                    @memcpy(dest, bytes);
-                    header = .{ .tag = .draw_sprite, .offset = @truncate(start) };
-                } else {
-                    const bytes = std.mem.asBytes(&Internal.DrawTexturedRectangleCommand{
-                        .rectangle = rectangle,
-                        .texture = bitmap,
-                        .texels_per_pixel_x = texels_per_pixel_x,
-                        .texels_per_pixel_y = texels_per_pixel_y,
-                        .tint = LinearColor.init(rect.tint_srgb orelse .white),
-                    });
-                    const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawTexturedRectangleCommand));
-                    self.command_buffer.data.len = start + bytes.len;
-                    assert(self.command_buffer.data.len <= MAX_DATA);
-                    const dest: []align(@alignOf(Internal.DrawTexturedRectangleCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
-                    @memcpy(dest, bytes);
-                    header = .{ .tag = .draw_textured_rectangle, .offset = @truncate(start) };
-                }
-            } else {
-                const colour = if (rect.tint_srgb) |tint| tint else Color.magenta;
-                const bytes = std.mem.asBytes(&Internal.DrawRectangleCommand{
-                    .rectangle = rectangle,
-                    .color = PreparedSolidColor.init(colour),
-                });
-                const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.DrawRectangleCommand));
-                self.command_buffer.data.len = start + bytes.len;
-                assert(self.command_buffer.data.len <= MAX_DATA);
-                const dest: []align(@alignOf(Internal.DrawRectangleCommand)) u8 = @alignCast(self.command_buffer.data[start..][0..bytes.len]);
-                @memcpy(dest, bytes);
-                header = .{ .tag = .draw_rectangle, .offset = @truncate(start) };
-            }
-        },
-    }
-    self.command_buffer.headers.len += 1;
-    self.command_buffer.tile_bounds.len += 1;
-    self.command_buffer.headers[tag_head] = header;
-    self.command_buffer.tile_bounds[tag_head] = tile_bounds;
+/// The returned recorder borrows renderer-owned storage until the next frame.
+pub fn beginDrawing(self: *Self, clear_color: Color, view: Renderer.View) *Renderer.CommandBuffer {
+    self.command_buffer.reset(self.back_buffer.width, self.back_buffer.height, clear_color, view);
+    return &self.command_buffer;
 }
 
-pub fn beginDrawing(self: *Self, clear_color: Color) void {
-    self.command_buffer.headers.len = 0;
-    self.command_buffer.data.len = 0;
-    self.command_buffer.tile_bounds.len = 0;
-    self.submit(.{ .clear_screen = .{ .r = clear_color.r, .g = clear_color.g, .b = clear_color.b } });
+fn prepareCommands(self: *Self, command_buffer: *const Renderer.CommandBuffer) void {
+    assert(command_buffer.width == self.back_buffer.width and command_buffer.height == self.back_buffer.height);
+    const commands = command_buffer.commands.items;
+    assert(commands.len >= 2);
+    assert(commands[0] == .clear_screen and commands[1] == .set_view);
+
+    self.prepared_commands.headers.len = 0;
+    self.prepared_commands.data.len = 0;
+    self.prepared_commands.tile_bounds.len = 0;
+    var view = commands[1].set_view;
+    var pixels_per_meter = 1.0 / view.meters_per_pixel;
+    for (commands) |command| {
+        assert(self.prepared_commands.headers.len == self.prepared_commands.tile_bounds.len);
+
+        const tag_head = self.prepared_commands.headers.len;
+        var header: PreparedCommandBuffer.Header = undefined;
+        var tile_bounds: TileBounds = undefined;
+
+        switch (command) {
+            .clear_screen => |cc| {
+                if (tag_head >= MAX_COMMANDS) @panic("Prepared command buffer capacity exceeded");
+                tile_bounds = .{
+                    .min_x = 0,
+                    .min_y = 0,
+                    .max_x = @intCast((self.back_buffer.width + render_tile_size - 1) / render_tile_size),
+                    .max_y = @intCast((self.back_buffer.height + render_tile_size - 1) / render_tile_size),
+                };
+                const bytes = std.mem.asBytes(&Internal.ClearCommand{ .color = packClear(cc.r, cc.g, cc.b) });
+                const start = std.mem.alignForward(usize, self.prepared_commands.data.len, @alignOf(Internal.ClearCommand));
+                self.prepared_commands.data.len = start + bytes.len;
+                assert(self.prepared_commands.data.len <= MAX_DATA);
+                const dest: []align(@alignOf(Internal.ClearCommand)) u8 = @alignCast(self.prepared_commands.data[start..][0..bytes.len]);
+                @memcpy(dest, bytes);
+                header = .{ .tag = .clear_screen, .offset = @truncate(start) };
+            },
+            .set_view => |next| {
+                view = next;
+                pixels_per_meter = 1.0 / next.meters_per_pixel;
+                continue;
+            },
+            .draw_rectangle => |rect| {
+                const world = rect.rectangle;
+                const screen: Renderer.RectangleGeometry = .{
+                    .origin_x = (world.origin_x - view.camera_x) * pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.width)) / 2.0,
+                    .origin_y = (world.origin_y - view.camera_y) * pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.height)) / 2.0,
+                    .width = world.width * pixels_per_meter,
+                    .height = world.height * pixels_per_meter,
+                    .right_x = world.right_x,
+                    .right_y = world.right_y,
+                };
+                const axis_aligned = screen.right_x == 1 and screen.right_y == 0;
+                var rounding: PreparedRectangle.BoundsRounding = .outward;
+                if (rect.texture == null and axis_aligned) rounding = .pixel_centres;
+                const rectangle = PreparedRectangle.init(self.back_buffer, screen, rounding) orelse continue;
+
+                if (tag_head >= MAX_COMMANDS) @panic("Prepared command buffer capacity exceeded");
+                tile_bounds = TileBounds.init(rectangle.bounds);
+
+                if (rect.texture) |texture| {
+                    @setFloatMode(.optimized);
+                    const bitmap = self.getTexture(texture);
+                    assert(rectangle.width > 0 and rectangle.height > 0);
+                    const texels_per_pixel_x = @as(f32, @floatFromInt(bitmap.width)) / rectangle.width;
+                    const texels_per_pixel_y = @as(f32, @floatFromInt(bitmap.height)) / rectangle.height;
+                    if (axis_aligned and rect.tint_srgb == null) {
+                        const bytes = std.mem.asBytes(&Internal.DrawSpriteCommand{
+                            .rectangle = PreparedSprite.fromRectangle(rectangle),
+                            .texture = bitmap,
+                            .texels_per_pixel_x = texels_per_pixel_x,
+                            .texels_per_pixel_y = texels_per_pixel_y,
+                        });
+                        const start = std.mem.alignForward(usize, self.prepared_commands.data.len, @alignOf(Internal.DrawSpriteCommand));
+                        self.prepared_commands.data.len = start + bytes.len;
+                        assert(self.prepared_commands.data.len <= MAX_DATA);
+                        const dest: []align(@alignOf(Internal.DrawSpriteCommand)) u8 = @alignCast(self.prepared_commands.data[start..][0..bytes.len]);
+                        @memcpy(dest, bytes);
+                        header = .{ .tag = .draw_sprite, .offset = @truncate(start) };
+                    } else {
+                        const bytes = std.mem.asBytes(&Internal.DrawTexturedRectangleCommand{
+                            .rectangle = rectangle,
+                            .texture = bitmap,
+                            .texels_per_pixel_x = texels_per_pixel_x,
+                            .texels_per_pixel_y = texels_per_pixel_y,
+                            .tint = LinearColor.init(rect.tint_srgb orelse .white),
+                        });
+                        const start = std.mem.alignForward(usize, self.prepared_commands.data.len, @alignOf(Internal.DrawTexturedRectangleCommand));
+                        self.prepared_commands.data.len = start + bytes.len;
+                        assert(self.prepared_commands.data.len <= MAX_DATA);
+                        const dest: []align(@alignOf(Internal.DrawTexturedRectangleCommand)) u8 = @alignCast(self.prepared_commands.data[start..][0..bytes.len]);
+                        @memcpy(dest, bytes);
+                        header = .{ .tag = .draw_textured_rectangle, .offset = @truncate(start) };
+                    }
+                } else {
+                    const colour = if (rect.tint_srgb) |tint| tint else Color.magenta;
+                    const bytes = std.mem.asBytes(&Internal.DrawRectangleCommand{
+                        .rectangle = rectangle,
+                        .color = PreparedSolidColor.init(colour),
+                    });
+                    const start = std.mem.alignForward(usize, self.prepared_commands.data.len, @alignOf(Internal.DrawRectangleCommand));
+                    self.prepared_commands.data.len = start + bytes.len;
+                    assert(self.prepared_commands.data.len <= MAX_DATA);
+                    const dest: []align(@alignOf(Internal.DrawRectangleCommand)) u8 = @alignCast(self.prepared_commands.data[start..][0..bytes.len]);
+                    @memcpy(dest, bytes);
+                    header = .{ .tag = .draw_rectangle, .offset = @truncate(start) };
+                }
+            },
+        }
+        self.prepared_commands.headers.len += 1;
+        self.prepared_commands.tile_bounds.len += 1;
+        self.prepared_commands.headers[tag_head] = header;
+        self.prepared_commands.tile_bounds[tag_head] = tile_bounds;
+    }
 }
 
 /// Render and copy one tile using private stack scratch. Tile IDs are zero-based
@@ -379,8 +387,8 @@ pub fn beginDrawing(self: *Self, clear_color: Color) void {
 pub fn renderTile(
     back_buffer: FrameBuffer,
     tile_id: struct { x: usize, y: usize },
-    headers: []const CommandBuffer.Header,
-    command_data: []align(CommandBuffer.data_alignment) const u8,
+    headers: []const PreparedCommandBuffer.Header,
+    command_data: []align(PreparedCommandBuffer.data_alignment) const u8,
 ) void {
     const tile_x: f32 = @floatFromInt(tile_id.x * render_tile_size);
     const tile_y: f32 = @floatFromInt(tile_id.y * render_tile_size);
@@ -410,10 +418,9 @@ pub fn renderTile(
         const trace = profile.begin(.renderer_clear);
         defer profile.end(trace);
         const cc = readClearCommand(headers[0], command_data);
-        const pixel = packClear(cc.r, cc.g, cc.b);
         for (y_min..y_max) |y| {
             const start = y * @as(usize, back_buffer.width) + x_min;
-            @memset(destination_pixels[start..][0..copy_width], pixel);
+            @memset(destination_pixels[start..][0..copy_width], cc.color);
         }
         return;
     }
@@ -422,8 +429,10 @@ pub fn renderTile(
     for (headers) |header| {
         switch (header.tag) {
             .clear_screen => {
+                const trace = profile.begin(.renderer_clear);
+                defer profile.end(trace);
                 const cc = readClearCommand(header, command_data);
-                clearScreen(&tile_pixels, cc.r, cc.g, cc.b);
+                @memset(&tile_pixels, cc.color);
             },
             .draw_rectangle => {
                 const size = @sizeOf(Internal.DrawRectangleCommand);
@@ -463,24 +472,26 @@ pub fn renderTile(
     }
 }
 
-pub fn endDrawing(self: *Self, arena: std.mem.Allocator) void {
-    if (self.command_buffer.headers.len == 1 and self.command_buffer.headers[0].tag == .clear_screen) {
+pub fn endDrawing(self: *Self, arena: std.mem.Allocator, command_buffer: *const Renderer.CommandBuffer) void {
+    self.prepareCommands(command_buffer);
+
+    if (self.prepared_commands.headers.len == 1 and self.prepared_commands.headers[0].tag == .clear_screen) {
         const trace = profile.begin(.renderer_clear);
         defer profile.end(trace);
-        const cc = readClearCommand(self.command_buffer.headers[0], self.command_buffer.data);
-        @memset(self.back_buffer.pixels(), packClear(cc.r, cc.g, cc.b));
+        const cc = readClearCommand(self.prepared_commands.headers[0], self.prepared_commands.data);
+        @memset(self.back_buffer.pixels(), cc.color);
         return;
     }
 
     const rows = @divFloor((self.back_buffer.height + render_tile_size - 1), render_tile_size);
     const cols = @divFloor((self.back_buffer.width + render_tile_size - 1), render_tile_size);
-    const bins = self.command_buffer.bin(cols, rows, arena) catch unreachable;
+    const bins = self.prepared_commands.bin(cols, rows, arena) catch @panic("Frame allocator exhausted while binning commands");
 
     for (0..rows) |row| {
         for (0..cols) |col| {
             const tile = row * cols + col;
             const commands = bins.headers[bins.offsets[tile]..bins.offsets[tile + 1]];
-            renderTile(self.back_buffer, .{ .x = col, .y = row }, commands, self.command_buffer.data);
+            renderTile(self.back_buffer, .{ .x = col, .y = row }, commands, self.prepared_commands.data);
         }
     }
 }
@@ -578,50 +589,6 @@ pub fn loadTexture(
     return Bitmap.prepareFromPNG(image);
 }
 
-pub fn setView(self: *Self, meters_per_pixel: f32, camera_x: f32, camera_y: f32) void {
-    assert(meters_per_pixel != 0);
-    self.pixels_per_meter = 1.0 / meters_per_pixel;
-    self.camera_position = .{ .x = camera_x, .y = camera_y };
-}
-
-/// Convert world meters to framebuffer pixels, with the camera at the image center.
-pub fn screenFromWorld(self: *Self, x: f32, y: f32) struct { x: f32, y: f32 } {
-    assert(self.pixels_per_meter > 0);
-    return .{
-        .x = (x - self.camera_position.x) * self.pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.width)) / 2.0,
-        .y = (y - self.camera_position.y) * self.pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.height)) / 2.0,
-    };
-}
-
-/// Convert framebuffer pixels to world meters using the current camera and scale.
-pub fn worldFromScreen(self: *Self, x: f32, y: f32) struct { x: f32, y: f32 } {
-    assert(self.pixels_per_meter > 0);
-    return .{
-        .x = (x - @as(f32, @floatFromInt(self.back_buffer.width)) / 2.0) / self.pixels_per_meter + self.camera_position.x,
-        .y = (y - @as(f32, @floatFromInt(self.back_buffer.height)) / 2.0) / self.pixels_per_meter + self.camera_position.y,
-    };
-}
-
-pub fn visibleWorldBounds(self: *Self, camera_x: f32, camera_y: f32, meters_per_pixel: f32) AABB {
-    assert(meters_per_pixel > 0);
-    const pixels_per_meter = 1.0 / meters_per_pixel;
-    const half_width: f32 = @as(f32, @floatFromInt(self.back_buffer.width)) / pixels_per_meter / 2.0;
-    const half_height: f32 = @as(f32, @floatFromInt(self.back_buffer.height)) / pixels_per_meter / 2.0;
-    return .{
-        .min_x = camera_x - half_width,
-        .min_y = camera_y - half_height,
-        .max_x = camera_x + half_width,
-        .max_y = camera_y + half_height,
-    };
-}
-
-fn clearScreen(pixels: *align(tile_alignment) Tile, r: f32, g: f32, b: f32) void {
-    const trace = profile.begin(.renderer_clear);
-    defer profile.end(trace);
-
-    @memset(pixels, packClear(r, g, b));
-}
-
 fn packClear(r: f32, g: f32, b: f32) u32 {
     const red: u8 = @truncate(@as(u32, @intFromFloat(@round(r * 255.0))));
     const green: u8 = @truncate(@as(u32, @intFromFloat(@round(g * 255.0))));
@@ -629,7 +596,7 @@ fn packClear(r: f32, g: f32, b: f32) u32 {
     return (@as(u32, red) << 16) | (@as(u32, green) << 8) | blue;
 }
 
-fn readClearCommand(header: CommandBuffer.Header, command_data: []align(CommandBuffer.data_alignment) const u8) *const Internal.ClearCommand {
+fn readClearCommand(header: PreparedCommandBuffer.Header, command_data: []align(PreparedCommandBuffer.data_alignment) const u8) *const Internal.ClearCommand {
     assert(header.tag == .clear_screen);
     const size = @sizeOf(Internal.ClearCommand);
     assert(command_data.len >= header.offset);
@@ -702,58 +669,31 @@ const PreparedRectangle = struct {
     const Coverage = enum { outside, full, partial };
     const LocalPosition = struct { x: f32, y: f32 };
 
-    /// Pivot fractions are relative to the unrotated top-left; angles are clockwise.
-    /// Returns null for empty geometry or bounds outside the framebuffer.
-    fn init(
-        buffer: FrameBuffer,
-        pivot_screen_x: f32,
-        pivot_screen_y: f32,
-        width: f32,
-        height: f32,
-        pivot_fraction_x: f32,
-        pivot_fraction_y: f32,
-        angle_radians: f32,
-        rounding: BoundsRounding,
-    ) ?PreparedRectangle {
-        @setFloatMode(.optimized);
-        if (width <= 0 or height <= 0) return null;
-        // Exact pixel-centre bounds are only sufficient for an unrotated rectangle.
-        assert(rounding != .pixel_centres or angle_radians == 0);
-
-        const right_x = @cos(angle_radians);
-        const right_y = @sin(angle_radians);
-        const down_x = -right_y;
-        const down_y = right_x;
-
-        const pivot_offset_x = pivot_fraction_x * width;
-        const pivot_offset_y = pivot_fraction_y * height;
-        const x = pivot_screen_x - (pivot_offset_x * right_x + pivot_offset_y * down_x);
-        const y = pivot_screen_y - (pivot_offset_x * right_y + pivot_offset_y * down_y);
-
-        const p1_x = x + width * right_x;
-        const p1_y = y + width * right_y;
-        const p2_x = x + height * down_x;
-        const p2_y = y + height * down_y;
-        const p3_x = x + height * down_x + width * right_x;
-        const p3_y = y + height * down_y + width * right_y;
-        const raw_left = @min(x, p1_x, p2_x, p3_x);
-        const raw_right = @max(x, p1_x, p2_x, p3_x);
-        const raw_top = @min(y, p1_y, p2_y, p3_y);
-        const raw_bottom = @max(y, p1_y, p2_y, p3_y);
-
+    /// Convert transformed geometry into clipped pixel bounds. The camera's
+    /// translation/scale (and, for a rotated view, basis rotation) happens first.
+    fn init(buffer: FrameBuffer, geometry: Renderer.RectangleGeometry, rounding: BoundsRounding) ?PreparedRectangle {
+        // World geometry was validated when recorded. Only conversion overflow
+        // needs checking here, before clipping or converting bounds to integers.
+        // Match construction's rounding headroom for the scaled corner arithmetic.
+        const coordinate_bound = @abs(geometry.origin_x) + @abs(geometry.origin_y) +
+            @abs(geometry.width) + @abs(geometry.height);
+        if (!std.math.isFinite(coordinate_bound * 2.0)) @panic("Rectangle exceeds screen coordinate range");
+        if (geometry.width <= 0 or geometry.height <= 0) return null;
+        assert(rounding != .pixel_centres or (geometry.right_x == 1 and geometry.right_y == 0));
+        const raw = geometry.bounds();
         // At zero rotation, solve x <= i + 0.5 < x + width once at the bounds.
         // Otherwise include candidate pixels and reject uncovered centres below.
-        const left = if (rounding == .pixel_centres) @ceil(raw_left - 0.5) else @floor(raw_left);
-        const top = if (rounding == .pixel_centres) @ceil(raw_top - 0.5) else @floor(raw_top);
-        const right = if (rounding == .pixel_centres) @ceil(raw_right - 0.5) else @ceil(raw_right);
-        const bottom = if (rounding == .pixel_centres) @ceil(raw_bottom - 0.5) else @ceil(raw_bottom);
+        const left = if (rounding == .pixel_centres) @ceil(raw.min_x - 0.5) else @floor(raw.min_x);
+        const top = if (rounding == .pixel_centres) @ceil(raw.min_y - 0.5) else @floor(raw.min_y);
+        const right = if (rounding == .pixel_centres) @ceil(raw.max_x - 0.5) else @ceil(raw.max_x);
+        const bottom = if (rounding == .pixel_centres) @ceil(raw.max_y - 0.5) else @ceil(raw.max_y);
         return .{
-            .x = x,
-            .y = y,
-            .width = width,
-            .height = height,
-            .right_x = right_x,
-            .right_y = right_y,
+            .x = geometry.origin_x,
+            .y = geometry.origin_y,
+            .width = geometry.width,
+            .height = geometry.height,
+            .right_x = geometry.right_x,
+            .right_y = geometry.right_y,
             .bounds = clipped(buffer.width, buffer.height, left, top, right, bottom) orelse return null,
             .bounds_rounding = rounding,
         };
@@ -804,14 +744,10 @@ const PreparedRectangle = struct {
         const max_x = @max(a.x, b.x, c.x, d.x);
         const max_y = @max(a.y, b.y, c.y, d.y);
 
-        // The basis is unit length. Bound rounding in the translated coordinates,
-        // two products and their sum, including cancellation and optimized math.
-        // Near any edge retain the original half-open per-pixel checks.
-        const magnitude = @max(1.0, @abs(left - self.x), @abs(right - self.x), @abs(top - self.y), @abs(bottom - self.y));
-        const margin = 8.0 * std.math.floatEps(f32) * magnitude;
-        if (max_x < -margin or min_x >= self.width + margin) return .outside;
-        if (max_y < -margin or min_y >= self.height + margin) return .outside;
-        if (min_x >= margin and max_x < self.width - margin and min_y >= margin and max_y < self.height - margin) return .full;
+        if (max_x < 0 or min_x >= self.width) return .outside;
+        if (max_y < 0 or min_y >= self.height) return .outside;
+        // Keep samples exactly on an edge on the per-pixel coverage path.
+        if (min_x > 0 and max_x < self.width and min_y > 0 and max_y < self.height) return .full;
         return .partial;
     }
 
@@ -1514,27 +1450,28 @@ pub fn drawTriangle(
 
 test "clear-only frames require no frame allocation" {
     var renderer: Self = undefined;
-    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 67, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 67, .missing_texture_color = .magenta });
     defer renderer.deinit(std.testing.allocator);
     var storage: [0]u8 = .{};
     var frame_allocator = std.heap.FixedBufferAllocator.init(&storage);
-    renderer.beginDrawing(.{ .r = 0.1, .g = 0.4, .b = 0.8, .a = 1 });
-    renderer.endDrawing(frame_allocator.allocator());
+    _ = renderer.beginDrawing(.{ .r = 0.1, .g = 0.4, .b = 0.8, .a = 1 }, .{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 });
+    renderer.endDrawing(frame_allocator.allocator(), &renderer.command_buffer);
     for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0x001a66cc), pixel);
 }
 
 test "clear-only tile jobs preserve other tiles and clip the bottom right edge" {
     var renderer: Self = undefined;
-    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .missing_texture_color = .magenta });
     defer renderer.deinit(std.testing.allocator);
-    renderer.beginDrawing(.black);
-    renderer.submit(.{ .clear_screen = .{ .r = 0.1, .g = 0.4, .b = 0.8 } });
+    _ = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 });
+    renderer.command_buffer.pushClear(.{ .r = 0.1, .g = 0.4, .b = 0.8 });
     // Use a nonzero payload offset, then force the normal playback path too.
-    const header = renderer.command_buffer.headers[1];
-    const headers = [_]CommandBuffer.Header{ header, header };
+    renderer.prepareCommands(&renderer.command_buffer);
+    const header = renderer.prepared_commands.headers[1];
+    const headers = [_]PreparedCommandBuffer.Header{ header, header };
     for ([_]usize{ 1, 2 }) |count| {
         @memset(renderer.back_buffer.pixels(), 0x12345678);
-        renderTile(renderer.back_buffer, .{ .x = 2, .y = 1 }, headers[0..count], renderer.command_buffer.data);
+        renderTile(renderer.back_buffer, .{ .x = 2, .y = 1 }, headers[0..count], renderer.prepared_commands.data);
         for (renderer.back_buffer.pixels(), 0..) |pixel, index| {
             const expected: u32 = if (index % 130 >= 128 and index / 130 >= 64) 0x001a66cc else 0x12345678;
             try std.testing.expectEqual(expected, pixel);
@@ -1567,7 +1504,7 @@ test "rectangle coverage classifies clipped pixel centres conservatively" {
         .{ .x = -1e20, .y = -1e20, .width = 2e20, .height = 2e20, .angle = std.math.pi / 4.0, .bounds = .{ .min_x = 0, .min_y = 0, .max_x = 64, .max_y = 64 }, .expected = .partial },
     };
     for (cases) |case| {
-        var rectangle = PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle, .outward).?;
+        var rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(case.x, case.y, case.width, case.height, 0, 0, case.angle), .outward).?;
         rectangle.bounds = case.bounds;
         try std.testing.expectEqual(case.expected, rectangle.classifyCoverage());
     }
@@ -1590,7 +1527,7 @@ test "classified rectangle kernels match per-pixel coverage across rotated tile 
     };
     var classifications: [3]usize = @splat(0);
     for (cases) |case| {
-        const prepared = PreparedRectangle.init(screen, case.x, case.y, case.width, case.height, 0.5, 0.5, case.angle, .outward) orelse continue;
+        const prepared = PreparedRectangle.init(screen, Renderer.RectangleGeometry.init(case.x, case.y, case.width, case.height, 0.5, 0.5, case.angle), .outward) orelse continue;
         const texels_per_pixel_x = @as(f32, @floatFromInt(texture.width)) / prepared.width;
         const texels_per_pixel_y = @as(f32, @floatFromInt(texture.height)) / prepared.height;
         for (0..2) |row| {
@@ -1652,7 +1589,7 @@ test "solid blends preserve byte-squared rounding at full and partial row tails"
     };
     for (cases) |case| {
         var pixels: Tile align(tile_alignment) = @splat(background);
-        const rectangle = PreparedRectangle.init(screen, case.x, 0, case.width, case.height, 0, 0, 0, case.rounding).?;
+        const rectangle = PreparedRectangle.init(screen, Renderer.RectangleGeometry.init(case.x, 0, case.width, case.height, 0, 0, 0), case.rounding).?;
         drawRectangle(&pixels, rectangle, PreparedSolidColor.init(color));
         for (pixels, 0..) |pixel, index| {
             const x = index % render_tile_size;
@@ -1665,13 +1602,19 @@ test "solid blends preserve byte-squared rounding at full and partial row tails"
 
 test "recorded tile ranges produce compact bins in submission order" {
     var renderer: Self = undefined;
-    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .missing_texture_color = .magenta });
     defer renderer.deinit(std.testing.allocator);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    renderer.setView(1, 65, 33.5);
-    renderer.beginDrawing(.black);
-    const draws = [_]Renderer.DrawRectangleCommand{
+    _ = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = 65, .camera_y = 33.5 });
+    const draws = [_]struct {
+        pivot_world_x: f32,
+        pivot_world_y: f32,
+        width: f32,
+        height: f32,
+        texture: ?Renderer.Texture = null,
+        tint_srgb: ?Color = null,
+    }{
         .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 64, .height = 64 },
         .{ .pivot_world_x = 64, .pivot_world_y = 64, .width = 66, .height = 3 },
         .{ .pivot_world_x = 64, .pivot_world_y = 0, .width = 64, .height = 64, .texture = .missing_texture },
@@ -1680,12 +1623,15 @@ test "recorded tile ranges produce compact bins in submission order" {
         .{ .pivot_world_x = 130, .pivot_world_y = 0, .width = 10, .height = 10 },
     };
     for (draws) |draw| {
-        var command = draw;
-        command.pivot_fraction_x = 0;
-        command.pivot_fraction_y = 0;
-        renderer.submit(.{ .draw_rectangle = command });
+        renderer.command_buffer.pushRect(draw.pivot_world_x, draw.pivot_world_y, draw.width, draw.height, .{
+            .pivot_fraction_x = 0,
+            .pivot_fraction_y = 0,
+            .texture = draw.texture,
+            .tint_srgb = draw.tint_srgb,
+        });
     }
-    renderer.submit(.{ .set_view = .{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 } });
+    renderer.command_buffer.pushView(.{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 });
+    renderer.prepareCommands(&renderer.command_buffer);
     const expected_bounds = [_]TileBounds{
         .{ .min_x = 0, .min_y = 0, .max_x = 3, .max_y = 2 },
         .{ .min_x = 0, .min_y = 0, .max_x = 1, .max_y = 1 },
@@ -1694,83 +1640,86 @@ test "recorded tile ranges produce compact bins in submission order" {
         .{ .min_x = 0, .min_y = 0, .max_x = 1, .max_y = 1 },
         .{ .min_x = 0, .min_y = 0, .max_x = 2, .max_y = 2 },
     };
-    try std.testing.expectEqual(expected_bounds.len, renderer.command_buffer.headers.len);
-    try std.testing.expectEqualSlices(TileBounds, &expected_bounds, renderer.command_buffer.tile_bounds);
-    const bins = try renderer.command_buffer.bin(3, 2, arena.allocator());
+    try std.testing.expectEqual(expected_bounds.len, renderer.prepared_commands.headers.len);
+    try std.testing.expectEqualSlices(TileBounds, &expected_bounds, renderer.prepared_commands.tile_bounds);
+    const bins = try renderer.prepared_commands.bin(3, 2, arena.allocator());
     try std.testing.expectEqualSlices(usize, &.{ 0, 4, 7, 8, 10, 13, 15 }, bins.offsets);
     const expected_commands = [_]usize{ 0, 1, 4, 5, 0, 3, 5, 0, 0, 5, 0, 2, 5, 0, 2 };
     try std.testing.expectEqual(expected_commands.len, bins.headers.len);
     for (bins.headers, expected_commands) |header, command_index| {
-        try std.testing.expectEqualDeep(renderer.command_buffer.headers[command_index], header);
+        try std.testing.expectEqualDeep(renderer.prepared_commands.headers[command_index], header);
     }
 
-    renderer.beginDrawing(.white);
-    const next = try renderer.command_buffer.bin(3, 2, arena.allocator());
-    try std.testing.expectEqual(@as(usize, 1), renderer.command_buffer.tile_bounds.len);
+    _ = renderer.beginDrawing(.white, .{ .meters_per_pixel = 1, .camera_x = 65, .camera_y = 33.5 });
+    renderer.prepareCommands(&renderer.command_buffer);
+    const next = try renderer.prepared_commands.bin(3, 2, arena.allocator());
+    try std.testing.expectEqual(@as(usize, 1), renderer.prepared_commands.tile_bounds.len);
     try std.testing.expectEqual(@as(usize, 6), next.headers.len);
-    for (next.headers) |header| try std.testing.expectEqualDeep(renderer.command_buffer.headers[0], header);
+    for (next.headers) |header| try std.testing.expectEqualDeep(renderer.prepared_commands.headers[0], header);
 }
 
 test "dense bins retain every command at capacity and empty bins need no references" {
     var renderer: Self = undefined;
-    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .missing_texture_color = .magenta });
     defer renderer.deinit(std.testing.allocator);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const empty = try renderer.command_buffer.bin(2, 2, arena.allocator());
+    const empty = try renderer.prepared_commands.bin(2, 2, arena.allocator());
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 0 }, empty.offsets);
     try std.testing.expectEqual(@as(usize, 0), empty.headers.len);
-    for (0..MAX_COMMANDS) |_| renderer.submit(.{ .clear_screen = .{ .r = 0, .g = 0, .b = 0 } });
-    const bins = try renderer.command_buffer.bin(2, 2, arena.allocator());
+    _ = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 });
+    for (1..MAX_COMMANDS) |_| renderer.command_buffer.pushClear(.{ .r = 0, .g = 0, .b = 0 });
+    renderer.prepareCommands(&renderer.command_buffer);
+    const bins = try renderer.prepared_commands.bin(2, 2, arena.allocator());
     try std.testing.expectEqualSlices(usize, &.{ 0, 4096, 8192, 12288, 16384 }, bins.offsets);
     for (0..4) |tile| {
         for (bins.headers[bins.offsets[tile]..bins.offsets[tile + 1]], 0..) |header, expected| {
-            try std.testing.expectEqualDeep(renderer.command_buffer.headers[expected], header);
+            try std.testing.expectEqualDeep(renderer.prepared_commands.headers[expected], header);
         }
     }
 }
 
 test "tile scratch does not consume the frame allocator" {
     var renderer: Self = undefined;
-    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .missing_texture_color = .magenta });
     defer renderer.deinit(std.testing.allocator);
     // Enough for four compact bins; deliberately too small for a 16 KiB tile.
     var storage: [512]u8 align(@alignOf(usize)) = undefined;
     var frame_allocator = std.heap.FixedBufferAllocator.init(&storage);
-    renderer.beginDrawing(.black);
-    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 65, .height = 65, .tint_srgb = .white } });
-    renderer.endDrawing(frame_allocator.allocator());
+    _ = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 });
+    renderer.command_buffer.pushRect(0, 0, 65, 65, .{ .tint_srgb = .white });
+    renderer.endDrawing(frame_allocator.allocator(), &renderer.command_buffer);
     for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0xffffffff), pixel);
 }
 
 test "tile playback uses copied headers independently of the recording array" {
     var renderer: Self = undefined;
-    try renderer.init(std.testing.allocator, .{ .width = 64, .height = 64, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    try renderer.init(std.testing.allocator, .{ .width = 64, .height = 64, .missing_texture_color = .magenta });
     defer renderer.deinit(std.testing.allocator);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    renderer.beginDrawing(.black);
-    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 64, .height = 64, .tint_srgb = .white } });
-    const bins = try renderer.command_buffer.bin(1, 1, arena.allocator());
+    _ = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 });
+    renderer.command_buffer.pushRect(0, 0, 64, 64, .{ .tint_srgb = .white });
+    renderer.prepareCommands(&renderer.command_buffer);
+    const bins = try renderer.prepared_commands.bin(1, 1, arena.allocator());
     // The bin owns its header copies; payload bytes retain their frame lifetime.
-    @memset(renderer.command_buffer.headers, .{ .tag = .clear_screen, .offset = std.math.maxInt(u32) });
-    renderTile(renderer.back_buffer, .{ .x = 0, .y = 0 }, bins.headers, renderer.command_buffer.data);
+    @memset(renderer.prepared_commands.headers, .{ .tag = .clear_screen, .offset = std.math.maxInt(u32) });
+    renderTile(renderer.back_buffer, .{ .x = 0, .y = 0 }, bins.headers, renderer.prepared_commands.data);
     for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0xffffffff), pixel);
 }
 
 test "tiled playback preserves alpha order clear barriers and partial edge tiles" {
     var renderer: Self = undefined;
-    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .missing_texture_color = .magenta });
     defer renderer.deinit(std.testing.allocator);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    renderer.setView(1, 65, 33.5);
-    renderer.beginDrawing(.white);
-    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 260, .height = 134, .tint_srgb = .magenta } });
-    renderer.submit(.{ .clear_screen = .{ .r = 0, .g = 0, .b = 0 } });
-    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 63, .pivot_world_y = 63, .width = 65, .height = 4, .pivot_fraction_x = 0, .pivot_fraction_y = 0, .tint_srgb = .{ .r = 1, .g = 0, .b = 0, .a = 1 } } });
-    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 64, .pivot_world_y = 64, .width = 66, .height = 3, .pivot_fraction_x = 0, .pivot_fraction_y = 0, .tint_srgb = .{ .r = 0, .g = 0, .b = 1, .a = 0.5 } } });
-    renderer.endDrawing(arena.allocator());
+    _ = renderer.beginDrawing(.white, .{ .meters_per_pixel = 1, .camera_x = 65, .camera_y = 33.5 });
+    renderer.command_buffer.pushRect(0, 0, 260, 134, .{ .tint_srgb = .magenta });
+    renderer.command_buffer.pushClear(.{ .r = 0, .g = 0, .b = 0 });
+    renderer.command_buffer.pushRect(63, 63, 65, 4, .{ .pivot_fraction_x = 0, .pivot_fraction_y = 0, .tint_srgb = .{ .r = 1, .g = 0, .b = 0, .a = 1 } });
+    renderer.command_buffer.pushRect(64, 64, 66, 3, .{ .pivot_fraction_x = 0, .pivot_fraction_y = 0, .tint_srgb = .{ .r = 0, .g = 0, .b = 1, .a = 0.5 } });
+    renderer.endDrawing(arena.allocator(), &renderer.command_buffer);
     for (renderer.back_buffer.pixels(), 0..) |pixel, index| {
         const x = index % 130;
         const y = index / 130;
@@ -1781,11 +1730,11 @@ test "tiled playback preserves alpha order clear barriers and partial edge tiles
     }
 
     // Independent tile jobs may finish in any order, including edge tiles first.
-    const bins = try renderer.command_buffer.bin(3, 2, arena.allocator());
+    const bins = try renderer.prepared_commands.bin(3, 2, arena.allocator());
     @memset(renderer.back_buffer.pixels(), 0x12345678);
     var completed: [6]bool = @splat(false);
     for ([_]usize{ 5, 0, 3, 2, 1, 4 }) |tile| {
-        renderTile(renderer.back_buffer, .{ .x = tile % 3, .y = tile / 3 }, bins.headers[bins.offsets[tile]..bins.offsets[tile + 1]], renderer.command_buffer.data);
+        renderTile(renderer.back_buffer, .{ .x = tile % 3, .y = tile / 3 }, bins.headers[bins.offsets[tile]..bins.offsets[tile + 1]], renderer.prepared_commands.data);
         completed[tile] = true;
         for (renderer.back_buffer.pixels(), 0..) |pixel, index| {
             const x = index % 130;
@@ -1798,34 +1747,24 @@ test "tiled playback preserves alpha order clear barriers and partial edge tiles
         }
     }
 
-    renderer.beginDrawing(.black);
-    renderer.endDrawing(arena.allocator());
+    _ = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = 65, .camera_y = 33.5 });
+    renderer.endDrawing(arena.allocator(), &renderer.command_buffer);
     for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0), pixel);
 }
 
 test "submitted sprites preserve texel positions across partial tile boundaries" {
     var renderer: Self = undefined;
-    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .missing_texture_color = .magenta });
     defer renderer.deinit(std.testing.allocator);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    renderer.setView(1, 32.5, 32.5);
     const texture = try renderer.allocTexture(std.testing.allocator, 3, 2);
     const texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff204080, 0xff000000, 0xffffffff };
     @memcpy(renderer.getTexture(texture).pixels, &texels);
     for ([_]?Color{ null, .white }) |tint| {
-        renderer.beginDrawing(.black);
-        renderer.submit(.{ .draw_rectangle = .{
-            .pivot_world_x = 63,
-            .pivot_world_y = 63,
-            .pivot_fraction_x = 0,
-            .pivot_fraction_y = 0,
-            .width = 3,
-            .height = 2,
-            .texture = texture,
-            .tint_srgb = tint,
-        } });
-        renderer.endDrawing(arena.allocator());
+        _ = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = 32.5, .camera_y = 32.5 });
+        renderer.command_buffer.pushRect(63, 63, 3, 2, .{ .pivot_fraction_x = 0, .pivot_fraction_y = 0, .texture = texture, .tint_srgb = tint });
+        renderer.endDrawing(arena.allocator(), &renderer.command_buffer);
         for (renderer.back_buffer.pixels(), 0..) |pixel, index| {
             const x = index % 65;
             const y = index / 65;
@@ -1839,7 +1778,7 @@ test "native size texture preserves pixel channels and row stride" {
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff204080, 0xff000000, 0xffffffff };
     var pixels: Tile align(tile_alignment) = @splat(0);
     const buffer: FrameBuffer = .{ .width = 3, .height = 2, .data = undefined };
-    const rectangle = PreparedRectangle.init(buffer, 0, 0, 3, 2, 0, 0, 0, .outward).?;
+    const rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(0, 0, 3, 2, 0, 0, 0), .outward).?;
     const texture: Bitmap = .{ .width = 3, .height = 2, .pixels = &texels };
     drawTexturedRectangle(&pixels, rectangle, texture, 1, 1, LinearColor.init(.white));
     for (pixels, 0..) |pixel, index| {
@@ -1856,11 +1795,11 @@ test "bilinear texture filtering averages linear colors and clamps edge texels" 
     var pixels: Tile align(tile_alignment) = @splat(0);
     const buffer: FrameBuffer = .{ .width = 4, .height = 4, .data = undefined };
     // The centre averages all four texels: each linear RGB channel is 0.5.
-    const small_rectangle = PreparedRectangle.init(buffer, 0, 0, 1, 1, 0, 0, 0, .outward).?;
+    const small_rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(0, 0, 1, 1, 0, 0, 0), .outward).?;
     drawTexturedRectangle(&pixels, small_rectangle, texture, 2, 2, LinearColor.init(.white));
     try std.testing.expectEqual(@as(u32, 0xffb4b4b4), pixels[0]);
 
-    const large_rectangle = PreparedRectangle.init(buffer, 0, 0, 4, 4, 0, 0, 0, .outward).?;
+    const large_rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(0, 0, 4, 4, 0, 0, 0), .outward).?;
     drawTexturedRectangle(&pixels, large_rectangle, texture, 0.5, 0.5, LinearColor.init(.white));
     try std.testing.expectEqual(@as(u32, 0xffff0000), pixels[0]);
     try std.testing.expectEqual(@as(u32, 0xff00ff00), pixels[3]);
@@ -1929,7 +1868,7 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
         const buffer: FrameBuffer = .{ .width = 16, .height = 16, .data = undefined };
 
         const rounding: PreparedRectangle.BoundsRounding = if (case.angle_radians == 0) .pixel_centres else .outward;
-        if (PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, rounding)) |rectangle| {
+        if (PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(case.x, case.y, case.width, case.height, 0, 0, case.angle_radians), rounding)) |rectangle| {
             drawRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, PreparedSolidColor.init(.white));
         }
 
@@ -2008,7 +1947,7 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
                 .pixels = texels[0 .. case.texture_width * case.texture_height],
             };
 
-            if (PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, .outward)) |rectangle| {
+            if (PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(case.x, case.y, case.width, case.height, 0, 0, case.angle_radians), .outward)) |rectangle| {
                 const texels_per_pixel_x = @as(f32, @floatFromInt(texture.width)) / rectangle.width;
                 const texels_per_pixel_y = @as(f32, @floatFromInt(texture.height)) / rectangle.height;
                 if (direct_tile) {
@@ -2035,7 +1974,7 @@ test "opaque rotated rectangles overwrite only covered pixels" {
     const color: Color = .{ .r = 0.1, .g = 0.4, .b = 0.8, .a = 1 };
     const expected_color = color.toARGB();
     for ([_]f32{ 0.2, -0.7, std.math.pi / 4.0 }) |angle| {
-        const rectangle = PreparedRectangle.init(buffer, 32, 32, 60, 3, 0.5, 0.5, angle, .outward).?;
+        const rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(32, 32, 60, 3, 0.5, 0.5, angle), .outward).?;
         try std.testing.expectEqual(PreparedRectangle.Coverage.partial, rectangle.classifyCoverage());
         for ([_]u32{ 0x12345678, 0xffabcdef }) |background| {
             var pixels: Tile align(tile_alignment) = @splat(background);
@@ -2056,7 +1995,7 @@ test "opaque rotated rectangles overwrite only covered pixels" {
 test "rotated rectangles blend only covered pixel centres" {
     var pixels: Tile align(tile_alignment) = @splat(0xff0000ff);
     const buffer: FrameBuffer = .{ .width = 8, .height = 8, .data = undefined };
-    const rectangle = PreparedRectangle.init(buffer, 4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0, .outward).?;
+    const rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0), .outward).?;
     drawRectangle(&pixels, rectangle, PreparedSolidColor.init(.{ .r = 1, .g = 0, .b = 0, .a = 0.5 }));
 
     // A 45-degree square forms a diamond. These pixel centres are strictly

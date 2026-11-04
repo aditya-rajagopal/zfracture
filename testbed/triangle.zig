@@ -15,11 +15,10 @@ pub fn main(init: std.process.Init) !void {
     const width = 1280;
     const height = 720;
 
-    var renderer: fr.Renderer = undefined;
+    var renderer: fr.SoftwareRenderer = undefined;
     try renderer.init(allocator, .{
         .width = width,
         .height = height,
-        .pixels_per_meter = 1,
         .missing_texture_color = .magenta,
     });
 
@@ -35,6 +34,7 @@ pub fn main(init: std.process.Init) !void {
     var pacing_error: ?fr.Platform.PaceFrameError = null;
 
     while (true) {
+        _ = arena.reset(.retain_capacity);
         const frame_start = std.Io.Clock.awake.now(init.io);
         defer {
             platform.paceFrame(init.io, frame_start, frame_duration) catch |err| {
@@ -61,8 +61,8 @@ pub fn main(init: std.process.Init) !void {
         const c_x = 3 * width / 4;
         const c_y = 3 * height / 4;
 
-        renderer.beginDrawing(.{ .r = 0.08, .g = 0.08, .b = 0.08 });
-        renderer.endDrawing();
+        const commands = renderer.beginDrawing(.{ .r = 0.08, .g = 0.08, .b = 0.08 }, .{ .meters_per_pixel = 1, .camera_x = width / 2, .camera_y = height / 2 });
+        renderer.endDrawing(arena.allocator(), commands);
         renderer.drawTriangle(a_x, a_y, b_x, b_y, c_x, c_y, .white);
         platform.present();
     }
