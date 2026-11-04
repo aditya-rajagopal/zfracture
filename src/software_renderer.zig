@@ -1211,35 +1211,44 @@ fn drawRectangleWide(
         var x = x_min;
         const row_local_x = translated_y * right_y;
         const row_local_y = translated_y * right_x;
-        // NOTE(adi): I will forget why i did this so... we take as many full strides of our lanes as we can
-        // and reduce the need for the select and masking. This actually does reduce the number of instructions
-        // for most of teh common cases.
-        if (fully_covered) {
-            while (x + rectangle_lanes <= x_max) : (x += rectangle_lanes) {
-                const destination: LaneU32 = row[x..][0..rectangle_lanes].*;
-                var result = opaque_pixel;
-                if (!opaque_source) {
-                    var destination_b: LaneF32 = @floatFromInt(destination & channel);
-                    var destination_g: LaneF32 = @floatFromInt((destination >> shift_g) & channel);
-                    var destination_r: LaneF32 = @floatFromInt((destination >> shift_r) & channel);
-
-                    destination_r = destination_r * destination_r;
-                    destination_g = destination_g * destination_g;
-                    destination_b = destination_b * destination_b;
-
-                    const blended_r = @sqrt(source_r + destination_r * inverse_alpha);
-                    const blended_g = @sqrt(source_g + destination_g * inverse_alpha);
-                    const blended_b = @sqrt(source_b + destination_b * inverse_alpha);
-
-                    const final_r: LaneU32 = @intFromFloat(@round(blended_r));
-                    const final_g: LaneU32 = @intFromFloat(@round(blended_g));
-                    const final_b: LaneU32 = @intFromFloat(@round(blended_b));
-                    result = alpha_bits | (final_r << shift_r) | (final_g << shift_g) | final_b;
-                }
-                row[x..][0..rectangle_lanes].* = result;
+        while (x + rectangle_lanes <= x_max) : (x += rectangle_lanes) {
+            var mask: LaneMask = @splat(true);
+            if (!fully_covered) {
+                const pixel_x = @as(LaneF32, @splat(@as(f32, @floatFromInt(x)))) + lane_centers;
+                const translated_x = pixel_x - origin_x;
+                const local_x = translated_x * right_x + row_local_x;
+                const local_y = translated_x * negative_right_y + row_local_y;
+                const outside = (local_x < zero) | (local_x >= width) |
+                    (local_y < zero) | (local_y >= height);
+                mask = ~outside;
+                if (!@reduce(.Or, mask)) continue;
             }
+
+            const destination: LaneU32 = row[x..][0..rectangle_lanes].*;
+            var result = opaque_pixel;
+            if (!opaque_source) {
+                var destination_b: LaneF32 = @floatFromInt(destination & channel);
+                var destination_g: LaneF32 = @floatFromInt((destination >> shift_g) & channel);
+                var destination_r: LaneF32 = @floatFromInt((destination >> shift_r) & channel);
+
+                destination_r = destination_r * destination_r;
+                destination_g = destination_g * destination_g;
+                destination_b = destination_b * destination_b;
+
+                const blended_r = @sqrt(source_r + destination_r * inverse_alpha);
+                const blended_g = @sqrt(source_g + destination_g * inverse_alpha);
+                const blended_b = @sqrt(source_b + destination_b * inverse_alpha);
+
+                const final_r: LaneU32 = @intFromFloat(@round(blended_r));
+                const final_g: LaneU32 = @intFromFloat(@round(blended_g));
+                const final_b: LaneU32 = @intFromFloat(@round(blended_b));
+                result = alpha_bits | (final_r << shift_r) | (final_g << shift_g) | final_b;
+            }
+            row[x..][0..rectangle_lanes].* = if (fully_covered) result else @select(u32, mask, result, destination);
         }
-        while (x < x_max) : (x += rectangle_lanes) {
+        // At most one short chunk remains. Keep the lower bound when sliding it
+        // back into the row so previously blended pixels are not blended twice.
+        if (x < x_max) {
             const start = @min(x, render_tile_size - rectangle_lanes);
             const lane_x = @as(LaneU32, @splat(@intCast(start))) + lane_index;
             var mask: LaneMask = (lane_x >= @as(LaneU32, @splat(@intCast(x)))) & (lane_x < x_high);
@@ -1596,6 +1605,41 @@ test "solid blends preserve byte-squared rounding at full and partial row tails"
             const y = index / render_tile_size;
             const expected: u32 = if (x >= case.first_x and x < case.end_x and y < case.end_y) 0xfffbeefb else background;
             try std.testing.expectEqual(expected, pixel);
+        }
+    }
+}
+
+test "partial solid rows preserve coverage across lane widths and shifted tails" {
+    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const background: u32 = 0xff183a71;
+    // The geometry starts on pixel centres and ends on excluded pixel centres.
+    // Outward bounds include that ending edge, forcing partial coverage even
+    // when the horizontal span contains complete vector chunks.
+    for (0..render_tile_size) |start| {
+        for ([_]usize{ 1, 15, 16, 17, 31, 32, 33, 47, 48, 49, 63, 64 }) |width| {
+            const rectangle = PreparedRectangle.init(screen, Renderer.RectangleGeometry.init(
+                @as(f32, @floatFromInt(start)) + 0.5,
+                1.5,
+                @floatFromInt(width),
+                3,
+                0,
+                0,
+                0,
+            ), .outward).?;
+            try std.testing.expectEqual(PreparedRectangle.Coverage.partial, rectangle.classifyCoverage());
+            for (
+                [_]Color{ .white, .{ .r = 0.8, .g = 0.3, .b = 0.1, .a = 0.5 } },
+                [_]u32{ 0xffffffff, 0xff914452 },
+            ) |color, blended| {
+                var pixels: Tile align(tile_alignment) = @splat(background);
+                drawRectangle(&pixels, rectangle, PreparedSolidColor.init(color));
+                for (pixels, 0..) |pixel, index| {
+                    const x = index % render_tile_size;
+                    const y = index / render_tile_size;
+                    const covered = x >= start and x < start + width and y >= 1 and y < 4;
+                    try std.testing.expectEqual(if (covered) blended else background, pixel);
+                }
+            }
         }
     }
 }
