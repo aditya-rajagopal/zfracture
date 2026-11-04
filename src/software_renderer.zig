@@ -25,6 +25,36 @@ command_buffer: CommandBuffer,
 
 const render_tile_size: u64 = 64;
 
+const Tile = [render_tile_size * render_tile_size]u32;
+const tile_alignment = std.heap.page_size_max;
+
+const TileBounds = struct {
+    min_x: u16,
+    min_y: u16,
+    max_x: u16,
+    max_y: u16,
+
+    fn init(bounds: AABB) TileBounds {
+        const min_x: u16 = @intFromFloat(bounds.min_x);
+        const min_y: u16 = @intFromFloat(bounds.min_y);
+        const max_x: u16 = @intFromFloat(bounds.max_x);
+        const max_y: u16 = @intFromFloat(bounds.max_y);
+        assert(min_x < max_x);
+        assert(min_y < max_y);
+        return .{
+            .min_x = @intCast(min_x / render_tile_size),
+            .min_y = @intCast(min_y / render_tile_size),
+            .max_x = @intCast((max_x - 1) / render_tile_size + 1),
+            .max_y = @intCast((max_y - 1) / render_tile_size + 1),
+        };
+    }
+};
+
+const TileBins = struct {
+    offsets: []usize,
+    headers: []CommandBuffer.Header,
+};
+
 pub const CommandBuffer = struct {
     pub const data_alignment = @max(
         @alignOf(Internal.ClearCommand),
@@ -40,6 +70,50 @@ pub const CommandBuffer = struct {
 
     headers: []Header,
     data: []align(data_alignment) u8,
+    tile_bounds: []TileBounds,
+
+    fn bin(self: CommandBuffer, cols: usize, rows: usize, arena: std.mem.Allocator) !TileBins {
+        assert(self.headers.len == self.tile_bounds.len);
+        assert(self.headers.len <= MAX_COMMANDS);
+        assert(cols <= 1024 and rows <= 1024); // ceil(maxInt(u16) / 64)
+        const tile_count = cols * rows;
+        const counts = try arena.alloc(u16, tile_count);
+        @memset(counts, 0);
+
+        for (self.tile_bounds) |bounds| {
+            assert(bounds.min_x <= bounds.max_x and bounds.max_x <= cols);
+            assert(bounds.min_y <= bounds.max_y and bounds.max_y <= rows);
+            for (bounds.min_y..bounds.max_y) |row| {
+                for (bounds.min_x..bounds.max_x) |col| {
+                    counts[row * cols + col] += 1;
+                }
+            }
+        }
+
+        const offsets = try arena.alloc(usize, tile_count + 1);
+        offsets[0] = 0;
+        for (counts, 0..) |count, tile| {
+            assert(count <= self.headers.len);
+            offsets[tile + 1] = offsets[tile] + count;
+        }
+        const headers = try arena.alloc(Header, offsets[tile_count]);
+
+        // Reuse the counts as write cursors. Walking commands in submission order
+        // preserves blending and clear barriers without sorting each tile's bin.
+        @memset(counts, 0);
+        for (self.tile_bounds, self.headers) |bounds, header| {
+            for (bounds.min_y..bounds.max_y) |row| {
+                for (bounds.min_x..bounds.max_x) |col| {
+                    const tile = row * cols + col;
+                    const destination = offsets[tile] + counts[tile];
+                    assert(destination < offsets[tile + 1]);
+                    headers[destination] = header;
+                    counts[tile] += 1;
+                }
+            }
+        }
+        return .{ .offsets = offsets, .headers = headers };
+    }
 };
 
 pub const Config = struct {
@@ -76,6 +150,9 @@ pub fn init(
     const headers = try gpa.alloc(CommandBuffer.Header, MAX_COMMANDS);
     errdefer gpa.free(headers);
 
+    const tile_bounds = try gpa.alloc(TileBounds, MAX_COMMANDS);
+    errdefer gpa.free(tile_bounds);
+
     const data = try gpa.alignedAlloc(
         u8,
         .fromByteUnits(CommandBuffer.data_alignment),
@@ -86,9 +163,10 @@ pub fn init(
     const missing_pixels = try gpa.alloc(u32, 1);
     missing_pixels[0] = config.missing_texture_color.toARGB();
 
-    self.command_buffer = .{ .headers = headers, .data = data };
+    self.command_buffer = .{ .headers = headers, .data = data, .tile_bounds = tile_bounds };
     self.command_buffer.headers.len = 0;
     self.command_buffer.data.len = 0;
+    self.command_buffer.tile_bounds.len = 0;
     self.pixels_per_meter = config.pixels_per_meter;
     self.camera_position.x = 0;
     self.camera_position.y = 0;
@@ -102,8 +180,10 @@ pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
     gpa.free(self.back_buffer.data);
     self.command_buffer.headers.len = MAX_COMMANDS;
     self.command_buffer.data.len = MAX_DATA;
+    self.command_buffer.tile_bounds.len = MAX_COMMANDS;
     gpa.free(self.command_buffer.headers);
     gpa.free(self.command_buffer.data);
+    gpa.free(self.command_buffer.tile_bounds);
     for (self.textures[0..self.head]) |texture| {
         gpa.free(texture.pixels);
     }
@@ -141,14 +221,22 @@ const Internal = struct {
 };
 
 pub fn submit(self: *Self, command: Renderer.Command) void {
+    assert(self.command_buffer.headers.len == self.command_buffer.tile_bounds.len);
     assert(self.command_buffer.headers.len < MAX_COMMANDS);
     assert(self.command_buffer.data.len <= (MAX_COMMANDS - 1) * max_command_size);
 
     const tag_head = self.command_buffer.headers.len;
     var header: CommandBuffer.Header = undefined;
+    var tile_bounds: TileBounds = undefined;
 
     switch (command) {
         .clear_screen => |cc| {
+            tile_bounds = .{
+                .min_x = 0,
+                .min_y = 0,
+                .max_x = @intCast((self.back_buffer.width + render_tile_size - 1) / render_tile_size),
+                .max_y = @intCast((self.back_buffer.height + render_tile_size - 1) / render_tile_size),
+            };
             const bytes = std.mem.asBytes(&Internal.ClearCommand{ .r = cc.r, .g = cc.g, .b = cc.b });
             const start = std.mem.alignForward(usize, self.command_buffer.data.len, @alignOf(Internal.ClearCommand));
             self.command_buffer.data.len = start + bytes.len;
@@ -178,6 +266,8 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
                 rect.angle_radians,
                 rounding,
             ) orelse return;
+
+            tile_bounds = TileBounds.init(rectangle.bounds);
 
             if (rect.texture) |texture| {
                 if (rect.angle_radians == 0 and rect.tint_srgb == null) {
@@ -220,163 +310,109 @@ pub fn submit(self: *Self, command: Renderer.Command) void {
         },
     }
     self.command_buffer.headers.len += 1;
+    self.command_buffer.tile_bounds.len += 1;
     self.command_buffer.headers[tag_head] = header;
+    self.command_buffer.tile_bounds[tag_head] = tile_bounds;
 }
 
 pub fn beginDrawing(self: *Self, clear_color: Color) void {
     self.command_buffer.headers.len = 0;
     self.command_buffer.data.len = 0;
+    self.command_buffer.tile_bounds.len = 0;
     self.submit(.{ .clear_screen = .{ .r = clear_color.r, .g = clear_color.g, .b = clear_color.b } });
 }
 
-/// Tile IDs are zero-based column/row coordinates; shared command data stays in screen space.
+/// Render and copy one tile using private stack scratch. Tile IDs are zero-based
+/// column/row coordinates; shared command data stays in screen space. Keep headers,
+/// payloads and referenced textures immutable and alive until all tile calls finish.
 pub fn renderTile(
-    frame_buffer: FrameBuffer,
+    back_buffer: FrameBuffer,
     tile_id: struct { x: usize, y: usize },
-    command_buffer: CommandBuffer,
+    headers: []const CommandBuffer.Header,
+    command_data: []align(CommandBuffer.data_alignment) const u8,
 ) void {
+    var tile_pixels: Tile align(tile_alignment) = undefined;
     const tile_x: f32 = @floatFromInt(tile_id.x * render_tile_size);
     const tile_y: f32 = @floatFromInt(tile_id.y * render_tile_size);
-    for (command_buffer.headers) |header| {
+    for (headers) |header| {
         switch (header.tag) {
             .clear_screen => {
                 const size = @sizeOf(Internal.ClearCommand);
-                assert(command_buffer.data.len >= header.offset);
-                assert(command_buffer.data.len - header.offset >= size);
-                const cc: *const Internal.ClearCommand = @ptrCast(@alignCast(command_buffer.data[header.offset..][0..size]));
-                clearScreen(frame_buffer, cc.r, cc.g, cc.b);
+                assert(command_data.len >= header.offset);
+                assert(command_data.len - header.offset >= size);
+                const cc: *const Internal.ClearCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
+                clearScreen(&tile_pixels, cc.r, cc.g, cc.b);
             },
             .draw_rectangle => {
                 const size = @sizeOf(Internal.DrawRectangleCommand);
-                assert(command_buffer.data.len >= header.offset);
-                assert(command_buffer.data.len - header.offset >= size);
-                const rect: *const Internal.DrawRectangleCommand = @ptrCast(@alignCast(command_buffer.data[header.offset..][0..size]));
-                const rectangle = rect.rectangle.forTile(frame_buffer, tile_x, tile_y) orelse continue;
-                drawRectangle(frame_buffer, rectangle, rect.color_srgb);
+                assert(command_data.len >= header.offset);
+                assert(command_data.len - header.offset >= size);
+                const rect: *const Internal.DrawRectangleCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
+                const rectangle = rect.rectangle.forTile(tile_x, tile_y) orelse continue;
+                drawRectangle(&tile_pixels, rectangle, rect.color_srgb);
             },
             .draw_sprite => {
                 const size = @sizeOf(Internal.DrawSpriteCommand);
-                assert(command_buffer.data.len >= header.offset);
-                assert(command_buffer.data.len - header.offset >= size);
-                const sprite: *const Internal.DrawSpriteCommand = @ptrCast(@alignCast(command_buffer.data[header.offset..][0..size]));
-                const rectangle = sprite.rectangle.forTile(frame_buffer, tile_x, tile_y) orelse continue;
-                drawSprite(frame_buffer, rectangle, sprite.texture);
+                assert(command_data.len >= header.offset);
+                assert(command_data.len - header.offset >= size);
+                const sprite: *const Internal.DrawSpriteCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
+                const rectangle = sprite.rectangle.forTile(tile_x, tile_y) orelse continue;
+                drawSprite(&tile_pixels, rectangle, sprite.texture);
             },
             .draw_textured_rectangle => {
                 const size = @sizeOf(Internal.DrawTexturedRectangleCommand);
-                assert(command_buffer.data.len >= header.offset);
-                assert(command_buffer.data.len - header.offset >= size);
-                const trect: *const Internal.DrawTexturedRectangleCommand = @ptrCast(@alignCast(command_buffer.data[header.offset..][0..size]));
-                const rectangle = trect.rectangle.forTile(frame_buffer, tile_x, tile_y) orelse continue;
-                drawTexturedRectangle(frame_buffer, rectangle, trect.texture, trect.tint_srgb);
+                assert(command_data.len >= header.offset);
+                assert(command_data.len - header.offset >= size);
+                const trect: *const Internal.DrawTexturedRectangleCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
+                const rectangle = trect.rectangle.forTile(tile_x, tile_y) orelse continue;
+                drawTexturedRectangle(&tile_pixels, rectangle, trect.texture, trect.tint_srgb);
             },
         }
+    }
+
+    const tile_bounds: AABB = .{
+        .min_x = tile_x,
+        .max_x = @as(f32, @floatFromInt((tile_id.x + 1) * render_tile_size)),
+        .min_y = tile_y,
+        .max_y = @as(f32, @floatFromInt((tile_id.y + 1) * render_tile_size)),
+    };
+    const range = clipped(
+        back_buffer.width,
+        back_buffer.height,
+        tile_bounds.min_x,
+        tile_bounds.min_y,
+        tile_bounds.max_x,
+        tile_bounds.max_y,
+    ) orelse unreachable;
+
+    const x_min: usize = @intFromFloat(range.min_x);
+    const y_min: usize = @intFromFloat(range.min_y);
+    const x_max: usize = @intFromFloat(range.max_x);
+    const y_max: usize = @intFromFloat(range.max_y);
+
+    const destination_pixels = back_buffer.pixels();
+    const copy_width = x_max - x_min;
+    // Tile rows and framebuffer rows have different strides.
+    for (y_min..y_max, 0..) |destination_y, source_y| {
+        const source_start = source_y * render_tile_size;
+        const destination_start = destination_y * @as(usize, back_buffer.width) + x_min;
+        @memcpy(
+            destination_pixels[destination_start..][0..copy_width],
+            tile_pixels[source_start..][0..copy_width],
+        );
     }
 }
 
 pub fn endDrawing(self: *Self, arena: std.mem.Allocator) void {
     const rows = @divFloor((self.back_buffer.height + render_tile_size - 1), render_tile_size);
     const cols = @divFloor((self.back_buffer.width + render_tile_size - 1), render_tile_size);
-
-    const back_buffer = FrameBuffer.initCapacity(render_tile_size, render_tile_size, arena) catch unreachable;
-
-    // Each tile owns its header list until the frame arena is reset.
-    // Finish binning before rendering so future jobs can share immutable command data.
-    const bins = arena.alloc(std.ArrayList(CommandBuffer.Header), rows * cols) catch unreachable;
-    for (bins) |*bin| {
-        bin.* = std.ArrayList(CommandBuffer.Header).initCapacity(
-            arena,
-            self.command_buffer.headers.len,
-        ) catch unreachable;
-    }
-
-    headers: for (self.command_buffer.headers) |header| {
-        const rect_bounds = bounds: switch (header.tag) {
-            .clear_screen => {
-                for (bins) |*bin| bin.appendAssumeCapacity(header);
-                continue :headers;
-            },
-            .draw_rectangle => {
-                const size = @sizeOf(Internal.DrawRectangleCommand);
-                assert(self.command_buffer.data.len >= header.offset);
-                assert(self.command_buffer.data.len - header.offset >= size);
-                const rect: *const Internal.DrawRectangleCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
-                break :bounds rect.rectangle.bounds;
-            },
-            .draw_sprite => {
-                const size = @sizeOf(Internal.DrawSpriteCommand);
-                assert(self.command_buffer.data.len >= header.offset);
-                assert(self.command_buffer.data.len - header.offset >= size);
-                const sprite: *const Internal.DrawSpriteCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
-                break :bounds sprite.rectangle.bounds;
-            },
-            .draw_textured_rectangle => {
-                const size = @sizeOf(Internal.DrawTexturedRectangleCommand);
-                assert(self.command_buffer.data.len >= header.offset);
-                assert(self.command_buffer.data.len - header.offset >= size);
-                const trect: *const Internal.DrawTexturedRectangleCommand = @ptrCast(@alignCast(self.command_buffer.data[header.offset..][0..size]));
-                break :bounds trect.rectangle.bounds;
-            },
-        };
-
-        const x_min: usize = @intFromFloat(rect_bounds.min_x);
-        const y_min: usize = @intFromFloat(rect_bounds.min_y);
-        const x_max: usize = @intFromFloat(rect_bounds.max_x);
-        const y_max: usize = @intFromFloat(rect_bounds.max_y);
-        assert(x_min < x_max);
-        assert(y_min < y_max);
-        assert(x_max <= self.back_buffer.width);
-        assert(y_max <= self.back_buffer.height);
-
-        // Prepared bounds are half-open pixel ranges; an ending edge owns no next tile.
-        const first_col = @divFloor(x_min, render_tile_size);
-        const end_col = @divFloor(x_max - 1, render_tile_size) + 1;
-        const first_row = @divFloor(y_min, render_tile_size);
-        const end_row = @divFloor(y_max - 1, render_tile_size) + 1;
-        for (first_row..end_row) |row| {
-            for (first_col..end_col) |col| {
-                bins[row * cols + col].appendAssumeCapacity(header);
-            }
-        }
-    }
+    const bins = self.command_buffer.bin(cols, rows, arena) catch unreachable;
 
     for (0..rows) |row| {
         for (0..cols) |col| {
-            const tile_bounds: AABB = .{
-                .min_x = @as(f32, @floatFromInt(col * render_tile_size)),
-                .max_x = @as(f32, @floatFromInt((col + 1) * render_tile_size)),
-                .min_y = @as(f32, @floatFromInt(row * render_tile_size)),
-                .max_y = @as(f32, @floatFromInt((row + 1) * render_tile_size)),
-            };
-            const range = clipped(
-                self.back_buffer,
-                tile_bounds.min_x,
-                tile_bounds.min_y,
-                tile_bounds.max_x,
-                tile_bounds.max_y,
-            ) orelse unreachable;
-
-            const commands = bins[row * cols + col].items;
-
-            renderTile(back_buffer, .{ .x = col, .y = row }, .{ .headers = commands, .data = self.command_buffer.data });
-
-            const x_min: usize = @intFromFloat(range.min_x);
-            const y_min: usize = @intFromFloat(range.min_y);
-            const x_max: usize = @intFromFloat(range.max_x);
-            const y_max: usize = @intFromFloat(range.max_y);
-
-            const tile_pixels = back_buffer.pixels();
-            const destination_pixels = self.back_buffer.pixels();
-            const copy_width = x_max - x_min;
-            // Tile rows and framebuffer rows have different strides.
-            for (y_min..y_max, 0..) |destination_y, tile_y| {
-                const source_start = tile_y * @as(usize, back_buffer.width);
-                const destination_start = destination_y * @as(usize, self.back_buffer.width) + x_min;
-                @memcpy(
-                    destination_pixels[destination_start..][0..copy_width],
-                    tile_pixels[source_start..][0..copy_width],
-                );
-            }
+            const tile = row * cols + col;
+            const commands = bins.headers[bins.offsets[tile]..bins.offsets[tile + 1]];
+            renderTile(self.back_buffer, .{ .x = col, .y = row }, commands, self.command_buffer.data);
         }
     }
 }
@@ -511,7 +547,7 @@ pub fn visibleWorldBounds(self: *Self, camera_x: f32, camera_y: f32, meters_per_
     };
 }
 
-fn clearScreen(frame_buffer: FrameBuffer, r: f32, g: f32, b: f32) void {
+fn clearScreen(pixels: *align(tile_alignment) Tile, r: f32, g: f32, b: f32) void {
     const trace = profile.begin(.renderer_clear);
     defer profile.end(trace);
 
@@ -524,18 +560,18 @@ fn clearScreen(frame_buffer: FrameBuffer, r: f32, g: f32, b: f32) void {
 
     const clear_colour: u32 = (@as(u32, r_int) << 16) | (@as(u32, g_int) << 8) | b_int;
 
-    @memset(frame_buffer.pixels(), clear_colour);
+    @memset(pixels, clear_colour);
 }
 
-fn clipped(buffer: FrameBuffer, left: f32, top: f32, right: f32, bottom: f32) ?AABB {
+fn clipped(width: u16, height: u16, left: f32, top: f32, right: f32, bottom: f32) ?AABB {
     @setFloatMode(.optimized);
     // Keep offscreen coordinates in floating point until the intersection
     // bounds them to the framebuffer; finite inputs can be larger than i64.
     const bounds: AABB = .{
         .min_x = @max(left, 0),
         .min_y = @max(top, 0),
-        .max_x = @min(right, @as(f32, @floatFromInt(buffer.width))),
-        .max_y = @min(bottom, @as(f32, @floatFromInt(buffer.height))),
+        .max_x = @min(right, @as(f32, @floatFromInt(width))),
+        .max_y = @min(bottom, @as(f32, @floatFromInt(height))),
     };
     if (bounds.max_x <= bounds.min_x or bounds.max_y <= bounds.min_y) return null;
     return bounds;
@@ -556,6 +592,8 @@ const PreparedRectangle = struct {
     bounds_rounding: BoundsRounding,
 
     const BoundsRounding = enum { pixel_centres, outward };
+    const Coverage = enum { outside, full, partial };
+    const LocalPosition = struct { x: f32, y: f32 };
 
     /// Pivot fractions are relative to the unrotated top-left; angles are clockwise.
     /// Returns null for empty geometry or bounds outside the framebuffer.
@@ -611,18 +649,19 @@ const PreparedRectangle = struct {
             .right_y = right_y,
             .down_x = down_x,
             .down_y = down_y,
-            .bounds = clipped(buffer, left, top, right, bottom) orelse return null,
+            .bounds = clipped(buffer.width, buffer.height, left, top, right, bottom) orelse return null,
             .bounds_rounding = rounding,
         };
     }
 
-    fn forTile(self: PreparedRectangle, buffer: FrameBuffer, tile_x: f32, tile_y: f32) ?PreparedRectangle {
+    fn forTile(self: PreparedRectangle, tile_x: f32, tile_y: f32) ?PreparedRectangle {
         var rectangle = self;
         rectangle.x -= tile_x;
         rectangle.y -= tile_y;
         // Clip only the raster bounds; preserve geometry size and orientation for sampling.
         rectangle.bounds = clipped(
-            buffer,
+            render_tile_size,
+            render_tile_size,
             self.bounds.min_x - tile_x,
             self.bounds.min_y - tile_y,
             self.bounds.max_x - tile_x,
@@ -631,30 +670,65 @@ const PreparedRectangle = struct {
         return rectangle;
     }
 
-    fn coveredPosition(self: PreparedRectangle, pixel_x: f32, pixel_y: f32) ?struct { x: f32, y: f32 } {
+    fn localPosition(self: PreparedRectangle, pixel_x: f32, pixel_y: f32) LocalPosition {
         @setFloatMode(.optimized);
         const translated_x = pixel_x - self.x;
         const translated_y = pixel_y - self.y;
-        const local_x = translated_x * self.right_x + translated_y * self.right_y;
-        const local_y = translated_x * self.down_x + translated_y * self.down_y;
+        return .{
+            .x = translated_x * self.right_x + translated_y * self.right_y,
+            .y = translated_x * self.down_x + translated_y * self.down_y,
+        };
+    }
+
+    /// Classify the clipped raster region's sample centres, not its pixel edges.
+    /// A separating rectangle-local axis proves rejection; four outside corners
+    /// alone do not, since the region can contain or cross the rectangle.
+    fn classifyCoverage(self: PreparedRectangle) Coverage {
+        assert(self.bounds.min_x < self.bounds.max_x);
+        assert(self.bounds.min_y < self.bounds.max_y);
+        const left = self.bounds.min_x + 0.5;
+        const top = self.bounds.min_y + 0.5;
+        const right = self.bounds.max_x - 0.5;
+        const bottom = self.bounds.max_y - 0.5;
+        const a = self.localPosition(left, top);
+        const b = self.localPosition(right, top);
+        const c = self.localPosition(left, bottom);
+        const d = self.localPosition(right, bottom);
+        const min_x = @min(a.x, b.x, c.x, d.x);
+        const min_y = @min(a.y, b.y, c.y, d.y);
+        const max_x = @max(a.x, b.x, c.x, d.x);
+        const max_y = @max(a.y, b.y, c.y, d.y);
+
+        // The basis is unit length. Bound rounding in the translated coordinates,
+        // two products and their sum, including cancellation and optimized math.
+        // Near any edge retain the original half-open per-pixel checks.
+        const magnitude = @max(1.0, @abs(left - self.x), @abs(right - self.x), @abs(top - self.y), @abs(bottom - self.y));
+        const margin = 8.0 * std.math.floatEps(f32) * magnitude;
+        if (max_x < -margin or min_x >= self.width + margin) return .outside;
+        if (max_y < -margin or min_y >= self.height + margin) return .outside;
+        if (min_x >= margin and max_x < self.width - margin and min_y >= margin and max_y < self.height - margin) return .full;
+        return .partial;
+    }
+
+    fn coveredPosition(self: PreparedRectangle, pixel_x: f32, pixel_y: f32) ?LocalPosition {
+        const local = self.localPosition(pixel_x, pixel_y);
 
         // Test half-open geometry before scaling to texels. For a 31-pixel
         // texture drawn 7 pixels wide, f32 can round 7 * (31 / 7) below 31
         // and incorrectly admit the ending edge if coverage is tested afterward.
-        if (local_x < 0 or local_x >= self.width) return null;
-        if (local_y < 0 or local_y >= self.height) return null;
-        return .{ .x = local_x, .y = local_y };
+        if (local.x < 0 or local.x >= self.width) return null;
+        if (local.y < 0 or local.y >= self.height) return null;
+        return local;
     }
 };
 
-fn fillSolidRows(buffer: FrameBuffer, bounds: AABB, packed_color: u32) void {
+fn fillSolidRows(pixels: *align(tile_alignment) Tile, bounds: AABB, packed_color: u32) void {
     const x_min: usize = @intFromFloat(bounds.min_x);
     const y_min: usize = @intFromFloat(bounds.min_y);
     const x_max: usize = @intFromFloat(bounds.max_x);
     const y_max: usize = @intFromFloat(bounds.max_y);
-    const pixels = buffer.pixels();
     for (y_min..y_max) |y| {
-        const offset = y * @as(usize, buffer.width);
+        const offset = y * render_tile_size;
         @memset(pixels[offset + x_min .. offset + x_max], packed_color);
     }
 }
@@ -662,7 +736,7 @@ fn fillSolidRows(buffer: FrameBuffer, bounds: AABB, packed_color: u32) void {
 // TODO(adi): Maybe have nearest-neighbour sampling and bilinear sampling as options?
 /// Rasterize prepared geometry with bilinear filtering and optional tint.
 fn drawTexturedRectangle(
-    frame_buffer: FrameBuffer,
+    pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
     texture: Bitmap,
     tint_srgb: ?Color,
@@ -674,13 +748,27 @@ fn drawTexturedRectangle(
     assert(rectangle.height > 0);
     if (texture.width == 0 or texture.height == 0) return;
 
+    switch (rectangle.classifyCoverage()) {
+        .outside => return,
+        .full => drawTexturedRectanglePixels(true, pixels, rectangle, texture, tint_srgb),
+        .partial => drawTexturedRectanglePixels(false, pixels, rectangle, texture, tint_srgb),
+    }
+}
+
+fn drawTexturedRectanglePixels(
+    comptime fully_covered: bool,
+    pixels: *align(tile_alignment) Tile,
+    rectangle: PreparedRectangle,
+    texture: Bitmap,
+    tint_srgb: ?Color,
+) void {
+    @setFloatMode(.optimized);
+
     const bounds = rectangle.bounds;
     const x_min: usize = @intFromFloat(bounds.min_x);
     const y_min: usize = @intFromFloat(bounds.min_y);
     const x_max: usize = @intFromFloat(bounds.max_x);
     const y_max: usize = @intFromFloat(bounds.max_y);
-
-    const pixels = frame_buffer.pixels();
 
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
@@ -697,7 +785,10 @@ fn drawTexturedRectangle(
         const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
         for (x_min..x_max) |i| {
             const pixel_x = @as(f32, @floatFromInt(i)) + 0.5;
-            const local = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
+            const local = if (fully_covered)
+                rectangle.localPosition(pixel_x, pixel_y)
+            else
+                rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
 
             // Scale directly to texels: for a native-size 127-pixel texture,
             // (87.5 / 127) * 127 can drift whereas 87.5 * (127 / 127) does not.
@@ -783,7 +874,7 @@ fn drawTexturedRectangle(
             const source_a = std.math.lerp(top_a, bottom_a, dy) * tint_a;
 
             if (source_a == 0) continue;
-            const index = j * @as(usize, frame_buffer.width) + i;
+            const index = j * render_tile_size + i;
             const destination_u8: [4]u8 = @bitCast(pixels[index]);
 
             var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
@@ -817,7 +908,7 @@ fn drawTexturedRectangle(
 /// Rasterize an untinted texture using prepared, unrotated geometry.
 /// Retains bilinear filtering, premultiplied alpha and gamma-2 conversion.
 fn drawSprite(
-    frame_buffer: FrameBuffer,
+    pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
     texture: Bitmap,
 ) void {
@@ -833,8 +924,6 @@ fn drawSprite(
     const y_min: usize = @intFromFloat(bounds.min_y);
     const x_max: usize = @intFromFloat(bounds.max_x);
     const y_max: usize = @intFromFloat(bounds.max_y);
-    const pixels = frame_buffer.pixels();
-
     const texture_width: f32 = @floatFromInt(texture.width);
     const texture_height: f32 = @floatFromInt(texture.height);
     const texels_per_pixel_x = texture_width / rectangle.width;
@@ -879,7 +968,7 @@ fn drawSprite(
         const dy = texel_y - raw_y0;
         const row0 = y0 * texture.width;
         const row1 = y1 * texture.width;
-        const destination_row = j * @as(usize, frame_buffer.width) + x_min;
+        const destination_row = j * render_tile_size + x_min;
 
         for (0..column_count) |column| {
             if (!covered_x[column]) continue;
@@ -994,7 +1083,7 @@ fn drawSprite(
 
 /// Rasterize a solid color using prepared geometry and coverage bounds.
 fn drawRectangle(
-    frame_buffer: FrameBuffer,
+    pixels: *align(tile_alignment) Tile,
     rectangle: PreparedRectangle,
     color_srgb: Color,
 ) void {
@@ -1004,11 +1093,27 @@ fn drawRectangle(
     assert(rectangle.width > 0);
     assert(rectangle.height > 0);
 
+    const coverage = if (rectangle.bounds_rounding == .pixel_centres) .full else rectangle.classifyCoverage();
+    switch (coverage) {
+        .outside => return,
+        .full => drawRectanglePixels(true, pixels, rectangle, color_srgb),
+        .partial => drawRectanglePixels(false, pixels, rectangle, color_srgb),
+    }
+}
+
+fn drawRectanglePixels(
+    comptime fully_covered: bool,
+    pixels: *align(tile_alignment) Tile,
+    rectangle: PreparedRectangle,
+    color_srgb: Color,
+) void {
+    @setFloatMode(.optimized);
+
     const source_r = color_srgb.r * color_srgb.r * color_srgb.a;
     const source_g = color_srgb.g * color_srgb.g * color_srgb.a;
     const source_b = color_srgb.b * color_srgb.b * color_srgb.a;
     const source_a = color_srgb.a;
-    if (rectangle.bounds_rounding == .pixel_centres) {
+    if (fully_covered) {
         if (source_a == 1) {
             const packed_color: u32 = @bitCast([_]u8{
                 @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_b) * 255.0)))),
@@ -1016,7 +1121,7 @@ fn drawRectangle(
                 @truncate(@as(u32, @intFromFloat(@round(@sqrt(source_r) * 255.0)))),
                 255,
             });
-            fillSolidRows(frame_buffer, rectangle.bounds, packed_color);
+            fillSolidRows(pixels, rectangle.bounds, packed_color);
             return;
         }
     }
@@ -1026,16 +1131,14 @@ fn drawRectangle(
     const y_min: usize = @intFromFloat(bounds.min_y);
     const x_max: usize = @intFromFloat(bounds.max_x);
     const y_max: usize = @intFromFloat(bounds.max_y);
-    const pixels = frame_buffer.pixels();
-
     for (y_min..y_max) |j| {
         const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
         for (x_min..x_max) |i| {
-            if (rectangle.bounds_rounding == .outward) {
+            if (!fully_covered) {
                 const pixel_x = @as(f32, @floatFromInt(i)) + 0.5;
                 _ = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
             }
-            const index = j * @as(usize, frame_buffer.width) + i;
+            const index = j * render_tile_size + i;
             const destination_u8: [4]u8 = @bitCast(pixels[index]);
 
             var destination_b: f32 = @as(f32, @floatFromInt(destination_u8[0])) / 255.0;
@@ -1235,43 +1338,249 @@ pub fn drawTriangle(
     }
 }
 
+test "rectangle coverage classifies clipped pixel centres conservatively" {
+    const buffer: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const Case = struct {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        angle: f32,
+        bounds: AABB,
+        expected: PreparedRectangle.Coverage,
+    };
+    const cases = [_]Case{
+        // A rotated diamond: its AABB includes an outside corner and its interior.
+        .{ .x = 32, .y = 0, .width = 45, .height = 45, .angle = std.math.pi / 4.0, .bounds = .{ .min_x = 0, .min_y = 0, .max_x = 8, .max_y = 8 }, .expected = .outside },
+        .{ .x = 32, .y = 0, .width = 45, .height = 45, .angle = std.math.pi / 4.0, .bounds = .{ .min_x = 24, .min_y = 24, .max_x = 40, .max_y = 40 }, .expected = .full },
+        .{ .x = 32, .y = 0, .width = 45, .height = 45, .angle = std.math.pi / 4.0, .bounds = .{ .min_x = 0, .min_y = 0, .max_x = 64, .max_y = 64 }, .expected = .partial },
+        // All four corners are outside, but the region contains the entire shape.
+        .{ .x = 32, .y = 24, .width = 10, .height = 10, .angle = std.math.pi / 4.0, .bounds = .{ .min_x = 0, .min_y = 0, .max_x = 64, .max_y = 64 }, .expected = .partial },
+        // Sample centres on a half-open ending edge cannot enter the full path.
+        .{ .x = 0, .y = 0, .width = 7.5, .height = 8, .angle = 0, .bounds = .{ .min_x = 0, .min_y = 0, .max_x = 8, .max_y = 8 }, .expected = .partial },
+        .{ .x = 0, .y = 0, .width = 8, .height = 8, .angle = 0, .bounds = .{ .min_x = 0, .min_y = 0, .max_x = 8, .max_y = 8 }, .expected = .full },
+        // Near-edge cancellation deliberately falls back to per-pixel coverage.
+        .{ .x = -1e20, .y = -1e20, .width = 2e20, .height = 2e20, .angle = std.math.pi / 4.0, .bounds = .{ .min_x = 0, .min_y = 0, .max_x = 64, .max_y = 64 }, .expected = .partial },
+    };
+    for (cases) |case| {
+        var rectangle = PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle, .outward).?;
+        rectangle.bounds = case.bounds;
+        try std.testing.expectEqual(case.expected, rectangle.classifyCoverage());
+    }
+}
+
+test "classified rectangle kernels match per-pixel coverage across rotated tile regions" {
+    var actual: Tile align(tile_alignment) = undefined;
+    var expected: Tile align(tile_alignment) = undefined;
+    const screen: FrameBuffer = .{ .width = 130, .height = 67, .data = undefined };
+    var texels = [_]u32{ 0x00000000, 0x80b40000, 0xff00ff00, 0xffffffff, 0xff204080, 0x80404040 };
+    const texture: Bitmap = .{ .width = 3, .height = 2, .pixels = &texels };
+    const Case = struct { x: f32, y: f32, width: f32, height: f32, angle: f32 };
+    const cases = [_]Case{
+        .{ .x = 64, .y = 32, .width = 300, .height = 300, .angle = 0.4 },
+        .{ .x = 64, .y = 32, .width = 70, .height = 70, .angle = std.math.pi / 4.0 },
+        .{ .x = 63.5, .y = 63.5, .width = 125, .height = 0.75, .angle = -0.7 },
+        .{ .x = 64.5, .y = 64.5, .width = 7, .height = 7, .angle = 0 },
+        .{ .x = 64, .y = 32, .width = 65, .height = 66, .angle = std.math.pi / 2.0 },
+        .{ .x = -1e20, .y = -1e20, .width = 2e20, .height = 2e20, .angle = std.math.pi / 4.0 },
+    };
+    var classifications: [3]usize = @splat(0);
+    for (cases) |case| {
+        const prepared = PreparedRectangle.init(screen, case.x, case.y, case.width, case.height, 0.5, 0.5, case.angle, .outward) orelse continue;
+        for (0..2) |row| {
+            for (0..3) |col| {
+                const rectangle = prepared.forTile(@floatFromInt(col * 64), @floatFromInt(row * 64)) orelse continue;
+                classifications[@backingInt(rectangle.classifyCoverage())] += 1;
+                for ([_]Color{ .white, .{ .r = 0.8, .g = 0.3, .b = 0.1, .a = 0.5 } }) |color| {
+                    @memset(&actual, 0xff183a71);
+                    @memset(&expected, 0xff183a71);
+                    drawRectangle(&actual, rectangle, color);
+                    drawRectanglePixels(false, &expected, rectangle, color);
+                    try std.testing.expectEqualSlices(u32, &expected, &actual);
+                }
+                for ([_]?Color{ null, .{ .r = 0.7, .g = 0.3, .b = 0.9, .a = 0.5 } }) |tint| {
+                    @memset(&actual, 0xff183a71);
+                    @memset(&expected, 0xff183a71);
+                    drawTexturedRectangle(&actual, rectangle, texture, tint);
+                    drawTexturedRectanglePixels(false, &expected, rectangle, texture, tint);
+                    try std.testing.expectEqualSlices(u32, &expected, &actual);
+                }
+            }
+        }
+    }
+    for (classifications) |count| try std.testing.expect(count > 0);
+}
+
+test "recorded tile ranges produce compact bins in submission order" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    renderer.setView(1, 65, 33.5);
+    renderer.beginDrawing(.black);
+    const draws = [_]Renderer.DrawRectangleCommand{
+        .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 64, .height = 64 },
+        .{ .pivot_world_x = 64, .pivot_world_y = 64, .width = 66, .height = 3 },
+        .{ .pivot_world_x = 64, .pivot_world_y = 0, .width = 64, .height = 64, .texture = .missing_texture },
+        .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 64, .height = 64, .texture = .missing_texture, .tint_srgb = .white },
+        .{ .pivot_world_x = 63, .pivot_world_y = 63, .width = 2, .height = 2 },
+        .{ .pivot_world_x = 130, .pivot_world_y = 0, .width = 10, .height = 10 },
+    };
+    for (draws) |draw| {
+        var command = draw;
+        command.pivot_fraction_x = 0;
+        command.pivot_fraction_y = 0;
+        renderer.submit(.{ .draw_rectangle = command });
+    }
+    renderer.submit(.{ .set_view = .{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 } });
+    const expected_bounds = [_]TileBounds{
+        .{ .min_x = 0, .min_y = 0, .max_x = 3, .max_y = 2 },
+        .{ .min_x = 0, .min_y = 0, .max_x = 1, .max_y = 1 },
+        .{ .min_x = 1, .min_y = 1, .max_x = 3, .max_y = 2 },
+        .{ .min_x = 1, .min_y = 0, .max_x = 2, .max_y = 1 },
+        .{ .min_x = 0, .min_y = 0, .max_x = 1, .max_y = 1 },
+        .{ .min_x = 0, .min_y = 0, .max_x = 2, .max_y = 2 },
+    };
+    try std.testing.expectEqual(expected_bounds.len, renderer.command_buffer.headers.len);
+    try std.testing.expectEqualSlices(TileBounds, &expected_bounds, renderer.command_buffer.tile_bounds);
+    const bins = try renderer.command_buffer.bin(3, 2, arena.allocator());
+    try std.testing.expectEqualSlices(usize, &.{ 0, 4, 7, 8, 10, 13, 15 }, bins.offsets);
+    const expected_commands = [_]usize{ 0, 1, 4, 5, 0, 3, 5, 0, 0, 5, 0, 2, 5, 0, 2 };
+    try std.testing.expectEqual(expected_commands.len, bins.headers.len);
+    for (bins.headers, expected_commands) |header, command_index| {
+        try std.testing.expectEqualDeep(renderer.command_buffer.headers[command_index], header);
+    }
+
+    renderer.beginDrawing(.white);
+    const next = try renderer.command_buffer.bin(3, 2, arena.allocator());
+    try std.testing.expectEqual(@as(usize, 1), renderer.command_buffer.tile_bounds.len);
+    try std.testing.expectEqual(@as(usize, 6), next.headers.len);
+    for (next.headers) |header| try std.testing.expectEqualDeep(renderer.command_buffer.headers[0], header);
+}
+
+test "dense bins retain every command at capacity and empty bins need no references" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const empty = try renderer.command_buffer.bin(2, 2, arena.allocator());
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 0 }, empty.offsets);
+    try std.testing.expectEqual(@as(usize, 0), empty.headers.len);
+    for (0..MAX_COMMANDS) |_| renderer.submit(.{ .clear_screen = .{ .r = 0, .g = 0, .b = 0 } });
+    const bins = try renderer.command_buffer.bin(2, 2, arena.allocator());
+    try std.testing.expectEqualSlices(usize, &.{ 0, 4096, 8192, 12288, 16384 }, bins.offsets);
+    for (0..4) |tile| {
+        for (bins.headers[bins.offsets[tile]..bins.offsets[tile + 1]], 0..) |header, expected| {
+            try std.testing.expectEqualDeep(renderer.command_buffer.headers[expected], header);
+        }
+    }
+}
+
+test "tile scratch does not consume the frame allocator" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 65, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    // Enough for four compact bins; deliberately too small for a 16 KiB tile.
+    var storage: [512]u8 align(@alignOf(usize)) = undefined;
+    var frame_allocator = std.heap.FixedBufferAllocator.init(&storage);
+    renderer.beginDrawing(.black);
+    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 65, .height = 65, .tint_srgb = .white } });
+    renderer.endDrawing(frame_allocator.allocator());
+    for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0xffffffff), pixel);
+}
+
+test "tile playback uses copied headers independently of the recording array" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 64, .height = 64, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    renderer.beginDrawing(.black);
+    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 64, .height = 64, .tint_srgb = .white } });
+    const bins = try renderer.command_buffer.bin(1, 1, arena.allocator());
+    // The bin owns its header copies; payload bytes retain their frame lifetime.
+    @memset(renderer.command_buffer.headers, .{ .tag = .clear_screen, .offset = std.math.maxInt(u32) });
+    renderTile(renderer.back_buffer, .{ .x = 0, .y = 0 }, bins.headers, renderer.command_buffer.data);
+    for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0xffffffff), pixel);
+}
+
+test "tiled playback preserves alpha order clear barriers and partial edge tiles" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    renderer.setView(1, 65, 33.5);
+    renderer.beginDrawing(.white);
+    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 0, .pivot_world_y = 0, .width = 260, .height = 134, .tint_srgb = .magenta } });
+    renderer.submit(.{ .clear_screen = .{ .r = 0, .g = 0, .b = 0 } });
+    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 63, .pivot_world_y = 63, .width = 65, .height = 4, .pivot_fraction_x = 0, .pivot_fraction_y = 0, .tint_srgb = .{ .r = 1, .g = 0, .b = 0, .a = 1 } } });
+    renderer.submit(.{ .draw_rectangle = .{ .pivot_world_x = 64, .pivot_world_y = 64, .width = 66, .height = 3, .pivot_fraction_x = 0, .pivot_fraction_y = 0, .tint_srgb = .{ .r = 0, .g = 0, .b = 1, .a = 0.5 } } });
+    renderer.endDrawing(arena.allocator());
+    for (renderer.back_buffer.pixels(), 0..) |pixel, index| {
+        const x = index % 130;
+        const y = index / 130;
+        const red = x >= 63 and x < 128 and y >= 63;
+        const blue = x >= 64 and y >= 64;
+        const expected: u32 = if (blue) (if (red) 0xffb400b4 else 0xff0000b4) else (if (red) 0xffff0000 else 0);
+        try std.testing.expectEqual(expected, pixel);
+    }
+
+    // Independent tile jobs may finish in any order, including edge tiles first.
+    const bins = try renderer.command_buffer.bin(3, 2, arena.allocator());
+    @memset(renderer.back_buffer.pixels(), 0x12345678);
+    var completed: [6]bool = @splat(false);
+    for ([_]usize{ 5, 0, 3, 2, 1, 4 }) |tile| {
+        renderTile(renderer.back_buffer, .{ .x = tile % 3, .y = tile / 3 }, bins.headers[bins.offsets[tile]..bins.offsets[tile + 1]], renderer.command_buffer.data);
+        completed[tile] = true;
+        for (renderer.back_buffer.pixels(), 0..) |pixel, index| {
+            const x = index % 130;
+            const y = index / 130;
+            const red = x >= 63 and x < 128 and y >= 63;
+            const blue = x >= 64 and y >= 64;
+            const rendered: u32 = if (blue) (if (red) 0xffb400b4 else 0xff0000b4) else (if (red) 0xffff0000 else 0);
+            const expected: u32 = if (completed[(y / 64) * 3 + x / 64]) rendered else 0x12345678;
+            try std.testing.expectEqual(expected, pixel);
+        }
+    }
+
+    renderer.beginDrawing(.black);
+    renderer.endDrawing(arena.allocator());
+    for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0), pixel);
+}
+
 test "native size texture preserves pixel channels and row stride" {
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff204080, 0xff000000, 0xffffffff };
-    var pixels: [6]u32 align(4096) = @splat(0);
-    var renderer: Self = .{
-        .back_buffer = .{ .width = 3, .height = 2, .data = std.mem.sliceAsBytes(&pixels) },
-        .pixels_per_meter = 1,
-        .camera_position = .{ .x = 0, .y = 0 },
-        .textures = undefined,
-        .command_buffer = undefined,
-    };
-    const rectangle = PreparedRectangle.init(&renderer.back_buffer, 0, 0, 3, 2, 0, 0, 0, .outward).?;
-    drawTexturedRectangle(renderer.back_buffer, rectangle, .{ .width = 3, .height = 2, .pixels = &texels }, null);
-    try std.testing.expectEqualSlices(u32, &texels, &pixels);
+    var pixels: Tile align(tile_alignment) = @splat(0);
+    const buffer: FrameBuffer = .{ .width = 3, .height = 2, .data = undefined };
+    const rectangle = PreparedRectangle.init(buffer, 0, 0, 3, 2, 0, 0, 0, .outward).?;
+    drawTexturedRectangle(&pixels, rectangle, .{ .width = 3, .height = 2, .pixels = &texels }, null);
+    for (pixels, 0..) |pixel, index| {
+        const x = index % render_tile_size;
+        const y = index / render_tile_size;
+        const expected: u32 = if (x < 3 and y < 2) texels[y * 3 + x] else 0;
+        try std.testing.expectEqual(expected, pixel);
+    }
 }
 
 test "bilinear texture filtering averages linear colors and clamps edge texels" {
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff };
     const texture: Bitmap = .{ .width = 2, .height = 2, .pixels = &texels };
-    var pixels: [16]u32 align(4096) = @splat(0);
-    var renderer: Self = .{
-        .back_buffer = .{ .width = 4, .height = 4, .data = std.mem.sliceAsBytes(&pixels) },
-        .pixels_per_meter = 1,
-        .camera_position = .{ .x = 0, .y = 0 },
-        .textures = undefined,
-        .command_buffer = undefined,
-    };
+    var pixels: Tile align(tile_alignment) = @splat(0);
+    const buffer: FrameBuffer = .{ .width = 4, .height = 4, .data = undefined };
     // The centre averages all four texels: each linear RGB channel is 0.5.
-    const small_rectangle = PreparedRectangle.init(&renderer.back_buffer, 0, 0, 1, 1, 0, 0, 0, .outward).?;
-    drawTexturedRectangle(renderer.back_buffer, small_rectangle, texture, null);
+    const small_rectangle = PreparedRectangle.init(buffer, 0, 0, 1, 1, 0, 0, 0, .outward).?;
+    drawTexturedRectangle(&pixels, small_rectangle, texture, null);
     try std.testing.expectEqual(@as(u32, 0xffb4b4b4), pixels[0]);
 
-    const large_rectangle = PreparedRectangle.init(&renderer.back_buffer, 0, 0, 4, 4, 0, 0, 0, .outward).?;
-    drawTexturedRectangle(renderer.back_buffer, large_rectangle, texture, null);
+    const large_rectangle = PreparedRectangle.init(buffer, 0, 0, 4, 4, 0, 0, 0, .outward).?;
+    drawTexturedRectangle(&pixels, large_rectangle, texture, null);
     try std.testing.expectEqual(@as(u32, 0xffff0000), pixels[0]);
     try std.testing.expectEqual(@as(u32, 0xff00ff00), pixels[3]);
-    try std.testing.expectEqual(@as(u32, 0xff0000ff), pixels[12]);
-    try std.testing.expectEqual(@as(u32, 0xffffffff), pixels[15]);
+    try std.testing.expectEqual(@as(u32, 0xff0000ff), pixels[3 * render_tile_size]);
+    try std.testing.expectEqual(@as(u32, 0xffffffff), pixels[3 * render_tile_size + 3]);
 }
 
 test "offscreen rectangles clip without overwriting the framebuffer boundary" {
@@ -1330,33 +1639,23 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
 
     for (cases) |case| {
         // The trailing pixels detect writes past the framebuffer in fast builds too.
-        var pixels: [16 * 16 + 16]u32 align(4096) = @splat(0);
-        @memset(pixels[16 * 16 ..], 0x12345678);
-        var renderer: Self = .{
-            .back_buffer = .{
-                .width = 16,
-                .height = 16,
-                .data = std.mem.sliceAsBytes(pixels[0 .. 16 * 16]),
-            },
-            .pixels_per_meter = 48,
-            .camera_position = .{ .x = 10, .y = -4 },
-            .textures = undefined,
-            .command_buffer = undefined,
-        };
+        var pixels: [render_tile_size * render_tile_size + 16]u32 align(tile_alignment) = @splat(0);
+        @memset(pixels[render_tile_size * render_tile_size ..], 0x12345678);
+        const buffer: FrameBuffer = .{ .width = 16, .height = 16, .data = undefined };
 
         const rounding: PreparedRectangle.BoundsRounding = if (case.angle_radians == 0) .pixel_centres else .outward;
-        if (PreparedRectangle.init(&renderer.back_buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, rounding)) |rectangle| {
-            drawRectangle(renderer.back_buffer, rectangle, .white);
+        if (PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, rounding)) |rectangle| {
+            drawRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, .white);
         }
 
-        for (pixels[0 .. 16 * 16], 0..) |pixel, index| {
-            const x = index % 16;
-            const y = index / 16;
+        for (pixels[0 .. render_tile_size * render_tile_size], 0..) |pixel, index| {
+            const x = index % render_tile_size;
+            const y = index / render_tile_size;
             const expected: u32 = if (x >= case.left and x < case.right and
                 y >= case.top and y < case.bottom) 0xffffffff else 0;
             try std.testing.expectEqual(expected, pixel);
         }
-        for (pixels[16 * 16 ..]) |pixel| try std.testing.expectEqual(@as(u32, 0x12345678), pixel);
+        for (pixels[render_tile_size * render_tile_size ..]) |pixel| try std.testing.expectEqual(@as(u32, 0x12345678), pixel);
     }
 }
 
@@ -1415,56 +1714,40 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
             if (direct_tile) {
                 if (case.angle_radians != 0) continue;
             }
-            var pixels: [48 * 48 + 16]u32 align(4096) = @splat(0);
-            @memset(pixels[48 * 48 ..], 0x12345678);
-            var renderer: Self = .{
-                .back_buffer = .{
-                    .width = 48,
-                    .height = 48,
-                    .data = std.mem.sliceAsBytes(pixels[0 .. 48 * 48]),
-                },
-                .pixels_per_meter = 1,
-                .camera_position = .{ .x = 0, .y = 0 },
-                .textures = undefined,
-                .command_buffer = undefined,
-            };
+            var pixels: [render_tile_size * render_tile_size + 16]u32 align(tile_alignment) = @splat(0);
+            @memset(pixels[render_tile_size * render_tile_size ..], 0x12345678);
+            const buffer: FrameBuffer = .{ .width = 48, .height = 48, .data = undefined };
             const texture: Bitmap = .{
                 .width = @intCast(case.texture_width),
                 .height = @intCast(case.texture_height),
                 .pixels = texels[0 .. case.texture_width * case.texture_height],
             };
 
-            if (PreparedRectangle.init(&renderer.back_buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, .outward)) |rectangle| {
+            if (PreparedRectangle.init(buffer, case.x, case.y, case.width, case.height, 0, 0, case.angle_radians, .outward)) |rectangle| {
                 if (direct_tile) {
-                    drawSprite(renderer.back_buffer, rectangle, texture);
+                    drawSprite(pixels[0 .. render_tile_size * render_tile_size], rectangle, texture);
                 } else {
-                    drawTexturedRectangle(renderer.back_buffer, rectangle, texture, null);
+                    drawTexturedRectangle(pixels[0 .. render_tile_size * render_tile_size], rectangle, texture, null);
                 }
             }
 
-            for (pixels[0 .. 48 * 48], 0..) |pixel, index| {
-                const x = index % 48;
-                const y = index / 48;
+            for (pixels[0 .. render_tile_size * render_tile_size], 0..) |pixel, index| {
+                const x = index % render_tile_size;
+                const y = index / render_tile_size;
                 const expected: u32 = if (x >= case.left and x < case.right and
                     y >= case.top and y < case.bottom) 0xffffffff else 0;
                 try std.testing.expectEqual(expected, pixel);
             }
-            for (pixels[48 * 48 ..]) |pixel| try std.testing.expectEqual(@as(u32, 0x12345678), pixel);
+            for (pixels[render_tile_size * render_tile_size ..]) |pixel| try std.testing.expectEqual(@as(u32, 0x12345678), pixel);
         }
     }
 }
 
 test "rotated rectangles blend only covered pixel centres" {
-    var pixels: [8 * 8]u32 align(4096) = @splat(0xff0000ff);
-    var renderer: Self = .{
-        .back_buffer = .{ .width = 8, .height = 8, .data = std.mem.sliceAsBytes(&pixels) },
-        .pixels_per_meter = 1,
-        .camera_position = .{ .x = 0, .y = 0 },
-        .textures = undefined,
-        .command_buffer = undefined,
-    };
-    const rectangle = PreparedRectangle.init(&renderer.back_buffer, 4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0, .outward).?;
-    drawRectangle(renderer.back_buffer, rectangle, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
+    var pixels: Tile align(tile_alignment) = @splat(0xff0000ff);
+    const buffer: FrameBuffer = .{ .width = 8, .height = 8, .data = undefined };
+    const rectangle = PreparedRectangle.init(buffer, 4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0, .outward).?;
+    drawRectangle(&pixels, rectangle, .{ .r = 1, .g = 0, .b = 0, .a = 0.5 });
 
     // A 45-degree square forms a diamond. These pixel centres are strictly
     // inside it; the other pixels in its bounding box must remain blue.
@@ -1479,7 +1762,9 @@ test "rotated rectangles blend only covered pixel centres" {
         "........",
     };
     for (pixels, 0..) |pixel, index| {
-        const expected: u32 = if (coverage[index / 8][index % 8] == '#') 0xffb400b4 else 0xff0000ff;
+        const x = index % render_tile_size;
+        const y = index / render_tile_size;
+        const expected: u32 = if (x < 8 and y < 8 and coverage[y][x] == '#') 0xffb400b4 else 0xff0000ff;
         try std.testing.expectEqual(expected, pixel);
     }
 }

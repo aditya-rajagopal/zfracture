@@ -137,8 +137,6 @@ pub fn build(b: *std.Build) !void {
         "src/stdx/tracer.zig",
         "src/profiling.zig",
     }) |path| {
-        // Native platform-tests already includes the renderer test.
-        if (native_target and std.mem.eql(u8, path, "src/software_renderer.zig")) continue;
         const test_module = b.createModule(.{
             .root_source_file = b.path(path),
             .target = b.graph.host,
