@@ -389,16 +389,47 @@ pub fn renderTile(
     headers: []const CommandBuffer.Header,
     command_data: []align(CommandBuffer.data_alignment) const u8,
 ) void {
-    var tile_pixels: Tile align(tile_alignment) = undefined;
     const tile_x: f32 = @floatFromInt(tile_id.x * render_tile_size);
     const tile_y: f32 = @floatFromInt(tile_id.y * render_tile_size);
+    const tile_bounds: AABB = .{
+        .min_x = tile_x,
+        .max_x = @as(f32, @floatFromInt((tile_id.x + 1) * render_tile_size)),
+        .min_y = tile_y,
+        .max_y = @as(f32, @floatFromInt((tile_id.y + 1) * render_tile_size)),
+    };
+    const range = clipped(
+        back_buffer.width,
+        back_buffer.height,
+        tile_bounds.min_x,
+        tile_bounds.min_y,
+        tile_bounds.max_x,
+        tile_bounds.max_y,
+    ) orelse unreachable;
+
+    const x_min: usize = @intFromFloat(range.min_x);
+    const y_min: usize = @intFromFloat(range.min_y);
+    const x_max: usize = @intFromFloat(range.max_x);
+    const y_max: usize = @intFromFloat(range.max_y);
+
+    const destination_pixels = back_buffer.pixels();
+    const copy_width = x_max - x_min;
+    if (headers.len == 1 and headers[0].tag == .clear_screen) {
+        const trace = profile.begin(.renderer_clear);
+        defer profile.end(trace);
+        const cc = readClearCommand(headers[0], command_data);
+        const pixel = packClear(cc.r, cc.g, cc.b);
+        for (y_min..y_max) |y| {
+            const start = y * @as(usize, back_buffer.width) + x_min;
+            @memset(destination_pixels[start..][0..copy_width], pixel);
+        }
+        return;
+    }
+
+    var tile_pixels: Tile align(tile_alignment) = undefined;
     for (headers) |header| {
         switch (header.tag) {
             .clear_screen => {
-                const size = @sizeOf(Internal.ClearCommand);
-                assert(command_data.len >= header.offset);
-                assert(command_data.len - header.offset >= size);
-                const cc: *const Internal.ClearCommand = @ptrCast(@alignCast(command_data[header.offset..][0..size]));
+                const cc = readClearCommand(header, command_data);
                 clearScreen(&tile_pixels, cc.r, cc.g, cc.b);
             },
             .draw_rectangle => {
@@ -428,28 +459,6 @@ pub fn renderTile(
         }
     }
 
-    const tile_bounds: AABB = .{
-        .min_x = tile_x,
-        .max_x = @as(f32, @floatFromInt((tile_id.x + 1) * render_tile_size)),
-        .min_y = tile_y,
-        .max_y = @as(f32, @floatFromInt((tile_id.y + 1) * render_tile_size)),
-    };
-    const range = clipped(
-        back_buffer.width,
-        back_buffer.height,
-        tile_bounds.min_x,
-        tile_bounds.min_y,
-        tile_bounds.max_x,
-        tile_bounds.max_y,
-    ) orelse unreachable;
-
-    const x_min: usize = @intFromFloat(range.min_x);
-    const y_min: usize = @intFromFloat(range.min_y);
-    const x_max: usize = @intFromFloat(range.max_x);
-    const y_max: usize = @intFromFloat(range.max_y);
-
-    const destination_pixels = back_buffer.pixels();
-    const copy_width = x_max - x_min;
     // Tile rows and framebuffer rows have different strides.
     for (y_min..y_max, 0..) |destination_y, source_y| {
         const source_start = source_y * render_tile_size;
@@ -462,6 +471,14 @@ pub fn renderTile(
 }
 
 pub fn endDrawing(self: *Self, arena: std.mem.Allocator) void {
+    if (self.command_buffer.headers.len == 1 and self.command_buffer.headers[0].tag == .clear_screen) {
+        const trace = profile.begin(.renderer_clear);
+        defer profile.end(trace);
+        const cc = readClearCommand(self.command_buffer.headers[0], self.command_buffer.data);
+        @memset(self.back_buffer.pixels(), packClear(cc.r, cc.g, cc.b));
+        return;
+    }
+
     const rows = @divFloor((self.back_buffer.height + render_tile_size - 1), render_tile_size);
     const cols = @divFloor((self.back_buffer.width + render_tile_size - 1), render_tile_size);
     const bins = self.command_buffer.bin(cols, rows, arena) catch unreachable;
@@ -609,16 +626,22 @@ fn clearScreen(pixels: *align(tile_alignment) Tile, r: f32, g: f32, b: f32) void
     const trace = profile.begin(.renderer_clear);
     defer profile.end(trace);
 
-    const red_quantized: u32 = @intFromFloat(@round(r * 255.0));
-    const r_int: u8 = @truncate(red_quantized);
-    const green_quantized: u32 = @intFromFloat(@round(g * 255.0));
-    const g_int: u8 = @truncate(green_quantized);
-    const blue_quantized: u32 = @intFromFloat(@round(b * 255.0));
-    const b_int: u8 = @truncate(blue_quantized);
+    @memset(pixels, packClear(r, g, b));
+}
 
-    const clear_colour: u32 = (@as(u32, r_int) << 16) | (@as(u32, g_int) << 8) | b_int;
+fn packClear(r: f32, g: f32, b: f32) u32 {
+    const red: u8 = @truncate(@as(u32, @intFromFloat(@round(r * 255.0))));
+    const green: u8 = @truncate(@as(u32, @intFromFloat(@round(g * 255.0))));
+    const blue: u8 = @truncate(@as(u32, @intFromFloat(@round(b * 255.0))));
+    return (@as(u32, red) << 16) | (@as(u32, green) << 8) | blue;
+}
 
-    @memset(pixels, clear_colour);
+fn readClearCommand(header: CommandBuffer.Header, command_data: []align(CommandBuffer.data_alignment) const u8) *const Internal.ClearCommand {
+    assert(header.tag == .clear_screen);
+    const size = @sizeOf(Internal.ClearCommand);
+    assert(command_data.len >= header.offset);
+    assert(command_data.len - header.offset >= size);
+    return @ptrCast(@alignCast(command_data[header.offset..][0..size]));
 }
 
 fn clipped(width: u16, height: u16, left: f32, top: f32, right: f32, bottom: f32) ?AABB {
@@ -1428,6 +1451,36 @@ pub fn drawTriangle(
         ab_check += ab_step_down;
         bc_check += bc_step_down;
         ca_check += ca_step_down;
+    }
+}
+
+test "clear-only frames require no frame allocation" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 65, .height = 67, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    var storage: [0]u8 = .{};
+    var frame_allocator = std.heap.FixedBufferAllocator.init(&storage);
+    renderer.beginDrawing(.{ .r = 0.1, .g = 0.4, .b = 0.8, .a = 1 });
+    renderer.endDrawing(frame_allocator.allocator());
+    for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0x001a66cc), pixel);
+}
+
+test "clear-only tile jobs preserve other tiles and clip the bottom right edge" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 67, .pixels_per_meter = 1, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    renderer.beginDrawing(.black);
+    renderer.submit(.{ .clear_screen = .{ .r = 0.1, .g = 0.4, .b = 0.8 } });
+    // Use a nonzero payload offset, then force the normal playback path too.
+    const header = renderer.command_buffer.headers[1];
+    const headers = [_]CommandBuffer.Header{ header, header };
+    for ([_]usize{ 1, 2 }) |count| {
+        @memset(renderer.back_buffer.pixels(), 0x12345678);
+        renderTile(renderer.back_buffer, .{ .x = 2, .y = 1 }, headers[0..count], renderer.command_buffer.data);
+        for (renderer.back_buffer.pixels(), 0..) |pixel, index| {
+            const expected: u32 = if (index % 130 >= 128 and index / 130 >= 64) 0x001a66cc else 0x12345678;
+            try std.testing.expectEqual(expected, pixel);
+        }
     }
 }
 
