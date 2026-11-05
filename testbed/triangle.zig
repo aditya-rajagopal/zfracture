@@ -20,7 +20,9 @@ pub fn main(init: std.process.Init) !void {
         .width = width,
         .height = height,
         .missing_texture_color = .magenta,
+        .workers = .{ .io = init.io },
     });
+    defer renderer.deinit(allocator);
 
     try platform.createWindow(.{
         .title = "Testbed - left click or Space: next texture case",

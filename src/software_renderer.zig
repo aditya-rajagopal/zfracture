@@ -11,6 +11,7 @@ const AABB = @import("shapes.zig").AABB;
 const FrameBuffer = @import("FrameBuffer.zig");
 
 const Renderer = @import("renderer.zig");
+const TileWorkers = @import("TileWorkers.zig");
 
 const Self = @This();
 
@@ -21,6 +22,7 @@ textures: [32]Bitmap,
 head: u8 = 1,
 prepared_commands: PreparedCommandBuffer,
 command_buffer: Renderer.CommandBuffer,
+workers: TileWorkers = .{},
 
 const render_tile_size: u64 = 64;
 
@@ -121,6 +123,16 @@ pub const Config = struct {
     missing_texture_color: Color,
     front_face_winding_order: enum { clockwise, anticlockwise } = .clockwise,
     cull_mode: enum { none, front, back } = .back,
+    /// NOTE(adi): If workers are setup and renderer location in memory changes this might be
+    /// an issue
+    workers: ?TileWorkers.Config = null,
+};
+
+pub const TileJob = struct {
+    back_buffer: FrameBuffer,
+    tile_id: struct { x: usize, y: usize },
+    headers: []const PreparedCommandBuffer.Header,
+    command_data: []align(PreparedCommandBuffer.data_alignment) const u8,
 };
 
 const MAX_COMMANDS = 4096;
@@ -143,6 +155,7 @@ pub fn init(
     gpa: std.mem.Allocator,
     config: Config,
 ) !void {
+    self.workers = .{};
     self.back_buffer = try .initCapacity(config.width, config.height, gpa);
     errdefer self.back_buffer.deinit(gpa);
 
@@ -163,6 +176,7 @@ pub fn init(
     errdefer commands.deinit(gpa);
 
     const missing_pixels = try gpa.alloc(u32, 1);
+    errdefer gpa.free(missing_pixels);
     missing_pixels[0] = config.missing_texture_color.toARGB();
 
     self.prepared_commands = .{ .headers = headers, .data = data, .tile_bounds = tile_bounds };
@@ -174,9 +188,15 @@ pub fn init(
     self.cull_mode = config.cull_mode;
     self.textures = @splat(.{ .width = 1, .height = 1, .pixels = missing_pixels });
     self.head = 1;
+    if (config.workers) |workers| {
+        const cols = (@as(usize, config.width) + render_tile_size - 1) / render_tile_size;
+        const rows = (@as(usize, config.height) + render_tile_size - 1) / render_tile_size;
+        try self.workers.init(gpa, cols * rows, workers);
+    }
 }
 
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+    self.workers.deinit(gpa);
     gpa.free(self.back_buffer.data);
     self.command_buffer.commands.deinit(gpa);
     self.prepared_commands.headers.len = MAX_COMMANDS;
@@ -465,6 +485,8 @@ pub fn renderTile(
     }
 
     // Tile rows and framebuffer rows have different strides.
+    const copy_trace = profile.begin(.renderer_copy);
+    defer profile.end(copy_trace);
     for (y_min..y_max, 0..) |destination_y, source_y| {
         const source_start = source_y * render_tile_size;
         const destination_start = destination_y * @as(usize, back_buffer.width) + x_min;
@@ -476,7 +498,11 @@ pub fn renderTile(
 }
 
 pub fn endDrawing(self: *Self, arena: std.mem.Allocator, command_buffer: *const Renderer.CommandBuffer) void {
+    const frame_trace = profile.begin(.renderer_end);
+    defer profile.end(frame_trace);
+    const prepare_trace = profile.begin(.renderer_prepare);
     self.prepareCommands(command_buffer);
+    profile.end(prepare_trace);
 
     if (self.prepared_commands.headers.len == 1 and self.prepared_commands.headers[0].tag == .clear_screen) {
         const trace = profile.begin(.renderer_clear);
@@ -488,7 +514,27 @@ pub fn endDrawing(self: *Self, arena: std.mem.Allocator, command_buffer: *const 
 
     const rows = @divFloor((self.back_buffer.height + render_tile_size - 1), render_tile_size);
     const cols = @divFloor((self.back_buffer.width + render_tile_size - 1), render_tile_size);
+    const bin_trace = profile.begin(.renderer_bin);
     const bins = self.prepared_commands.bin(cols, rows, arena) catch @panic("Frame allocator exhausted while binning commands");
+    profile.end(bin_trace);
+
+    if (self.workers.thread_count != 0) {
+        const publish_trace = profile.begin(.renderer_publish);
+        self.workers.begin(rows * cols);
+        for (0..rows * cols) |tile| {
+            self.workers.submit(.{
+                .back_buffer = self.back_buffer,
+                .tile_id = .{ .x = tile % cols, .y = tile / cols },
+                .headers = bins.headers[bins.offsets[tile]..bins.offsets[tile + 1]],
+                .command_data = self.prepared_commands.data,
+            });
+            // Start workers promptly, then amortize wakeups across small batches.
+            if (tile % 16 == 0) self.workers.notify();
+        }
+        profile.end(publish_trace);
+        self.workers.finish();
+        return;
+    }
 
     for (0..rows) |row| {
         for (0..cols) |col| {
