@@ -821,6 +821,21 @@ fn drawTexturedRectangle(
     }
 }
 
+const textured_rectangle_lanes = 4;
+const TexturedF32 = @Vector(textured_rectangle_lanes, f32);
+const TexturedU32 = @Vector(textured_rectangle_lanes, u32);
+const TexturedShift = @Vector(textured_rectangle_lanes, u5);
+const TexturedMask = @Vector(textured_rectangle_lanes, bool);
+
+comptime {
+    assert(textured_rectangle_lanes > 0 and textured_rectangle_lanes <= render_tile_size);
+}
+
+// @TODO(adi): Skip bilinear filtering for pixel-aligned 1:1 draws.
+// @TODO(adi): Cache X sampling coordinates for axis-aligned tinted rectangles.
+// @TODO(adi): Reuse horizontally filtered texture rows when upscaling.
+// @TODO(adi): Skip destination reads and blending for fully covered opaque chunks.
+// @TODO(adi): Recheck lane counts after these changes using the sprite and text workloads.
 fn drawTexturedRectanglePixels(
     comptime fully_covered: bool,
     pixels: *align(tile_alignment) Tile,
@@ -838,132 +853,204 @@ fn drawTexturedRectanglePixels(
     const x_max: usize = @intFromFloat(bounds.max_x);
     const y_max: usize = @intFromFloat(bounds.max_y);
 
-    const texture_width: f32 = @floatFromInt(texture.width);
-    const texture_height: f32 = @floatFromInt(texture.height);
+    assert(x_min < x_max and x_max <= render_tile_size);
+    assert(y_min < y_max and y_max <= render_tile_size);
+
+    const zero: TexturedF32 = @splat(0);
+    const half: TexturedF32 = @splat(0.5);
+    const origin_x: TexturedF32 = @splat(rectangle.x);
+    const width: TexturedF32 = @splat(rectangle.width);
+    const height: TexturedF32 = @splat(rectangle.height);
+    const right_x: TexturedF32 = @splat(rectangle.right_x);
+    const right_y: TexturedF32 = @splat(rectangle.right_y);
+    const negative_right_y: TexturedF32 = @splat(-rectangle.right_y);
+    const x_high: TexturedU32 = @splat(@intCast(x_max));
 
     for (y_min..y_max) |j| {
         const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
-        for (x_min..x_max) |i| {
-            const pixel_x = @as(f32, @floatFromInt(i)) + 0.5;
-            const local = if (fully_covered)
-                rectangle.localPosition(pixel_x, pixel_y)
-            else
-                rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
-
-            // Scale directly to texels: for a native-size 127-pixel texture,
-            // (87.5 / 127) * 127 can drift whereas 87.5 * (127 / 127) does not.
-            // Subtract 0.5 so integer coordinates address texel centres.
-            const texel_x = local.x * texels_per_pixel_x - 0.5;
-            const texel_y = local.y * texels_per_pixel_y - 0.5;
-
-            const raw_x0: f32 = @floor(texel_x);
-            const raw_y0: f32 = @floor(texel_y);
-            const raw_x1 = raw_x0 + 1;
-            const raw_y1 = raw_y0 + 1;
-
-            // Distance to center of pixel being sampled. texel_* is the pixel centre in texture space.
-            const dx: f32 = texel_x - raw_x0;
-            const dy: f32 = texel_y - raw_y0;
-
-            const x0: usize = @intFromFloat(std.math.clamp(raw_x0, 0.0, texture_width - 1));
-            const y0: usize = @intFromFloat(std.math.clamp(raw_y0, 0.0, texture_height - 1));
-            const x1: usize = @intFromFloat(std.math.clamp(raw_x1, 0.0, texture_width - 1));
-            const y1: usize = @intFromFloat(std.math.clamp(raw_y1, 0.0, texture_height - 1));
-
-            // Convention: • denotes the pixel being sampled.
-            // A ───── B
-            // │       │
-            // │   •   │
-            // │       │
-            // C ───── D
-            const pixel_a: [4]u8 = @bitCast(texture.pixels[y0 * texture.width + x0]);
-            const pixel_b: [4]u8 = @bitCast(texture.pixels[y0 * texture.width + x1]);
-            const pixel_c: [4]u8 = @bitCast(texture.pixels[y1 * texture.width + x0]);
-            const pixel_d: [4]u8 = @bitCast(texture.pixels[y1 * texture.width + x1]);
-
-            var pixel_a_b: f32 = @floatFromInt(pixel_a[0]);
-            var pixel_a_g: f32 = @floatFromInt(pixel_a[1]);
-            var pixel_a_r: f32 = @floatFromInt(pixel_a[2]);
-            const pixel_a_a: f32 = @as(f32, @floatFromInt(pixel_a[3])) * (1.0 / 255.0);
-
-            var pixel_b_b: f32 = @floatFromInt(pixel_b[0]);
-            var pixel_b_g: f32 = @floatFromInt(pixel_b[1]);
-            var pixel_b_r: f32 = @floatFromInt(pixel_b[2]);
-            const pixel_b_a: f32 = @as(f32, @floatFromInt(pixel_b[3])) * (1.0 / 255.0);
-
-            var pixel_c_b: f32 = @floatFromInt(pixel_c[0]);
-            var pixel_c_g: f32 = @floatFromInt(pixel_c[1]);
-            var pixel_c_r: f32 = @floatFromInt(pixel_c[2]);
-            const pixel_c_a: f32 = @as(f32, @floatFromInt(pixel_c[3])) * (1.0 / 255.0);
-
-            var pixel_d_b: f32 = @floatFromInt(pixel_d[0]);
-            var pixel_d_g: f32 = @floatFromInt(pixel_d[1]);
-            var pixel_d_r: f32 = @floatFromInt(pixel_d[2]);
-            const pixel_d_a: f32 = @as(f32, @floatFromInt(pixel_d[3])) * (1.0 / 255.0);
-
-            // Gamma-2 decode in byte-squared units; the RGB /255 and final *255
-            // cancel. Bitmap RGB was premultiplied before encoding.
-            pixel_a_b = pixel_a_b * pixel_a_b;
-            pixel_a_g = pixel_a_g * pixel_a_g;
-            pixel_a_r = pixel_a_r * pixel_a_r;
-
-            pixel_b_b = pixel_b_b * pixel_b_b;
-            pixel_b_g = pixel_b_g * pixel_b_g;
-            pixel_b_r = pixel_b_r * pixel_b_r;
-
-            pixel_c_b = pixel_c_b * pixel_c_b;
-            pixel_c_g = pixel_c_g * pixel_c_g;
-            pixel_c_r = pixel_c_r * pixel_c_r;
-
-            pixel_d_b = pixel_d_b * pixel_d_b;
-            pixel_d_g = pixel_d_g * pixel_d_g;
-            pixel_d_r = pixel_d_r * pixel_d_r;
-
-            const top_r = std.math.lerp(pixel_a_r, pixel_b_r, dx);
-            const top_g = std.math.lerp(pixel_a_g, pixel_b_g, dx);
-            const top_b = std.math.lerp(pixel_a_b, pixel_b_b, dx);
-            const top_a = std.math.lerp(pixel_a_a, pixel_b_a, dx);
-
-            const bottom_r = std.math.lerp(pixel_c_r, pixel_d_r, dx);
-            const bottom_g = std.math.lerp(pixel_c_g, pixel_d_g, dx);
-            const bottom_b = std.math.lerp(pixel_c_b, pixel_d_b, dx);
-            const bottom_a = std.math.lerp(pixel_c_a, pixel_d_a, dx);
-
-            const source_r = std.math.lerp(top_r, bottom_r, dy) * tint.r;
-            const source_g = std.math.lerp(top_g, bottom_g, dy) * tint.g;
-            const source_b = std.math.lerp(top_b, bottom_b, dy) * tint.b;
-            const source_a = std.math.lerp(top_a, bottom_a, dy) * tint.a;
-
-            if (source_a == 0) continue;
-            const index = j * render_tile_size + i;
-            const destination_u8: [4]u8 = @bitCast(pixels[index]);
-
-            var destination_b: f32 = @floatFromInt(destination_u8[0]);
-            var destination_g: f32 = @floatFromInt(destination_u8[1]);
-            var destination_r: f32 = @floatFromInt(destination_u8[2]);
-
-            destination_r = destination_r * destination_r;
-            destination_g = destination_g * destination_g;
-            destination_b = destination_b * destination_b;
-
-            var blended_r = source_r + destination_r * (1.0 - source_a);
-            var blended_g = source_g + destination_g * (1.0 - source_a);
-            var blended_b = source_b + destination_b * (1.0 - source_a);
-
-            blended_r = @sqrt(blended_r);
-            blended_g = @sqrt(blended_g);
-            blended_b = @sqrt(blended_b);
-
-            const final = [_]u8{
-                @truncate(@as(u32, @intFromFloat(@round(blended_b)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_g)))),
-                @truncate(@as(u32, @intFromFloat(@round(blended_r)))),
-                255,
-            };
-
-            pixels[index] = @bitCast(final);
+        const row = pixels[j * render_tile_size ..][0..render_tile_size];
+        const translated_y: TexturedF32 = @splat(pixel_y - rectangle.y);
+        const row_local_x = translated_y * right_y;
+        const row_local_y = translated_y * right_x;
+        var x = x_min;
+        while (x + textured_rectangle_lanes <= x_max) : (x += textured_rectangle_lanes) {
+            const lane_x = @as(TexturedU32, @splat(@intCast(x))) + std.simd.iota(u32, textured_rectangle_lanes);
+            const pixel_x = @as(TexturedF32, @floatFromInt(lane_x)) + half;
+            const translated_x = pixel_x - origin_x;
+            const local_x = translated_x * right_x + row_local_x;
+            const local_y = translated_x * negative_right_y + row_local_y;
+            var mask: TexturedMask = @splat(true);
+            if (!fully_covered) {
+                const outside = (local_x < zero) | (local_x >= width) |
+                    (local_y < zero) | (local_y >= height);
+                mask = ~outside;
+            }
+            drawTexturedRectangleChunk(row, x, mask, local_x, local_y, texture, texels_per_pixel_x, texels_per_pixel_y, tint);
+        }
+        while (x < x_max) : (x += textured_rectangle_lanes) {
+            // Slide the last chunk into the row; exclude lanes already blended.
+            const start = @min(x, render_tile_size - textured_rectangle_lanes);
+            const lane_x = @as(TexturedU32, @splat(@intCast(start))) + std.simd.iota(u32, textured_rectangle_lanes);
+            var mask = (lane_x >= @as(TexturedU32, @splat(@intCast(x)))) & (lane_x < x_high);
+            const pixel_x = @as(TexturedF32, @floatFromInt(lane_x)) + half;
+            const translated_x = pixel_x - origin_x;
+            const local_x = translated_x * right_x + row_local_x;
+            const local_y = translated_x * negative_right_y + row_local_y;
+            if (!fully_covered) {
+                const outside = (local_x < zero) | (local_x >= width) |
+                    (local_y < zero) | (local_y >= height);
+                mask &= ~outside;
+            }
+            drawTexturedRectangleChunk(row, start, mask, local_x, local_y, texture, texels_per_pixel_x, texels_per_pixel_y, tint);
         }
     }
+}
+
+inline fn drawTexturedRectangleChunk(
+    row: *align(@alignOf(u32)) [render_tile_size]u32,
+    x: usize,
+    covered: TexturedMask,
+    local_x: TexturedF32,
+    local_y: TexturedF32,
+    texture: Bitmap,
+    texels_per_pixel_x: f32,
+    texels_per_pixel_y: f32,
+    tint: LinearColor,
+) void {
+    @setFloatMode(.optimized);
+    var mask = covered;
+    if (!@reduce(.Or, mask)) return;
+
+    const zero: TexturedF32 = @splat(0);
+    const half: TexturedF32 = @splat(0.5);
+    const one: TexturedF32 = @splat(1);
+    const scale_x: TexturedF32 = @splat(texels_per_pixel_x);
+    const scale_y: TexturedF32 = @splat(texels_per_pixel_y);
+    const texture_max_x: TexturedF32 = @splat(@floatFromInt(texture.width - 1));
+    const texture_max_y: TexturedF32 = @splat(@floatFromInt(texture.height - 1));
+    const texture_stride: TexturedU32 = @splat(texture.width);
+    const channel: TexturedU32 = @splat(255);
+    const shift_g: TexturedShift = @splat(8);
+    const shift_r: TexturedShift = @splat(16);
+    const shift_a: TexturedShift = @splat(24);
+    const alpha_scale: TexturedF32 = @splat(1.0 / 255.0);
+    const tint_r: TexturedF32 = @splat(tint.r);
+    const tint_g: TexturedF32 = @splat(tint.g);
+    const tint_b: TexturedF32 = @splat(tint.b);
+    const tint_a: TexturedF32 = @splat(tint.a);
+
+    // Scale directly to texels: for a native-size 127-pixel texture,
+    // (87.5 / 127) * 127 can drift whereas 87.5 * (127 / 127) does not.
+    // Subtract 0.5 so integer coordinates address texel centres.
+    // Inactive lanes still gather texels. Zero their local coordinates
+    // before scaling so tiny rectangles cannot overflow those samples.
+    const texel_x = @select(f32, mask, local_x, zero) * scale_x - half;
+    const texel_y = @select(f32, mask, local_y, zero) * scale_y - half;
+
+    const raw_x0: TexturedF32 = @floor(texel_x);
+    const raw_y0: TexturedF32 = @floor(texel_y);
+    const raw_x1 = raw_x0 + one;
+    const raw_y1 = raw_y0 + one;
+
+    // Distance to center of pixel being sampled. texel_* is the pixel centre in texture space.
+    const dx: TexturedF32 = texel_x - raw_x0;
+    const dy: TexturedF32 = texel_y - raw_y0;
+
+    const x0: TexturedU32 = @intFromFloat(@min(@max(raw_x0, zero), texture_max_x));
+    const y0: TexturedU32 = @intFromFloat(@min(@max(raw_y0, zero), texture_max_y));
+    const x1: TexturedU32 = @intFromFloat(@min(@max(raw_x1, zero), texture_max_x));
+    const y1: TexturedU32 = @intFromFloat(@min(@max(raw_y1, zero), texture_max_y));
+
+    // Convention: • denotes the pixel being sampled.
+    // A ───── B
+    // │       │
+    // │   •   │
+    // │       │
+    // C ───── D
+    const row0 = y0 * texture_stride;
+    const row1 = y1 * texture_stride;
+    var pixel_a: TexturedU32 = undefined;
+    var pixel_b: TexturedU32 = undefined;
+    var pixel_c: TexturedU32 = undefined;
+    var pixel_d: TexturedU32 = undefined;
+    inline for (0..textured_rectangle_lanes) |lane| {
+        pixel_a[lane] = texture.pixels[row0[lane] + x0[lane]];
+        pixel_b[lane] = texture.pixels[row0[lane] + x1[lane]];
+        pixel_c[lane] = texture.pixels[row1[lane] + x0[lane]];
+        pixel_d[lane] = texture.pixels[row1[lane] + x1[lane]];
+    }
+
+    const pixel_a_a = @as(TexturedF32, @floatFromInt(pixel_a >> shift_a)) * alpha_scale;
+    const pixel_b_a = @as(TexturedF32, @floatFromInt(pixel_b >> shift_a)) * alpha_scale;
+    const pixel_c_a = @as(TexturedF32, @floatFromInt(pixel_c >> shift_a)) * alpha_scale;
+    const pixel_d_a = @as(TexturedF32, @floatFromInt(pixel_d >> shift_a)) * alpha_scale;
+    const top_a = std.math.lerp(pixel_a_a, pixel_b_a, dx);
+    const bottom_a = std.math.lerp(pixel_c_a, pixel_d_a, dx);
+    const source_a = std.math.lerp(top_a, bottom_a, dy) * tint_a;
+    mask &= source_a != zero;
+    if (!@reduce(.Or, mask)) return;
+
+    // Gamma-2 decode in byte-squared units; the RGB /255 and final *255
+    // cancel. Bitmap RGB was premultiplied before encoding.
+    var pixel_a_r: TexturedF32 = @floatFromInt((pixel_a >> shift_r) & channel);
+    var pixel_b_r: TexturedF32 = @floatFromInt((pixel_b >> shift_r) & channel);
+    var pixel_c_r: TexturedF32 = @floatFromInt((pixel_c >> shift_r) & channel);
+    var pixel_d_r: TexturedF32 = @floatFromInt((pixel_d >> shift_r) & channel);
+    pixel_a_r = pixel_a_r * pixel_a_r;
+    pixel_b_r = pixel_b_r * pixel_b_r;
+    pixel_c_r = pixel_c_r * pixel_c_r;
+    pixel_d_r = pixel_d_r * pixel_d_r;
+    const top_r = std.math.lerp(pixel_a_r, pixel_b_r, dx);
+    const bottom_r = std.math.lerp(pixel_c_r, pixel_d_r, dx);
+    const source_r = std.math.lerp(top_r, bottom_r, dy) * tint_r;
+
+    var pixel_a_g: TexturedF32 = @floatFromInt((pixel_a >> shift_g) & channel);
+    var pixel_b_g: TexturedF32 = @floatFromInt((pixel_b >> shift_g) & channel);
+    var pixel_c_g: TexturedF32 = @floatFromInt((pixel_c >> shift_g) & channel);
+    var pixel_d_g: TexturedF32 = @floatFromInt((pixel_d >> shift_g) & channel);
+    pixel_a_g = pixel_a_g * pixel_a_g;
+    pixel_b_g = pixel_b_g * pixel_b_g;
+    pixel_c_g = pixel_c_g * pixel_c_g;
+    pixel_d_g = pixel_d_g * pixel_d_g;
+    const top_g = std.math.lerp(pixel_a_g, pixel_b_g, dx);
+    const bottom_g = std.math.lerp(pixel_c_g, pixel_d_g, dx);
+    const source_g = std.math.lerp(top_g, bottom_g, dy) * tint_g;
+
+    var pixel_a_b: TexturedF32 = @floatFromInt(pixel_a & channel);
+    var pixel_b_b: TexturedF32 = @floatFromInt(pixel_b & channel);
+    var pixel_c_b: TexturedF32 = @floatFromInt(pixel_c & channel);
+    var pixel_d_b: TexturedF32 = @floatFromInt(pixel_d & channel);
+    pixel_a_b = pixel_a_b * pixel_a_b;
+    pixel_b_b = pixel_b_b * pixel_b_b;
+    pixel_c_b = pixel_c_b * pixel_c_b;
+    pixel_d_b = pixel_d_b * pixel_d_b;
+    const top_b = std.math.lerp(pixel_a_b, pixel_b_b, dx);
+    const bottom_b = std.math.lerp(pixel_c_b, pixel_d_b, dx);
+    const source_b = std.math.lerp(top_b, bottom_b, dy) * tint_b;
+
+    const destination: TexturedU32 = row[x..][0..textured_rectangle_lanes].*;
+    var destination_b: TexturedF32 = @floatFromInt(destination & channel);
+    var destination_g: TexturedF32 = @floatFromInt((destination >> shift_g) & channel);
+    var destination_r: TexturedF32 = @floatFromInt((destination >> shift_r) & channel);
+
+    destination_r = destination_r * destination_r;
+    destination_g = destination_g * destination_g;
+    destination_b = destination_b * destination_b;
+
+    var blended_r = source_r + destination_r * (one - source_a);
+    var blended_g = source_g + destination_g * (one - source_a);
+    var blended_b = source_b + destination_b * (one - source_a);
+
+    blended_r = @sqrt(blended_r);
+    blended_g = @sqrt(blended_g);
+    blended_b = @sqrt(blended_b);
+
+    const final_r: TexturedU32 = @intFromFloat(@round(blended_r));
+    const final_g: TexturedU32 = @intFromFloat(@round(blended_g));
+    const final_b: TexturedU32 = @intFromFloat(@round(blended_b));
+    const alpha_bits: TexturedU32 = @splat(0xff00_0000);
+    const result = alpha_bits | ((final_r & channel) << shift_r) | ((final_g & channel) << shift_g) | (final_b & channel);
+    row[x..][0..textured_rectangle_lanes].* = @select(u32, mask, result, destination);
 }
 
 const sprite_lanes = 4;
@@ -1595,6 +1682,150 @@ pub fn drawTriangle(
     }
 }
 
+// Frozen pre-SIMD oracle, available only in tests.
+const TexturedRectangleReference = if (@import("builtin").is_test) struct {
+    fn draw(
+        pixels: *align(tile_alignment) Tile,
+        rectangle: PreparedRectangle,
+        texture: Bitmap,
+        texels_per_pixel_x: f32,
+        texels_per_pixel_y: f32,
+        tint: LinearColor,
+    ) void {
+        @setFloatMode(.optimized);
+
+        const bounds = rectangle.bounds;
+        const x_min: usize = @intFromFloat(bounds.min_x);
+        const y_min: usize = @intFromFloat(bounds.min_y);
+        const x_max: usize = @intFromFloat(bounds.max_x);
+        const y_max: usize = @intFromFloat(bounds.max_y);
+
+        const texture_width: f32 = @floatFromInt(texture.width);
+        const texture_height: f32 = @floatFromInt(texture.height);
+
+        for (y_min..y_max) |j| {
+            const pixel_y = @as(f32, @floatFromInt(j)) + 0.5;
+            for (x_min..x_max) |i| {
+                const pixel_x = @as(f32, @floatFromInt(i)) + 0.5;
+                const local = rectangle.coveredPosition(pixel_x, pixel_y) orelse continue;
+
+                // Scale directly to texels: for a native-size 127-pixel texture,
+                // (87.5 / 127) * 127 can drift whereas 87.5 * (127 / 127) does not.
+                // Subtract 0.5 so integer coordinates address texel centres.
+                const texel_x = local.x * texels_per_pixel_x - 0.5;
+                const texel_y = local.y * texels_per_pixel_y - 0.5;
+
+                const raw_x0: f32 = @floor(texel_x);
+                const raw_y0: f32 = @floor(texel_y);
+                const raw_x1 = raw_x0 + 1;
+                const raw_y1 = raw_y0 + 1;
+
+                // Distance to center of pixel being sampled. texel_* is the pixel centre in texture space.
+                const dx: f32 = texel_x - raw_x0;
+                const dy: f32 = texel_y - raw_y0;
+
+                const x0: usize = @intFromFloat(std.math.clamp(raw_x0, 0.0, texture_width - 1));
+                const y0: usize = @intFromFloat(std.math.clamp(raw_y0, 0.0, texture_height - 1));
+                const x1: usize = @intFromFloat(std.math.clamp(raw_x1, 0.0, texture_width - 1));
+                const y1: usize = @intFromFloat(std.math.clamp(raw_y1, 0.0, texture_height - 1));
+
+                // Convention: • denotes the pixel being sampled.
+                // A ───── B
+                // │       │
+                // │   •   │
+                // │       │
+                // C ───── D
+                const pixel_a: [4]u8 = @bitCast(texture.pixels[y0 * texture.width + x0]);
+                const pixel_b: [4]u8 = @bitCast(texture.pixels[y0 * texture.width + x1]);
+                const pixel_c: [4]u8 = @bitCast(texture.pixels[y1 * texture.width + x0]);
+                const pixel_d: [4]u8 = @bitCast(texture.pixels[y1 * texture.width + x1]);
+
+                var pixel_a_b: f32 = @floatFromInt(pixel_a[0]);
+                var pixel_a_g: f32 = @floatFromInt(pixel_a[1]);
+                var pixel_a_r: f32 = @floatFromInt(pixel_a[2]);
+                const pixel_a_a: f32 = @as(f32, @floatFromInt(pixel_a[3])) * (1.0 / 255.0);
+
+                var pixel_b_b: f32 = @floatFromInt(pixel_b[0]);
+                var pixel_b_g: f32 = @floatFromInt(pixel_b[1]);
+                var pixel_b_r: f32 = @floatFromInt(pixel_b[2]);
+                const pixel_b_a: f32 = @as(f32, @floatFromInt(pixel_b[3])) * (1.0 / 255.0);
+
+                var pixel_c_b: f32 = @floatFromInt(pixel_c[0]);
+                var pixel_c_g: f32 = @floatFromInt(pixel_c[1]);
+                var pixel_c_r: f32 = @floatFromInt(pixel_c[2]);
+                const pixel_c_a: f32 = @as(f32, @floatFromInt(pixel_c[3])) * (1.0 / 255.0);
+
+                var pixel_d_b: f32 = @floatFromInt(pixel_d[0]);
+                var pixel_d_g: f32 = @floatFromInt(pixel_d[1]);
+                var pixel_d_r: f32 = @floatFromInt(pixel_d[2]);
+                const pixel_d_a: f32 = @as(f32, @floatFromInt(pixel_d[3])) * (1.0 / 255.0);
+
+                // Gamma-2 decode in byte-squared units; the RGB /255 and final *255
+                // cancel. Bitmap RGB was premultiplied before encoding.
+                pixel_a_b = pixel_a_b * pixel_a_b;
+                pixel_a_g = pixel_a_g * pixel_a_g;
+                pixel_a_r = pixel_a_r * pixel_a_r;
+
+                pixel_b_b = pixel_b_b * pixel_b_b;
+                pixel_b_g = pixel_b_g * pixel_b_g;
+                pixel_b_r = pixel_b_r * pixel_b_r;
+
+                pixel_c_b = pixel_c_b * pixel_c_b;
+                pixel_c_g = pixel_c_g * pixel_c_g;
+                pixel_c_r = pixel_c_r * pixel_c_r;
+
+                pixel_d_b = pixel_d_b * pixel_d_b;
+                pixel_d_g = pixel_d_g * pixel_d_g;
+                pixel_d_r = pixel_d_r * pixel_d_r;
+
+                const top_r = std.math.lerp(pixel_a_r, pixel_b_r, dx);
+                const top_g = std.math.lerp(pixel_a_g, pixel_b_g, dx);
+                const top_b = std.math.lerp(pixel_a_b, pixel_b_b, dx);
+                const top_a = std.math.lerp(pixel_a_a, pixel_b_a, dx);
+
+                const bottom_r = std.math.lerp(pixel_c_r, pixel_d_r, dx);
+                const bottom_g = std.math.lerp(pixel_c_g, pixel_d_g, dx);
+                const bottom_b = std.math.lerp(pixel_c_b, pixel_d_b, dx);
+                const bottom_a = std.math.lerp(pixel_c_a, pixel_d_a, dx);
+
+                const source_r = std.math.lerp(top_r, bottom_r, dy) * tint.r;
+                const source_g = std.math.lerp(top_g, bottom_g, dy) * tint.g;
+                const source_b = std.math.lerp(top_b, bottom_b, dy) * tint.b;
+                const source_a = std.math.lerp(top_a, bottom_a, dy) * tint.a;
+
+                if (source_a == 0) continue;
+                const index = j * render_tile_size + i;
+                const destination_u8: [4]u8 = @bitCast(pixels[index]);
+
+                var destination_b: f32 = @floatFromInt(destination_u8[0]);
+                var destination_g: f32 = @floatFromInt(destination_u8[1]);
+                var destination_r: f32 = @floatFromInt(destination_u8[2]);
+
+                destination_r = destination_r * destination_r;
+                destination_g = destination_g * destination_g;
+                destination_b = destination_b * destination_b;
+
+                var blended_r = source_r + destination_r * (1.0 - source_a);
+                var blended_g = source_g + destination_g * (1.0 - source_a);
+                var blended_b = source_b + destination_b * (1.0 - source_a);
+
+                blended_r = @sqrt(blended_r);
+                blended_g = @sqrt(blended_g);
+                blended_b = @sqrt(blended_b);
+
+                const final = [_]u8{
+                    @truncate(@as(u32, @intFromFloat(@round(blended_b)))),
+                    @truncate(@as(u32, @intFromFloat(@round(blended_g)))),
+                    @truncate(@as(u32, @intFromFloat(@round(blended_r)))),
+                    255,
+                };
+
+                pixels[index] = @bitCast(final);
+            }
+        }
+    }
+} else void;
+
 // Frozen pre-SIMD oracle. This declaration is unavailable in production builds.
 const SpriteReference = if (@import("builtin").is_test) struct {
     fn draw(
@@ -1800,6 +2031,89 @@ test "submitted sprites accept extra trailing texture storage" {
     commands.pushRect(0, 0, 2, 2, .{ .pivot_fraction_x = 0, .pivot_fraction_y = 0, .texture = texture });
     renderer.endDrawing(arena.allocator(), commands);
     try std.testing.expectEqualSlices(u32, &.{ 0xffff0000, 0xff00ff00, 0, 0xff0000ff, 0xffffffff, 0 }, renderer.back_buffer.pixels());
+}
+
+test "textured rectangle chunks preserve coverage and blend once at every row offset" {
+    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const background: u32 = 0x125a8fce;
+    var texels = [_]u32{ 0, 0xff204080, 0x80402060, 0xffa0b0c0, 0x40201030, 0 };
+    const texture: Bitmap = .{ .width = 3, .height = 2, .pixels = &texels };
+    const tint = LinearColor.init(.{ .r = 0.7, .g = 0.3, .b = 0.9, .a = 0.5 });
+    for (0..64) |start| {
+        for ([_]f32{ 0.25, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64 }) |width| {
+            for ([_]f32{ 0, 0.3, -0.7 }) |angle| {
+                const rectangle = PreparedRectangle.init(screen, Renderer.RectangleGeometry.init(@as(f32, @floatFromInt(start)) + 0.5, 61.5, width, 2, 0, 0, angle), .outward) orelse continue;
+                var expected: Tile align(tile_alignment) = @splat(background);
+                var actual: [render_tile_size * render_tile_size + 16]u32 align(tile_alignment) = @splat(background);
+                for (0..3) |_| {
+                    TexturedRectangleReference.draw(&expected, rectangle, texture, 3 / width, 1, tint);
+                    drawTexturedRectangle(actual[0..expected.len], rectangle, texture, 3 / width, 1, tint);
+                    try expectSpritePixels(&expected, actual[0..expected.len], background);
+                    for (actual[expected.len..]) |pixel| try std.testing.expectEqual(background, pixel);
+                }
+            }
+        }
+    }
+}
+
+test "textured rectangle SIMD filtering preserves transparent lanes degenerate textures and tint" {
+    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const background: u32 = 0x128f5c31;
+    var texels: [31 * 17]u32 = undefined;
+    for (0..3) |pattern| {
+        for (&texels, 0..) |*pixel, i| {
+            pixel.* = switch (pattern) {
+                0 => 0,
+                1 => 0xff204080,
+                else => ([_]u32{ 0, 0xff204080, 0x80402060, 0xffa0b0c0, 0x40201030 })[i % 5],
+            };
+        }
+        for ([_][2]u16{ .{ 1, 1 }, .{ 1, 7 }, .{ 9, 1 }, .{ 3, 2 }, .{ 31, 17 } }) |size| {
+            const texture: Bitmap = .{ .width = size[0], .height = size[1], .pixels = texels[0 .. @as(usize, size[0]) * size[1]] };
+            for ([_]f32{ 0.25, 1, 3.5, 31, 63.5, 1e20 }) |width| {
+                for ([_]f32{ 0, 0.3, -0.7, std.math.pi / 2.0 }) |angle| {
+                    const rectangle = PreparedRectangle.init(screen, Renderer.RectangleGeometry.init(1.5, 1.5, width, width, 0, 0, angle), .outward) orelse continue;
+                    const scale_x = @as(f32, @floatFromInt(texture.width)) / width;
+                    const scale_y = @as(f32, @floatFromInt(texture.height)) / width;
+                    for ([_]Color{ .white, .{ .r = 0.7, .g = 0.3, .b = 0.9, .a = 0.5 }, .{ .r = 1, .g = 1, .b = 1, .a = 0 } }) |color| {
+                        var expected: Tile align(tile_alignment) = @splat(background);
+                        var actual: Tile align(tile_alignment) = @splat(background);
+                        for (0..3) |_| {
+                            TexturedRectangleReference.draw(&expected, rectangle, texture, scale_x, scale_y, LinearColor.init(color));
+                            drawTexturedRectangle(&actual, rectangle, texture, scale_x, scale_y, LinearColor.init(color));
+                            try expectSpritePixels(&expected, &actual, background);
+                            if (pattern <= 1) try std.testing.expectEqualSlices(u32, &expected, &actual);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+test "textured rectangle gathers preserve wide indices and mask tiny rectangle tails" {
+    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const background: u32 = 0x125a8fce;
+    const texels = try std.testing.allocator.alloc(u32, 65535);
+    defer std.testing.allocator.free(texels);
+    for (texels, 0..) |*pixel, i| {
+        pixel.* = 0xff000000 | @as(u32, @intCast((i * 7919) % 0x1000000));
+    }
+    for ([_][2]u16{ .{ 65535, 1 }, .{ 1, 65535 } }) |size| {
+        const texture: Bitmap = .{ .width = size[0], .height = size[1], .pixels = texels };
+        for ([_]f32{ 2e-34, 1, 3.5, 17, 63.5 }) |width| {
+            for ([_]f32{ 0.5, 60.5, 63.5 }) |origin| {
+                const rectangle = PreparedRectangle.init(screen, Renderer.RectangleGeometry.init(origin, origin, width, width, 0, 0, 0), .outward).?;
+                const scale_x = @as(f32, @floatFromInt(texture.width)) / width;
+                const scale_y = @as(f32, @floatFromInt(texture.height)) / width;
+                var expected: Tile align(tile_alignment) = @splat(background);
+                var actual: Tile align(tile_alignment) = @splat(background);
+                TexturedRectangleReference.draw(&expected, rectangle, texture, scale_x, scale_y, LinearColor.init(.white));
+                drawTexturedRectangle(&actual, rectangle, texture, scale_x, scale_y, LinearColor.init(.white));
+                try expectSpritePixels(&expected, &actual, background);
+            }
+        }
+    }
 }
 
 test "overflowing textured rectangle sampling scales leave pixels untouched" {
@@ -2058,8 +2372,8 @@ test "classified rectangle kernels match per-pixel coverage across rotated tile 
                     @memset(&actual, 0xff183a71);
                     @memset(&expected, 0xff183a71);
                     drawTexturedRectangle(&actual, rectangle, texture, texels_per_pixel_x, texels_per_pixel_y, LinearColor.init(tint orelse .white));
-                    drawTexturedRectanglePixels(false, &expected, rectangle, texture, texels_per_pixel_x, texels_per_pixel_y, LinearColor.init(tint orelse .white));
-                    try std.testing.expectEqualSlices(u32, &expected, &actual);
+                    TexturedRectangleReference.draw(&expected, rectangle, texture, texels_per_pixel_x, texels_per_pixel_y, LinearColor.init(tint orelse .white));
+                    try expectSpritePixels(&expected, &actual, 0xff183a71);
                 }
             }
         }
