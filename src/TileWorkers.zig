@@ -39,7 +39,8 @@ pub fn init(self: *Self, gpa: std.mem.Allocator, capacity: usize, config: Config
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
     if (self.jobs.len == 0) return;
     self.stopping.store(true, .release);
-    self.notify();
+    // Teardown can run after the caller has finished its final profiling frame.
+    self.wake();
     for (self.threads[0..self.thread_count]) |thread| thread.join();
     gpa.free(self.jobs);
     self.* = .{};
@@ -66,6 +67,10 @@ pub fn submit(self: *Self, job: Renderer.TileJob) void {
 pub fn notify(self: *Self) void {
     const trace = profile.begin(.renderer_wake);
     defer profile.end(trace);
+    self.wake();
+}
+
+fn wake(self: *Self) void {
     _ = self.wake_epoch.fetchAdd(1, .release);
     self.io.futexWake(u32, &self.wake_epoch.raw, std.math.maxInt(u32));
 }

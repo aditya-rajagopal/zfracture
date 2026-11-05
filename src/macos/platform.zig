@@ -364,6 +364,9 @@ pub const State = struct {
     }
 
     pub fn present(self: *Self) void {
+        // TODO: Test Metal presentation instead of doing this. There are weirdly high
+        // number of minor page faults when writing to the framebuffer especially in release
+        // fast.
         if (self.window.msgSend(bool, "isMiniaturized", .{})) return;
 
         self.view.msgSend(void, "setNeedsDisplay:", .{true});
