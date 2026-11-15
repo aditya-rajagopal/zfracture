@@ -23,95 +23,93 @@ pub fn build(b: *std.Build) !void {
     // }).artifact("shader_compiler");
 
     // ================================== MODULES ==================================/
+    // Bake in the build runner so edits to an example can reuse the prepared atlas.
+    const atlas = comptime @import("src/bake_monogram.zig").bake(@embedFile("assets/fonts/monogram-bitmap.png"));
+    const atlas_file = b.addWriteFiles().add("monogram.bgra", &atlas);
+    const font_assets = [_]std.Build.Module.Import{.{
+        .name = "monogram_pixels",
+        .module = b.createModule(.{ .root_source_file = atlas_file }),
+    }};
     const fracture = b.addModule("fracture", .{
         .root_source_file = b.path("src/fracture.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &font_assets,
     });
     try addAudioDependencies(b, fracture);
     try addPlatformDependencies(b, fracture);
 
-    // ==================================== TESTBED ==================================/
-    const entrypoint = b.createModule(.{
-        .root_source_file = b.path("testbed/entrypoint.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "fracture", .module = fracture },
-        },
-    });
-
-    const exe = b.addExecutable(.{
-        .name = "game",
-        .root_module = entrypoint,
-    });
-
-    if (optimize == .fast and target.result.os.tag == .windows) {
-        // NOTE(adi): Disables debug console on windows
-        exe.subsystem = .windows;
-    }
-
-    b.installArtifact(exe);
-
-    const run_step = b.step("run", "Run the app");
-
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.setCwd(b.path("."));
-    run_step.dependOn(&run_cmd.step);
-
-    // Keep an installed executable available alongside the development run.
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    run_cmd.addPassthruArgs();
-
-    // Triangle
-    const triangle = b.createModule(.{
-        .root_source_file = b.path("testbed/triangle.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "fracture", .module = fracture },
-        },
-    });
-
-    const tri = b.addExecutable(.{
-        .name = "triangle",
-        .root_module = triangle,
-    });
-
-    if (optimize == .fast and target.result.os.tag == .windows) {
-        // NOTE(adi): Disables debug console on windows
-        exe.subsystem = .windows;
-    }
-
-    b.installArtifact(exe);
-
-    const triangle_step = b.step("triangle", "Run the app");
-
-    const triangle_cmd = b.addRunArtifact(tri);
-    triangle_cmd.setCwd(b.path("."));
-    triangle_step.dependOn(&triangle_cmd.step);
-
-    // Keep an installed executable available alongside the development run.
-    triangle_cmd.step.dependOn(b.getInstallStep());
-
     // ==================================== CHECK STEP ==================================/
-    const exe_check = b.addExecutable(.{
-        .name = "check",
-        .root_module = entrypoint,
-    });
-    const triangle_check = b.addExecutable(.{
-        .name = "tricheck",
-        .root_module = triangle,
-    });
-    triangle_check.subsystem = tri.subsystem;
-    exe_check.subsystem = exe.subsystem;
+
     const check = b.step(
         "check",
         "Check the testbed and tests without running them",
     );
-    check.dependOn(&exe_check.step);
-    check.dependOn(&triangle_check.step);
+
+    // ==================================== TESTBED ==================================/
+
+    const examples = [_][]const u8{ "entrypoint", "triangle", "font" };
+    for (examples) |example| {
+        var buffer: [1024]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buffer);
+        try writer.print("testbed/{s}.zig", .{example});
+        const entrypoint = b.createModule(.{
+            .root_source_file = b.path(writer.buffered()),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "fracture", .module = fracture },
+            },
+        });
+
+        const exe = b.addExecutable(.{
+            .name = example,
+            .root_module = entrypoint,
+        });
+
+        if (optimize == .fast and target.result.os.tag == .windows) {
+            // NOTE(adi): Disables debug console on windows
+            exe.subsystem = .windows;
+        }
+
+        const install_example = b.addInstallArtifact(exe, .{});
+        b.getInstallStep().dependOn(&install_example.step);
+
+        const run_step = b.step(example, "Run Example");
+
+        const run_cmd = b.addRunArtifact(exe);
+        run_cmd.setCwd(b.path("."));
+        run_step.dependOn(&run_cmd.step);
+
+        // Keep an installed executable available alongside the development run.
+        run_cmd.step.dependOn(&install_example.step);
+
+        run_cmd.addPassthruArgs();
+
+        _ = writer.consumeAll();
+        try writer.print("check_{s}", .{example});
+
+        const exe_check = b.addExecutable(.{
+            .name = writer.buffered(),
+            .root_module = entrypoint,
+        });
+        exe_check.subsystem = exe.subsystem;
+        check.dependOn(&exe_check.step);
+    }
+
+    const nearest_bench = b.addExecutable(.{
+        .name = "nearest-sprite-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("testbed/nearest_sprite_bench.zig"),
+            .target = b.graph.host,
+            .optimize = .fast,
+        }),
+    });
+    nearest_bench.root_module.addImport("renderer", b.createModule(.{
+        .root_source_file = b.path("src/software_renderer.zig"),
+        .imports = &font_assets,
+    }));
+    b.step("bench-nearest", "Benchmark nearest-neighbour font and sprite draws").dependOn(&b.addRunArtifact(nearest_bench).step);
 
     // ==================================== TESTS ==================================/
     const test_step = b.step(
@@ -141,6 +139,7 @@ pub fn build(b: *std.Build) !void {
             .root_source_file = b.path(path),
             .target = b.graph.host,
             .optimize = optimize,
+            .imports = &font_assets,
         });
         const host_tests = b.addTest(.{ .root_module = test_module });
         check.dependOn(&host_tests.step);
@@ -152,6 +151,7 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/platform.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &font_assets,
     });
     try addPlatformDependencies(b, platform_module);
     const platform_options = b.addOptions();

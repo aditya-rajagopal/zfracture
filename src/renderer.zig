@@ -10,6 +10,8 @@ pub const View = struct {
     camera_y: f32,
 };
 
+pub const TextureFilter = enum { bilinear, nearest };
+
 pub const RectConfig = struct {
     /// Fractions measured from the unrotated top-left; values outside [0, 1]
     /// place the pivot outside the rectangle.
@@ -18,6 +20,7 @@ pub const RectConfig = struct {
     /// Positive angles rotate clockwise in Y-down coordinates.
     angle_radians: f32 = 0,
     texture: ?Texture = null,
+    filter: TextureFilter = .bilinear,
     tint_srgb: ?Color = null,
 };
 
@@ -88,6 +91,7 @@ pub const CommandBuffer = struct {
         self.commands.appendBounded(.{ .draw_rectangle = .{
             .rectangle = rectangle,
             .texture = config.texture,
+            .filter = config.filter,
             .tint_srgb = config.tint_srgb,
         } }) catch @panic("Frontend command buffer capacity exceeded");
     }
@@ -185,6 +189,7 @@ pub const ClearCommand = struct {
 pub const DrawRectangleCommand = struct {
     rectangle: RectangleGeometry,
     texture: ?Texture = null,
+    filter: TextureFilter = .bilinear,
     tint_srgb: ?Color = null,
 };
 

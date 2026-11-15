@@ -15,6 +15,8 @@
         },
     },
     .paths = .{
+        "assets/fonts/monogram-bitmap.png",
+        "assets/fonts/monogram-LICENSE.txt",
         "build.zig",
         "build.zig.zon",
         "src",
