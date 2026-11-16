@@ -171,6 +171,13 @@ pub fn Tracer(
             return time_fn();
         }
 
+        pub fn getAnchorTime(self: *const Self, anchor: AnchorsEnum) f64 {
+            if (!enabled) return 0;
+            const in = &self.inner;
+            const value: usize = @intCast(@backingInt(anchor));
+            return self.toMS(in.tracer_anchors[value + 1].scope_time_inclusive);
+        }
+
         /// Report through the caller's writer; no dependency on log filtering.
         pub fn writeReport(self: *const Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
             if (!enabled) return;
@@ -186,7 +193,11 @@ pub fn Tracer(
                     const inclusive = self.toMS(anchor.scope_time_inclusive);
                     const percentage = if (full_time > 0) exclusive * 100.0 / full_time else 0;
                     try writer.print("  {s}[{d}]: {d:.6} ms exclusive ({d:.2}%), {d:.6} ms inclusive, {d:.6} ms/hit\n", .{
-                        name,                                                  anchor.hit_count, exclusive, percentage, inclusive,
+                        name,
+                        anchor.hit_count,
+                        exclusive,
+                        percentage,
+                        inclusive,
                         exclusive / @as(f64, @floatFromInt(anchor.hit_count)),
                     });
                 }
@@ -362,6 +373,21 @@ const TestClock = struct {
 
 const TestAnchors = enum { outer, child, leaf };
 const TestTracer = Tracer(TestAnchors, TestClock.read, true);
+
+test "getAnchorTime supports signed anchor enums and disabled tracing" {
+    const Anchors = enum(i8) { frame, draw };
+    TestClock.now = 0;
+    var tracer: Tracer(Anchors, TestClock.read, true) = .empty;
+    tracer.initWithFrequency(2000);
+    const draw = tracer.startTrace(.draw);
+    TestClock.now = 8;
+    tracer.end(&draw);
+    try std.testing.expectEqual(4.0, tracer.getAnchorTime(.draw));
+    try std.testing.expectEqual(0.0, tracer.getAnchorTime(.frame));
+
+    const disabled: Tracer(Anchors, TestClock.read, false) = .empty;
+    try std.testing.expectEqual(0.0, disabled.getAnchorTime(.draw));
+}
 
 test "nested scopes attribute inclusive and exclusive time across siblings" {
     TestClock.now = 0;

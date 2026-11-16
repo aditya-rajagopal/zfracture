@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const collision = @import("collision.zig");
+const monogram = @import("monogram.zig");
 const Color = types.Color;
 const AABB = @import("shapes.zig").AABB;
 
@@ -12,6 +13,14 @@ pub const View = struct {
 
 pub const TextureFilter = enum { bilinear, nearest };
 
+/// A region in texture pixels, measured from the top-left.
+pub const SourceRect = struct {
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+};
+
 pub const RectConfig = struct {
     /// Fractions measured from the unrotated top-left; values outside [0, 1]
     /// place the pivot outside the rectangle.
@@ -20,14 +29,82 @@ pub const RectConfig = struct {
     /// Positive angles rotate clockwise in Y-down coordinates.
     angle_radians: f32 = 0,
     texture: ?Texture = null,
+    /// Stretch this region over the destination. Null selects the whole texture.
+    /// Empty or out-of-bounds regions skip the draw. Missing textures use the fallback color.
+    source_rect: ?SourceRect = null,
     filter: TextureFilter = .bilinear,
     tint_srgb: ?Color = null,
 };
+
+pub const TextConfig = struct {
+    scale: u16 = 1,
+    /// Bounds in the same units as pushRect. Only whole glyph cells fit.
+    width: ?f32 = null,
+    height: ?f32 = null,
+    /// Wrap continues at the next character. Clip skips to the next newline.
+    mode: enum { wrap, clip } = .clip,
+    tint_srgb: ?Color = null,
+};
+
+/// Measurement and playback consume the same rows, including explicit empty lines.
+pub const TextLines = struct {
+    lines: std.mem.SplitIterator(u8, .scalar),
+    continuation: ?[]const u8 = null,
+    columns: usize,
+    rows_left: usize,
+    mode: @FieldType(TextConfig, "mode"),
+    glyph_width: f32,
+    glyph_height: f32,
+
+    pub fn init(text: []const u8, config: TextConfig) TextLines {
+        const glyph_width: f32 = @floatFromInt(@as(u32, monogram.cell_width) * config.scale);
+        const glyph_height: f32 = @floatFromInt(@as(u32, monogram.cell_height) * config.scale);
+        return .{
+            .lines = std.mem.splitScalar(u8, text, '\n'),
+            .columns = cellsThatFit(config.width, glyph_width),
+            .rows_left = cellsThatFit(config.height, glyph_height),
+            .mode = config.mode,
+            .glyph_width = glyph_width,
+            .glyph_height = glyph_height,
+        };
+    }
+
+    fn cellsThatFit(limit: ?f32, cell_size: f32) usize {
+        if (cell_size == 0) return 0;
+        const extent = limit orelse return std.math.maxInt(usize);
+        return std.math.lossyCast(usize, @as(f64, extent) / cell_size);
+    }
+
+    pub fn next(self: *TextLines) ?[]const u8 {
+        if (self.columns == 0 or self.rows_left == 0) return null;
+        const line = self.continuation orelse self.lines.next() orelse return null;
+        const count = @min(line.len, self.columns);
+        self.continuation = if (self.mode == .wrap and count < line.len) line[count..] else null;
+        self.rows_left -= 1;
+        return line[0..count];
+    }
+};
+
+pub fn measureText(text: []const u8, config: TextConfig) struct { width: f32, height: f32 } {
+    var lines = TextLines.init(text, config);
+    var columns: usize = 0;
+    var rows: usize = 0;
+    while (lines.next()) |line| {
+        columns = @max(columns, line.len);
+        rows += 1;
+    }
+    return .{
+        .width = @as(f32, @floatFromInt(columns)) * lines.glyph_width,
+        .height = @as(f32, @floatFromInt(rows)) * lines.glyph_height,
+    };
+}
 
 /// Records one frame into borrowed storage. View changes affect subsequent pushes
 /// and queries immediately. Keep commands and referenced textures alive until playback ends.
 pub const CommandBuffer = struct {
     commands: std.ArrayList(Command),
+    string_bytes: [4096]u8 = undefined,
+    string_bytes_used: usize = 0,
     width: u16 = 0,
     height: u16 = 0,
     view: View = undefined,
@@ -37,6 +114,7 @@ pub const CommandBuffer = struct {
         if (width == 0 or height == 0) @panic("Command buffer viewport must be nonempty");
         self.width = width;
         self.height = height;
+        self.string_bytes_used = 0;
         self.commands.clearRetainingCapacity();
         self.pushClear(clear_color);
         self.pushView(view);
@@ -91,9 +169,36 @@ pub const CommandBuffer = struct {
         self.commands.appendBounded(.{ .draw_rectangle = .{
             .rectangle = rectangle,
             .texture = config.texture,
+            .source_rect = config.source_rect,
             .filter = config.filter,
             .tint_srgb = config.tint_srgb,
         } }) catch @panic("Frontend command buffer capacity exceeded");
+    }
+
+    /// Draw from the top-left using a Monogram atlas. Text is copied before returning.
+    /// Exceeding the frame's 4096-byte string buffer panics, like exceeding the command buffer.
+    pub fn pushText(
+        self: *CommandBuffer,
+        x: f32,
+        y: f32,
+        text: []const u8,
+        font: Texture,
+        config: TextConfig,
+    ) void {
+        std.debug.assert(self.width > 0 and self.height > 0);
+        if (text.len == 0 or config.scale == 0) return;
+        const start = self.string_bytes_used;
+        if (text.len > self.string_bytes.len - start) @panic("Frame string buffer capacity exceeded");
+        self.commands.appendBounded(.{ .draw_text = .{
+            .x = x,
+            .y = y,
+            .string_offset = @intCast(start),
+            .string_len = @intCast(text.len),
+            .font = font,
+            .config = config,
+        } }) catch @panic("Frontend command buffer capacity exceeded");
+        @memcpy(self.string_bytes[start..][0..text.len], text);
+        self.string_bytes_used += text.len;
     }
 
     pub fn screenFromWorld(self: *const CommandBuffer, x: f32, y: f32) struct { x: f32, y: f32 } {
@@ -172,12 +277,14 @@ pub const Command = union(CommandType) {
     set_view: View,
     clear_screen: ClearCommand,
     draw_rectangle: DrawRectangleCommand,
+    draw_text: DrawTextCommand,
 };
 
 pub const CommandType = enum(u8) {
     set_view,
     clear_screen,
     draw_rectangle,
+    draw_text,
 };
 
 pub const ClearCommand = struct {
@@ -189,11 +296,42 @@ pub const ClearCommand = struct {
 pub const DrawRectangleCommand = struct {
     rectangle: RectangleGeometry,
     texture: ?Texture = null,
+    source_rect: ?SourceRect = null,
     filter: TextureFilter = .bilinear,
     tint_srgb: ?Color = null,
+};
+
+pub const DrawTextCommand = struct {
+    x: f32,
+    y: f32,
+    string_offset: u16,
+    string_len: u16,
+    font: Texture,
+    config: TextConfig,
 };
 
 pub const Texture = enum(u32) {
     missing_texture = 0,
     _,
 };
+
+test "measureText fits whole cells and counts spaces and explicit empty lines" {
+    const Case = struct { text: []const u8, config: TextConfig, width: f32, height: f32 };
+    const cases = [_]Case{
+        .{ .text = "A B \nC", .config = .{ .scale = 2 }, .width = 48, .height = 48 },
+        .{ .text = "ABCD", .config = .{ .width = 17.5, .mode = .wrap }, .width = 12, .height = 24 },
+        .{ .text = "ABCD", .config = .{ .width = 17.5, .mode = .clip }, .width = 12, .height = 12 },
+        .{ .text = "AB\n\nC\n", .config = .{ .width = 12, .mode = .wrap }, .width = 12, .height = 48 },
+        .{ .text = "ABCD", .config = .{ .width = 6, .height = 35.5, .mode = .wrap }, .width = 6, .height = 24 },
+        .{ .text = "A", .config = .{ .width = 5, .mode = .wrap }, .width = 0, .height = 0 },
+        .{ .text = "A", .config = .{ .height = 11 }, .width = 0, .height = 0 },
+        .{ .text = "A", .config = .{ .scale = 0 }, .width = 0, .height = 0 },
+        .{ .text = "A", .config = .{ .scale = 65535 }, .width = 393210, .height = 786420 },
+        .{ .text = "", .config = .{}, .width = 0, .height = 12 },
+    };
+    for (cases) |case| {
+        const size = measureText(case.text, case.config);
+        try std.testing.expectEqual(case.width, size.width);
+        try std.testing.expectEqual(case.height, size.height);
+    }
+}
