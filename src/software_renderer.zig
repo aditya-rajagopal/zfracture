@@ -321,8 +321,10 @@ fn prepareCommands(self: *Self, command_buffer: *const Renderer.CommandBuffer) v
     self.prepared_commands.headers.len = 0;
     self.prepared_commands.data.len = 0;
     self.prepared_commands.tile_bounds.len = 0;
-    var view = commands[1].set_view;
-    var pixels_per_meter = 1.0 / view.meters_per_pixel;
+
+    var view: Renderer.View = undefined;
+    var clip: Renderer.Rect = undefined;
+    var pixels_per_meter: f32 = undefined;
     for (commands) |command| {
         assert(self.prepared_commands.headers.len == self.prepared_commands.tile_bounds.len);
 
@@ -351,10 +353,11 @@ fn prepareCommands(self: *Self, command_buffer: *const Renderer.CommandBuffer) v
             },
             .set_view => |next| {
                 view = next;
+                clip = next.viewport.?.clippedTo(self.back_buffer.width, self.back_buffer.height);
                 pixels_per_meter = 1.0 / next.meters_per_pixel;
                 continue;
             },
-            .draw_rectangle => |rect| self.prepareRectangle(rect, view, pixels_per_meter),
+            .draw_rectangle => |rect| self.prepareRectangle(rect, view, pixels_per_meter, clip),
             .draw_text => |draw| {
                 const strings = command_buffer.string_bytes[0..command_buffer.string_bytes_used];
                 const text = strings[draw.string_offset..][0..draw.string_len];
@@ -385,7 +388,7 @@ fn prepareCommands(self: *Self, command_buffer: *const Renderer.CommandBuffer) v
                             },
                             .filter = .nearest,
                             .tint_srgb = draw.config.tint_srgb,
-                        }, view, pixels_per_meter);
+                        }, view, pixels_per_meter, clip);
                     }
                 }
             },
@@ -393,11 +396,12 @@ fn prepareCommands(self: *Self, command_buffer: *const Renderer.CommandBuffer) v
     }
 }
 
-fn prepareRectangle(self: *Self, rect: Renderer.DrawRectangleCommand, view: Renderer.View, pixels_per_meter: f32) void {
+fn prepareRectangle(self: *Self, rect: Renderer.DrawRectangleCommand, view: Renderer.View, pixels_per_meter: f32, clip: Renderer.Rect) void {
     const world = rect.rectangle;
+    const viewport = view.viewport.?;
     const screen: Renderer.RectangleGeometry = .{
-        .origin_x = (world.origin_x - view.camera_x) * pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.width)) / 2.0,
-        .origin_y = (world.origin_y - view.camera_y) * pixels_per_meter + @as(f32, @floatFromInt(self.back_buffer.height)) / 2.0,
+        .origin_x = (world.origin_x - view.camera_x) * pixels_per_meter + viewport.centerX(),
+        .origin_y = (world.origin_y - view.camera_y) * pixels_per_meter + viewport.centerY(),
         .width = world.width * pixels_per_meter,
         .height = world.height * pixels_per_meter,
         .right_x = world.right_x,
@@ -406,7 +410,7 @@ fn prepareRectangle(self: *Self, rect: Renderer.DrawRectangleCommand, view: Rend
     const axis_aligned = screen.right_x == 1 and screen.right_y == 0;
     var rounding: PreparedRectangle.BoundsRounding = .outward;
     if (rect.texture == null and axis_aligned) rounding = .pixel_centres;
-    const rectangle = PreparedRectangle.init(self.back_buffer, screen, rounding) orelse return;
+    const rectangle = PreparedRectangle.init(clip, screen, rounding) orelse return;
 
     const tile_bounds = TileBounds.init(rectangle.bounds);
     var header: PreparedCommandBuffer.Header = undefined;
@@ -490,8 +494,7 @@ pub fn renderTile(
         .max_y = @as(f32, @floatFromInt((tile_id.y + 1) * render_tile_size)),
     };
     const range = clipped(
-        back_buffer.width,
-        back_buffer.height,
+        .{ .width = back_buffer.width, .height = back_buffer.height },
         tile_bounds.min_x,
         tile_bounds.min_y,
         tile_bounds.max_x,
@@ -628,19 +631,21 @@ pub fn getTextureOrNull(self: *const Self, texture: Renderer.Texture) ?Bitmap {
     return self.textures[index];
 }
 
-fn textureView(self: *const Self, texture: Renderer.Texture, source_rect: ?Renderer.SourceRect) ?TextureView {
+fn textureView(self: *const Self, texture: Renderer.Texture, source_rect: ?Renderer.Rect) ?TextureView {
     const bitmap = self.getTexture(texture);
     const rect = source_rect orelse return .full(bitmap);
     if (texture == .missing_texture or @backingInt(texture) >= self.head) return .full(bitmap);
-    if (rect.width == 0 or rect.height == 0) return null;
-    if (@as(u32, rect.x) + rect.width > bitmap.width or @as(u32, rect.y) + rect.height > bitmap.height) return null;
+    if (rect.x < 0 or rect.y < 0 or rect.width <= 0 or rect.height <= 0) return null;
+    if (rect.right() > bitmap.width or rect.bottom() > bitmap.height) return null;
 
-    const start = @as(usize, rect.y) * bitmap.width + rect.x;
-    const len = @as(usize, rect.height - 1) * bitmap.width + rect.width;
+    const width: u16 = @intCast(rect.width);
+    const height: u16 = @intCast(rect.height);
+    const start = @as(usize, @intCast(rect.y)) * bitmap.width + @as(usize, @intCast(rect.x));
+    const len = @as(usize, height - 1) * bitmap.width + width;
     return .{
         .pixels = bitmap.pixels[start..][0..len],
-        .width = rect.width,
-        .height = rect.height,
+        .width = width,
+        .height = height,
         .stride = bitmap.width,
     };
 }
@@ -741,15 +746,15 @@ fn readClearCommand(header: PreparedCommandBuffer.Header, command_data: []align(
     return @ptrCast(@alignCast(command_data[header.offset..][0..size]));
 }
 
-fn clipped(width: u16, height: u16, left: f32, top: f32, right: f32, bottom: f32) ?AABB {
+fn clipped(rect: Renderer.Rect, left: f32, top: f32, right: f32, bottom: f32) ?AABB {
     @setFloatMode(.optimized);
     // Keep offscreen coordinates in floating point until the intersection
     // bounds them to the framebuffer; finite inputs can be larger than i64.
     const bounds: AABB = .{
-        .min_x = @max(left, 0),
-        .min_y = @max(top, 0),
-        .max_x = @min(right, @as(f32, @floatFromInt(width))),
-        .max_y = @min(bottom, @as(f32, @floatFromInt(height))),
+        .min_x = @max(left, @as(f32, @floatFromInt(rect.x))),
+        .min_y = @max(top, @as(f32, @floatFromInt(rect.y))),
+        .max_x = @min(right, @as(f32, @floatFromInt(rect.right()))),
+        .max_y = @min(bottom, @as(f32, @floatFromInt(rect.bottom()))),
     };
     if (bounds.max_x <= bounds.min_x or bounds.max_y <= bounds.min_y) return null;
     return bounds;
@@ -779,8 +784,7 @@ const PreparedSprite = struct {
         sprite.x -= tile_x;
         sprite.y -= tile_y;
         sprite.bounds = clipped(
-            render_tile_size,
-            render_tile_size,
+            .{ .width = render_tile_size, .height = render_tile_size },
             self.bounds.min_x - tile_x,
             self.bounds.min_y - tile_y,
             self.bounds.max_x - tile_x,
@@ -808,7 +812,7 @@ const PreparedRectangle = struct {
 
     /// Convert transformed geometry into clipped pixel bounds. The camera's
     /// translation/scale (and, for a rotated view, basis rotation) happens first.
-    fn init(buffer: FrameBuffer, geometry: Renderer.RectangleGeometry, rounding: BoundsRounding) ?PreparedRectangle {
+    fn init(viewport: Renderer.Rect, geometry: Renderer.RectangleGeometry, rounding: BoundsRounding) ?PreparedRectangle {
         // World geometry was validated when recorded. Only conversion overflow
         // needs checking here, before clipping or converting bounds to integers.
         // Match construction's rounding headroom for the scaled corner arithmetic.
@@ -831,7 +835,7 @@ const PreparedRectangle = struct {
             .height = geometry.height,
             .right_x = geometry.right_x,
             .right_y = geometry.right_y,
-            .bounds = clipped(buffer.width, buffer.height, left, top, right, bottom) orelse return null,
+            .bounds = clipped(viewport, left, top, right, bottom) orelse return null,
             .bounds_rounding = rounding,
         };
     }
@@ -842,8 +846,7 @@ const PreparedRectangle = struct {
         rectangle.y -= tile_y;
         // Clip only the raster bounds; preserve geometry size and orientation for sampling.
         rectangle.bounds = clipped(
-            render_tile_size,
-            render_tile_size,
+            .{ .width = render_tile_size, .height = render_tile_size },
             self.bounds.min_x - tile_x,
             self.bounds.min_y - tile_y,
             self.bounds.max_x - tile_x,
@@ -2273,7 +2276,7 @@ test "submitted sprites accept extra trailing texture storage" {
 }
 
 test "textured rectangle chunks preserve coverage and blend once at every row offset" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x125a8fce;
     var texels = [_]u32{ 0, 0xff204080, 0x80402060, 0xffa0b0c0, 0x40201030, 0 };
     const texture: Bitmap = .{ .width = 3, .height = 2, .pixels = &texels };
@@ -2296,7 +2299,7 @@ test "textured rectangle chunks preserve coverage and blend once at every row of
 }
 
 test "textured rectangle SIMD filtering preserves transparent lanes degenerate textures and tint" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x128f5c31;
     var texels: [31 * 17]u32 = undefined;
     for (0..3) |pattern| {
@@ -2331,7 +2334,7 @@ test "textured rectangle SIMD filtering preserves transparent lanes degenerate t
 }
 
 test "textured rectangle gathers preserve wide indices and mask tiny rectangle tails" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x125a8fce;
     const texels = try std.testing.allocator.alloc(u32, 65535);
     defer std.testing.allocator.free(texels);
@@ -2356,7 +2359,7 @@ test "textured rectangle gathers preserve wide indices and mask tiny rectangle t
 }
 
 test "overflowing textured rectangle sampling scales leave pixels untouched" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x12345678;
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff };
     const texture: Bitmap = .{ .width = 2, .height = 2, .pixels = &texels };
@@ -2391,7 +2394,7 @@ test "preparation skips overflowing texture scales and preserves subsequent draw
 }
 
 test "sprite chunks preserve scalar coverage and alpha at every row offset" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x125a8fce;
     const widths = [_]f32{ 0.25, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64 };
     var texels = [_]u32{ 0, 0xff204080, 0x80402060, 0xffa0b0c0, 0x40201030, 0 };
@@ -2415,7 +2418,7 @@ test "sprite chunks preserve scalar coverage and alpha at every row offset" {
 }
 
 test "sprite filtering matches scalar for degenerate textures scales and repeated blends" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x128f5c31;
     var texels: [31 * 17]u32 = undefined;
     const dimensions = [_][2]u16{ .{ 0, 1 }, .{ 1, 0 }, .{ 1, 1 }, .{ 1, 7 }, .{ 9, 1 }, .{ 3, 2 }, .{ 31, 17 } };
@@ -2460,7 +2463,7 @@ test "sprite filtering matches scalar for degenerate textures scales and repeate
 }
 
 test "sprite cache preserves wide texture indices and tiny fractional coverage" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x125a8fce;
     const texels = try std.testing.allocator.alloc(u32, 65535);
     defer std.testing.allocator.free(texels);
@@ -2492,7 +2495,7 @@ test "sprite mixed lanes preserve transparent pixels and copy uniform opaque tex
     const background: u32 = 0x12345678;
     var texels = [_]u32{ 0, 0, 0xff204080, 0xff204080, 0, 0, 0xffa0b0c0, 0xffa0b0c0 };
     var actual: Tile align(tile_alignment) = @splat(background);
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const rectangle = PreparedRectangle.init(screen, Renderer.RectangleGeometry.init(55, 63, 8, 1, 0, 0, 0), .outward).?;
     drawSprite(.bilinear, &actual, PreparedSprite.fromRectangle(rectangle), .{ .width = 8, .height = 1, .stride = 8, .pixels = &texels }, 1, 1);
     for (actual, 0..) |pixel, i| {
@@ -2512,6 +2515,55 @@ test "clear-only frames require no frame allocation" {
     _ = renderer.beginDrawing(.{ .r = 0.1, .g = 0.4, .b = 0.8, .a = 1 }, .{ .meters_per_pixel = 1, .camera_x = 0, .camera_y = 0 });
     renderer.endDrawing(frame_allocator.allocator(), &renderer.command_buffer);
     for (renderer.back_buffer.pixels()) |pixel| try std.testing.expectEqual(@as(u32, 0x001a66cc), pixel);
+}
+
+test "recorded views project and clip draws independently inside shared tiles" {
+    var renderer: Self = undefined;
+    try renderer.init(std.testing.allocator, .{ .width = 130, .height = 9, .missing_texture_color = .magenta });
+    defer renderer.deinit(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const cmd = renderer.beginDrawing(.black, .{
+        .camera_x = 13,
+        .camera_y = 29,
+        .meters_per_pixel = 2,
+        .viewport = .{ .x = 62, .y = 2, .width = 7, .height = 5 },
+    });
+    const point = cmd.screenFromWorld(15, 27);
+    try std.testing.expectEqual(@as(f32, 66.5), point.x);
+    try std.testing.expectEqual(@as(f32, 3.5), point.y);
+    const world = cmd.worldFromScreen(point.x, point.y);
+    try std.testing.expectEqual(@as(f32, 15), world.x);
+    try std.testing.expectEqual(@as(f32, 27), world.y);
+    try std.testing.expectEqual(AABB{ .min_x = 6, .min_y = 24, .max_x = 20, .max_y = 34 }, cmd.visible_bounds);
+    cmd.pushRect(13, 29, 100, 100, .{ .tint_srgb = .white });
+    cmd.pushRect(13, 29, 2, 2, .{ .tint_srgb = .pure_red });
+    cmd.pushView(.{
+        .camera_x = 0,
+        .camera_y = 0,
+        .meters_per_pixel = 1,
+        .viewport = .{ .x = -4, .y = -3, .width = 7, .height = 15 },
+    });
+    try std.testing.expectEqual(AABB{ .min_x = 0.5, .min_y = -4.5, .max_x = 3.5, .max_y = 4.5 }, cmd.visible_bounds);
+    cmd.pushRect(0, 0, 200, 100, .{ .tint_srgb = .pure_blue });
+    cmd.pushRect(2, 0, 1, 1, .{ .tint_srgb = .pure_green });
+    const offscreen: Renderer.Rect = .{ .x = std.math.maxInt(i32) - 1, .width = 20, .height = 9 };
+    try std.testing.expect(offscreen.contains(std.math.maxInt(i32), 0));
+    cmd.pushView(.{ .camera_x = 0, .camera_y = 0, .meters_per_pixel = 1, .viewport = offscreen });
+    cmd.pushRect(0, 0, 1e10, 100, .{ .tint_srgb = .white });
+    renderer.endDrawing(arena.allocator(), cmd);
+
+    for (renderer.back_buffer.pixels(), 0..) |pixel, i| {
+        const x = i % 130;
+        const y = i / 130;
+        var expected: u32 = 0;
+        if (x >= 62 and x < 69 and y >= 2 and y < 7) expected = Color.white.toARGB();
+        if (x == 65 and y == 4) expected = Color.pure_red.toARGB();
+        if (x < 3) expected = Color.pure_blue.toARGB();
+        if (x == 1 and y == 4) expected = Color.pure_green.toARGB();
+        try std.testing.expectEqual(expected, pixel);
+    }
 }
 
 test "clear-only tile jobs preserve other tiles and clip the bottom right edge" {
@@ -2535,7 +2587,7 @@ test "clear-only tile jobs preserve other tiles and clip the bottom right edge" 
 }
 
 test "rectangle coverage classifies clipped pixel centres conservatively" {
-    const buffer: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const buffer: Renderer.Rect = .{ .width = 64, .height = 64 };
     const Case = struct {
         x: f32,
         y: f32,
@@ -2568,7 +2620,7 @@ test "rectangle coverage classifies clipped pixel centres conservatively" {
 test "classified rectangle kernels match per-pixel coverage across rotated tile regions" {
     var actual: Tile align(tile_alignment) = undefined;
     var expected: Tile align(tile_alignment) = undefined;
-    const screen: FrameBuffer = .{ .width = 130, .height = 67, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 130, .height = 67 };
     var texels = [_]u32{ 0x00000000, 0x80b40000, 0xff00ff00, 0xffffffff, 0xff204080, 0x80404040 };
     const texture: Bitmap = .{ .width = 3, .height = 2, .pixels = &texels };
     const Case = struct { x: f32, y: f32, width: f32, height: f32, angle: f32 };
@@ -2621,7 +2673,7 @@ test "classified rectangle kernels match per-pixel coverage across rotated tile 
 }
 
 test "solid blends preserve byte-squared rounding at full and partial row tails" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0xfffeeffe;
     // Before quantization, red/blue are 251.49997 and green is 238.49997.
     // Normalizing the destination by 255 pushes them across the half-byte edge.
@@ -2656,7 +2708,7 @@ test "solid blends preserve byte-squared rounding at full and partial row tails"
 }
 
 test "opaque solid rows fill every span without touching neighboring pixels" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x12345678;
     for (0..render_tile_size) |start| {
         for (start + 1..render_tile_size + 1) |end| {
@@ -2684,7 +2736,7 @@ test "opaque solid rows fill every span without touching neighboring pixels" {
 }
 
 test "partial solid rows preserve coverage across lane widths and shifted tails" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0xff183a71;
     // The geometry starts on pixel centres and ends on excluded pixel centres.
     // Outward bounds include that ending edge, forcing partial coverage even
@@ -2895,7 +2947,7 @@ test "submitted sprites preserve texel positions across partial tile boundaries"
 test "native size texture preserves pixel channels and row stride" {
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff204080, 0xff000000, 0xffffffff };
     var pixels: Tile align(tile_alignment) = @splat(0);
-    const buffer: FrameBuffer = .{ .width = 3, .height = 2, .data = undefined };
+    const buffer: Renderer.Rect = .{ .width = 3, .height = 2 };
     const rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(0, 0, 3, 2, 0, 0, 0), .outward).?;
     const texture: Bitmap = .{ .width = 3, .height = 2, .pixels = &texels };
     drawTexturedRectangle(.bilinear, &pixels, rectangle, .full(texture), 1, 1, LinearColor.init(.white));
@@ -2911,7 +2963,7 @@ test "bilinear texture filtering averages linear colors and clamps edge texels" 
     var texels = [_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff };
     const texture: Bitmap = .{ .width = 2, .height = 2, .pixels = &texels };
     var pixels: Tile align(tile_alignment) = @splat(0);
-    const buffer: FrameBuffer = .{ .width = 4, .height = 4, .data = undefined };
+    const buffer: Renderer.Rect = .{ .width = 4, .height = 4 };
     // The centre averages all four texels: each linear RGB channel is 0.5.
     const small_rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(0, 0, 1, 1, 0, 0, 0), .outward).?;
     drawTexturedRectangle(.bilinear, &pixels, small_rectangle, .full(texture), 2, 2, LinearColor.init(.white));
@@ -2983,7 +3035,7 @@ test "offscreen rectangles clip without overwriting the framebuffer boundary" {
         // The trailing pixels detect writes past the framebuffer in fast builds too.
         var pixels: [render_tile_size * render_tile_size + 16]u32 align(tile_alignment) = @splat(0);
         @memset(pixels[render_tile_size * render_tile_size ..], 0x12345678);
-        const buffer: FrameBuffer = .{ .width = 16, .height = 16, .data = undefined };
+        const buffer: Renderer.Rect = .{ .width = 16, .height = 16 };
 
         const rounding: PreparedRectangle.BoundsRounding = if (case.angle_radians == 0) .pixel_centres else .outward;
         if (PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(case.x, case.y, case.width, case.height, 0, 0, case.angle_radians), rounding)) |rectangle| {
@@ -3058,7 +3110,7 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
             }
             var pixels: [render_tile_size * render_tile_size + 16]u32 align(tile_alignment) = @splat(0);
             @memset(pixels[render_tile_size * render_tile_size ..], 0x12345678);
-            const buffer: FrameBuffer = .{ .width = 48, .height = 48, .data = undefined };
+            const buffer: Renderer.Rect = .{ .width = 48, .height = 48 };
             const texture: Bitmap = .{
                 .width = @intCast(case.texture_width),
                 .height = @intCast(case.texture_height),
@@ -3088,7 +3140,7 @@ test "textured rectangles clip and exclude ending edges irrespective of texture 
 }
 
 test "opaque rotated rectangles overwrite only covered pixels" {
-    const buffer: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const buffer: Renderer.Rect = .{ .width = 64, .height = 64 };
     const color: Color = .{ .r = 0.1, .g = 0.4, .b = 0.8, .a = 1 };
     const expected_color = color.toARGB();
     for ([_]f32{ 0.2, -0.7, std.math.pi / 4.0 }) |angle| {
@@ -3112,7 +3164,7 @@ test "opaque rotated rectangles overwrite only covered pixels" {
 
 test "rotated rectangles blend only covered pixel centres" {
     var pixels: Tile align(tile_alignment) = @splat(0xff0000ff);
-    const buffer: FrameBuffer = .{ .width = 8, .height = 8, .data = undefined };
+    const buffer: Renderer.Rect = .{ .width = 8, .height = 8 };
     const rectangle = PreparedRectangle.init(buffer, Renderer.RectangleGeometry.init(4, 1.25, 3, 3, 0, 0, std.math.pi / 4.0), .outward).?;
     drawRectangle(&pixels, rectangle, PreparedSolidColor.init(.{ .r = 1, .g = 0, .b = 0, .a = 0.5 }));
 
@@ -3192,7 +3244,7 @@ test "nearest sprites and rotated tinted rectangles sample and blend individual 
 }
 
 test "nearest sprite blends mixed-alpha lanes exactly once through the right edge" {
-    const screen: FrameBuffer = .{ .width = 64, .height = 64, .data = undefined };
+    const screen: Renderer.Rect = .{ .width = 64, .height = 64 };
     const background: u32 = 0x67203a50;
     var texels = [_]u32{ 0x80482818, 0, 0xff205090, 0x401e3037, 0xffb98843, 0xfe051c4f, 0x01050403, 0, 0xb0146393 };
     const texture: Bitmap = .{ .width = texels.len, .height = 1, .pixels = &texels };
@@ -3230,7 +3282,7 @@ test "source_rect renders like a standalone texture across filters and tile boun
 
     var expected: [width * height]u32 = undefined;
     for ([_]Renderer.Texture{ cropped, atlas }) |texture| {
-        const source_rect: ?Renderer.SourceRect = if (texture == atlas) .{ .x = 2, .y = 1, .width = 2, .height = 3 } else null;
+        const source_rect: ?Renderer.Rect = if (texture == atlas) .{ .x = 2, .y = 1, .width = 2, .height = 3 } else null;
         const commands = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = width / 2, .camera_y = height / 2 });
         commands.pushRect(64.25, 5, 14, 9, .{ .texture = texture, .source_rect = source_rect });
         commands.pushRect(64.25, 15, 14, 9, .{ .texture = texture, .source_rect = source_rect, .filter = .nearest });
@@ -3256,7 +3308,12 @@ test "source_rect accepts the last texel and skips empty or out-of-bounds region
     @memcpy(renderer.getTexture(atlas).pixels, &[_]u32{ 0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff });
     const commands = renderer.beginDrawing(.black, .{ .meters_per_pixel = 1, .camera_x = 2.5, .camera_y = 0.5 });
     commands.pushRect(0.5, 0.5, 1, 1, .{ .texture = atlas, .source_rect = .{ .x = 1, .y = 1, .width = 1, .height = 1 } });
-    for ([_]Renderer.SourceRect{
+    for ([_]Renderer.Rect{
+        .{ .x = -1, .width = 2, .height = 1 },
+        .{ .y = -1, .width = 1, .height = 2 },
+        .{ .width = -1, .height = 1 },
+        .{ .width = 1, .height = -1 },
+        .{ .x = std.math.maxInt(i32), .width = 2, .height = 1 },
         .{ .x = 0, .y = 0, .width = 0, .height = 1 },
         .{ .x = 0, .y = 0, .width = 1, .height = 0 },
         .{ .x = 1, .y = 0, .width = 2, .height = 1 },
@@ -3266,7 +3323,7 @@ test "source_rect accepts the last texel and skips empty or out-of-bounds region
     }) |source_rect| {
         commands.pushRect(1.5, 0.5, 1, 1, .{ .texture = atlas, .source_rect = source_rect });
     }
-    const outside: Renderer.SourceRect = .{ .x = 10, .y = 20, .width = 1, .height = 1 };
+    const outside: Renderer.Rect = .{ .x = 10, .y = 20, .width = 1, .height = 1 };
     commands.pushRect(2.5, 0.5, 1, 1, .{ .source_rect = outside, .tint_srgb = .pure_red });
     commands.pushRect(3.5, 0.5, 1, 1, .{ .source_rect = outside, .texture = .missing_texture });
     commands.pushRect(4.5, 0.5, 1, 1, .{ .source_rect = outside, .texture = @fromBackingInt(999) });

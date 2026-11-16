@@ -9,16 +9,45 @@ pub const View = struct {
     meters_per_pixel: f32,
     camera_x: f32,
     camera_y: f32,
+    /// Null selects the whole framebuffer.
+    viewport: ?Rect = null,
 };
 
 pub const TextureFilter = enum { bilinear, nearest };
 
-/// A region in texture pixels, measured from the top-left.
-pub const SourceRect = struct {
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
+pub const Rect = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+    width: i32,
+    height: i32,
+
+    pub fn right(self: Rect) i64 {
+        return @as(i64, self.x) + self.width;
+    }
+
+    pub fn bottom(self: Rect) i64 {
+        return @as(i64, self.y) + self.height;
+    }
+
+    pub fn centerX(self: Rect) f32 {
+        return @as(f32, @floatFromInt(self.x + self.right())) * 0.5;
+    }
+
+    pub fn centerY(self: Rect) f32 {
+        return @as(f32, @floatFromInt(self.y + self.bottom())) * 0.5;
+    }
+
+    pub fn contains(self: Rect, x: i32, y: i32) bool {
+        return x >= self.x and x < self.right() and y >= self.y and y < self.bottom();
+    }
+
+    pub fn clippedTo(self: Rect, width: u16, height: u16) Rect {
+        const x = std.math.clamp(self.x, 0, @as(i32, width));
+        const y = std.math.clamp(self.y, 0, @as(i32, height));
+        const end_x: i32 = @intCast(std.math.clamp(self.right(), x, @as(i64, width)));
+        const end_y: i32 = @intCast(std.math.clamp(self.bottom(), y, @as(i64, height)));
+        return .{ .x = x, .y = y, .width = end_x - x, .height = end_y - y };
+    }
 };
 
 pub const RectConfig = struct {
@@ -31,7 +60,7 @@ pub const RectConfig = struct {
     texture: ?Texture = null,
     /// Stretch this region over the destination. Null selects the whole texture.
     /// Empty or out-of-bounds regions skip the draw. Missing textures use the fallback color.
-    source_rect: ?SourceRect = null,
+    source_rect: ?Rect = null,
     filter: TextureFilter = .bilinear,
     tint_srgb: ?Color = null,
 };
@@ -123,22 +152,14 @@ pub const CommandBuffer = struct {
     pub fn pushView(self: *CommandBuffer, view: View) void {
         std.debug.assert(self.width > 0 and self.height > 0);
         std.debug.assert(view.meters_per_pixel > 0);
-        const pixels_per_meter = 1.0 / view.meters_per_pixel;
-        const half_width = @as(f32, @floatFromInt(self.width)) * view.meters_per_pixel / 2.0;
-        const half_height = @as(f32, @floatFromInt(self.height)) * view.meters_per_pixel / 2.0;
-        const bounds: AABB = .{
-            .min_x = view.camera_x - half_width,
-            .min_y = view.camera_y - half_height,
-            .max_x = view.camera_x + half_width,
-            .max_y = view.camera_y + half_height,
-        };
-        // This positive sum propagates NaN and bounds the reciprocal and all
-        // camera/bounds arithmetic without checking every component separately.
-        const coordinate_bound = pixels_per_meter + @abs(view.camera_x) + @abs(view.camera_y) + half_width + half_height;
-        if (!std.math.isFinite(coordinate_bound)) @panic("Invalid renderer view");
-        self.commands.appendBounded(.{ .set_view = view }) catch @panic("Frontend command buffer capacity exceeded");
+        const viewport = view.viewport orelse Rect{ .width = self.width, .height = self.height };
         self.view = view;
-        self.visible_bounds = bounds;
+        self.view.viewport = viewport;
+        const clip = viewport.clippedTo(self.width, self.height);
+        const min = self.worldFromScreen(@floatFromInt(clip.x), @floatFromInt(clip.y));
+        const max = self.worldFromScreen(@floatFromInt(clip.right()), @floatFromInt(clip.bottom()));
+        self.commands.appendBounded(.{ .set_view = self.view }) catch @panic("Frontend command buffer capacity exceeded");
+        self.visible_bounds = .{ .min_x = min.x, .min_y = min.y, .max_x = max.x, .max_y = max.y };
     }
 
     pub fn pushClear(self: *CommandBuffer, color: Color) void {
@@ -203,15 +224,15 @@ pub const CommandBuffer = struct {
 
     pub fn screenFromWorld(self: *const CommandBuffer, x: f32, y: f32) struct { x: f32, y: f32 } {
         return .{
-            .x = (x - self.view.camera_x) / self.view.meters_per_pixel + @as(f32, @floatFromInt(self.width)) / 2.0,
-            .y = (y - self.view.camera_y) / self.view.meters_per_pixel + @as(f32, @floatFromInt(self.height)) / 2.0,
+            .x = (x - self.view.camera_x) / self.view.meters_per_pixel + self.view.viewport.?.centerX(),
+            .y = (y - self.view.camera_y) / self.view.meters_per_pixel + self.view.viewport.?.centerY(),
         };
     }
 
     pub fn worldFromScreen(self: *const CommandBuffer, x: f32, y: f32) struct { x: f32, y: f32 } {
         return .{
-            .x = (x - @as(f32, @floatFromInt(self.width)) / 2.0) * self.view.meters_per_pixel + self.view.camera_x,
-            .y = (y - @as(f32, @floatFromInt(self.height)) / 2.0) * self.view.meters_per_pixel + self.view.camera_y,
+            .x = (x - self.view.viewport.?.centerX()) * self.view.meters_per_pixel + self.view.camera_x,
+            .y = (y - self.view.viewport.?.centerY()) * self.view.meters_per_pixel + self.view.camera_y,
         };
     }
 };
@@ -296,7 +317,7 @@ pub const ClearCommand = struct {
 pub const DrawRectangleCommand = struct {
     rectangle: RectangleGeometry,
     texture: ?Texture = null,
-    source_rect: ?SourceRect = null,
+    source_rect: ?Rect = null,
     filter: TextureFilter = .bilinear,
     tint_srgb: ?Color = null,
 };
