@@ -11,7 +11,6 @@ const win32 = @import("win32.zig");
 const FrameBuffer = @import("../FrameBuffer.zig");
 
 const max_messages_per_frame = 1024;
-const frame_spin_margin_ns = 500_000;
 
 pub const State = struct {
     instance: windows.HINSTANCE = undefined,
@@ -60,44 +59,29 @@ pub const State = struct {
         self.frame_timer = null;
     }
 
-    pub fn waitUntil(self: *Self, io: std.Io, deadline: std.Io.Timestamp) WaitError!void {
-        std.debug.assert(deadline.nanoseconds >= 0);
+    pub fn waitUntil(self: *Self, io: std.Io, wake: std.Io.Timestamp) WaitError!void {
+        const now = std.Io.Clock.awake.now(io);
+        const remaining_ns = @as(i128, wake.nanoseconds) - now.nanoseconds;
+        if (remaining_ns <= 0) return;
 
         const handle = self.frame_timer.?;
-        const now = std.Io.Clock.awake.now(io);
-
-        const remaining_ns: i96 = now.durationTo(deadline).nanoseconds;
-        if (remaining_ns <= 0) return;
-        if (remaining_ns > frame_spin_margin_ns) {
-            // NOTE(adi): In windows: Positive values indicate absolute time.
-            // Be sure to use a UTC-based absolute time, as the system uses UTC-based time internally.
-            // Negative values indicate relative time. Also the time provided to windows must be 100ns intervals not
-            // the actual time.
-            // got this from https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-setwaitabletimerex
-            const due_time: i64 = try relativeDueTime(remaining_ns - frame_spin_margin_ns);
-
-            const set_result = win32.SetWaitableTimerEx(handle, &due_time, 0, null, null, null, 0);
-            if (!set_result.toBool()) {
-                const code = windows.GetLastError();
-                std.log.err("SetWaitableTimerEx failed (Win32 error {d})", .{@backingInt(code)});
-                return error.FailedToSetFrameTimer;
-            }
-
-            const wait_status = win32.WaitForSingleObject(handle, win32.INFINITE);
-            if (wait_status != win32.WAIT_OBJECT_0) {
-                if (wait_status == win32.WAIT_FAILED) {
-                    const code = windows.GetLastError();
-                    std.log.err("WaitForSingleObject failed (Win32 error {d})", .{@backingInt(code)});
-                } else {
-                    std.log.err("WaitForSingleObject returned unexpected status 0x{x}", .{wait_status});
-                }
-                return error.FailedToWaitForFrameTimer;
-            }
-            return;
+        const due_time = try relativeDueTime(remaining_ns);
+        const set_result = win32.SetWaitableTimerEx(handle, &due_time, 0, null, null, null, 0);
+        if (!set_result.toBool()) {
+            const code = windows.GetLastError();
+            std.log.err("SetWaitableTimerEx failed (Win32 error {d})", .{@backingInt(code)});
+            return error.FailedToSetFrameTimer;
         }
 
-        while (std.Io.Clock.awake.now(io).nanoseconds < deadline.nanoseconds) {
-            std.atomic.spinLoopHint();
+        const wait_status = win32.WaitForSingleObject(handle, win32.INFINITE);
+        if (wait_status != win32.WAIT_OBJECT_0) {
+            if (wait_status == win32.WAIT_FAILED) {
+                const code = windows.GetLastError();
+                std.log.err("WaitForSingleObject failed (Win32 error {d})", .{@backingInt(code)});
+            } else {
+                std.log.err("WaitForSingleObject returned unexpected status 0x{x}", .{wait_status});
+            }
+            return error.FailedToWaitForFrameTimer;
         }
     }
 

@@ -89,7 +89,7 @@ pub fn endFrame(self: *Platform) void {
     self.frame_active = false;
 }
 
-/// Caps this frame at frame_start + frame_duration on Clock.awake.
+/// Paces the frame until frame_start + frame_duration on Clock.awake.
 /// Call on this platform's owning thread, including after endFrame. No window is required.
 /// Windows cancellation is checked at wait boundaries; it does not interrupt a native wait.
 pub fn paceFrame(
@@ -103,12 +103,27 @@ pub fn paceFrame(
     if (frame_duration.nanoseconds <= 0) return;
     const deadline_ns = std.math.add(i96, frame_start.nanoseconds, frame_duration.nanoseconds) catch
         return error.InvalidFrameDuration;
-    const deadline = std.Io.Timestamp.fromNanoseconds(deadline_ns);
+    var now_ns: i128 = std.Io.Clock.awake.now(io).nanoseconds;
+    if (now_ns >= deadline_ns) return;
 
-    while (std.Io.Clock.awake.now(io).nanoseconds < deadline_ns) {
-        try self.native.waitUntil(io, deadline);
+    // As in SDL_DelayPrecise, measure short sleeps during this wait and
+    // leave room for their observed overshoot on the final sleep.
+    const short_sleep_ns = std.time.ns_per_ms;
+    var spin_reserve_ns: i128 = 0;
+    while (true) {
+        const sleep_ns = @min(short_sleep_ns, deadline_ns - now_ns - spin_reserve_ns);
+        if (sleep_ns <= 0) break;
+        const wake = std.Io.Timestamp.fromNanoseconds(@intCast(now_ns + sleep_ns));
+        try self.native.waitUntil(io, wake);
         try io.checkCancel();
+        now_ns = std.Io.Clock.awake.now(io).nanoseconds;
+        // A scheduling stall should never turn into a multi-millisecond spin.
+        spin_reserve_ns = @min(short_sleep_ns, @max(spin_reserve_ns, now_ns - wake.nanoseconds));
     }
+    while (std.Io.Clock.awake.now(io).nanoseconds < deadline_ns) {
+        std.atomic.spinLoopHint();
+    }
+    try io.checkCancel();
 }
 
 pub fn pollEvents(self: *Platform) WindowStatus {

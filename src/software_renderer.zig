@@ -336,10 +336,16 @@ fn prepareCommands(self: *Self, command_buffer: *const Renderer.CommandBuffer) v
                     .max_y = @intCast((self.back_buffer.height + render_tile_size - 1) / render_tile_size),
                 };
                 const bytes = std.mem.asBytes(&Internal.ClearCommand{ .color = packClear(cc.r, cc.g, cc.b) });
-                const start = std.mem.alignForward(usize, self.prepared_commands.data.len, @alignOf(Internal.ClearCommand));
+                const start = std.mem.alignForward(
+                    usize,
+                    self.prepared_commands.data.len,
+                    @alignOf(Internal.ClearCommand),
+                );
                 self.prepared_commands.data.len = start + bytes.len;
                 assert(self.prepared_commands.data.len <= MAX_DATA);
-                const dest: []align(@alignOf(Internal.ClearCommand)) u8 = @alignCast(self.prepared_commands.data[start..][0..bytes.len]);
+                const dest: []align(@alignOf(Internal.ClearCommand)) u8 = @alignCast(
+                    self.prepared_commands.data[start..][0..bytes.len],
+                );
                 @memcpy(dest, bytes);
                 self.prepared_commands.appendHeader(.{ .tag = .clear_screen, .offset = @truncate(start) }, tile_bounds);
             },
@@ -361,9 +367,22 @@ fn prepareCommands(self: *Self, command_buffer: *const Renderer.CommandBuffer) v
                         const x = draw.x + @as(f32, @floatFromInt(column)) * lines.glyph_width;
                         const origin = monogram.glyphOrigin(character);
                         self.prepareRectangle(.{
-                            .rectangle = Renderer.RectangleGeometry.init(x, y, lines.glyph_width, lines.glyph_height, 0, 0, 0),
+                            .rectangle = Renderer.RectangleGeometry.init(
+                                x,
+                                y,
+                                lines.glyph_width,
+                                lines.glyph_height,
+                                0,
+                                0,
+                                0,
+                            ),
                             .texture = draw.font,
-                            .source_rect = .{ .x = origin.x, .y = origin.y, .width = monogram.cell_width, .height = monogram.cell_height },
+                            .source_rect = .{
+                                .x = origin.x,
+                                .y = origin.y,
+                                .width = monogram.cell_width,
+                                .height = monogram.cell_height,
+                            },
                             .filter = .nearest,
                             .tint_srgb = draw.config.tint_srgb,
                         }, view, pixels_per_meter);
