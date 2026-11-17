@@ -3,32 +3,24 @@ const std = @import("std");
 const fr = @import("fracture");
 
 pub fn main(init: std.process.Init) !void {
-    var platform: fr.Platform = .{};
-    try platform.init();
-    defer platform.deinit();
-
     const allocator = std.heap.page_allocator;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const width = 1280;
-    const height = 720;
+    var platform: fr.Platform = .empty;
+    try platform.init(.{
+        .title = "Testbed - left click or Space: next texture case",
+        .width = 1280,
+        .height = 720,
+    });
+    defer platform.deinit();
 
     var renderer: fr.SoftwareRenderer = undefined;
     try renderer.init(allocator, .{
-        .width = width,
-        .height = height,
+        .platform = &platform,
         .missing_texture_color = .magenta,
         .workers = .{ .io = init.io },
     });
     defer renderer.deinit(allocator);
 
-    try platform.createWindow(.{
-        .title = "Testbed - left click or Space: next texture case",
-        .frame_buffer = &renderer.back_buffer,
-    });
-    defer platform.destroyWindow();
     platform.setCursorHidden(false);
     platform.showWindow();
 
@@ -36,15 +28,12 @@ pub fn main(init: std.process.Init) !void {
     var pacing_error: ?fr.Platform.PaceFrameError = null;
 
     while (true) {
-        _ = arena.reset(.retain_capacity);
         const frame_start = std.Io.Clock.awake.now(init.io);
         defer {
             platform.paceFrame(init.io, frame_start, frame_duration) catch |err| {
                 if (err != error.Canceled) pacing_error = err;
             };
         }
-        platform.beginFrame();
-        defer platform.endFrame();
 
         const status = platform.pollEvents();
         const events = platform.takeEvents();
@@ -56,6 +45,8 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
+        const width: f32 = @floatFromInt(renderer.back_buffer.width);
+        const height: f32 = @floatFromInt(renderer.back_buffer.height);
         const a_x = width / 4;
         const a_y = 3 * height / 4;
         const b_x = width / 2;
@@ -63,9 +54,9 @@ pub fn main(init: std.process.Init) !void {
         const c_x = 3 * width / 4;
         const c_y = 3 * height / 4;
 
-        const commands = renderer.beginDrawing(.{ .r = 0.08, .g = 0.08, .b = 0.08 }, .{ .meters_per_pixel = 1, .camera_x = width / 2, .camera_y = height / 2 });
-        renderer.endDrawing(arena.allocator(), commands);
+        // This demo writes directly into the framebuffer.
+        @memset(renderer.back_buffer.pixels(), 0x141414);
         renderer.drawTriangle(a_x, a_y, b_x, b_y, c_x, c_y, .white);
-        platform.present();
+        platform.softwarePresent(&renderer.back_buffer);
     }
 }

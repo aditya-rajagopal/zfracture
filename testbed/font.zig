@@ -13,36 +13,32 @@ pub const fracture_profiling = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    var platform: fr.Platform = undefined;
-    try platform.init();
-    defer platform.deinit();
-
     const allocator = std.heap.page_allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var tracer: fracture_profiling.Tracer = .empty;
     tracer.init(50);
     fracture_profiling.tracer = &tracer;
     defer fracture_profiling.tracer = null;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const width = 1280;
-    const height = 720;
+    var platform: fr.Platform = .empty;
+    try platform.init(.{
+        .title = "Font showcase",
+        .width = 1280,
+        .height = 720,
+    });
+    defer platform.deinit();
 
     var renderer: fr.SoftwareRenderer = undefined;
     try renderer.init(allocator, .{
-        .width = width,
-        .height = height,
+        .platform = &platform,
         .missing_texture_color = .magenta,
         .workers = .{ .io = init.io },
     });
     defer renderer.deinit(allocator);
 
-    try platform.createWindow(.{
-        .title = "Font showcase",
-        .frame_buffer = &renderer.back_buffer,
-    });
-    defer platform.destroyWindow();
     platform.setCursorHidden(false);
     platform.showWindow();
 
@@ -72,12 +68,11 @@ pub fn main(init: std.process.Init) !void {
                 if (err != error.Canceled) pacing_error = err;
             };
         }
-        platform.beginFrame();
-        defer platform.endFrame();
 
         const status = platform.pollEvents();
-        const events = platform.takeEvents();
         if (status.quit_requested) break;
+
+        const events = platform.takeEvents();
 
         for (events) |event| {
             if (event == .key_pressed and event.key_pressed == .escape) {
@@ -100,12 +95,16 @@ pub fn main(init: std.process.Init) !void {
             .meters_per_pixel = 1,
         });
 
-        const layout: fr.Renderer.TextConfig = .{ .scale = 2, .width = half_width, .height = half_height, .mode = .wrap };
+        const layout: fr.Renderer.TextConfig = .{
+            .scale = 2,
+            .width = half_width,
+            .height = half_height,
+            .mode = .wrap,
+        };
         const size = fr.Renderer.measureText(text, layout);
         cmd.pushText(half_width - size.width / 2, half_height - size.height / 2, text, font, layout);
-        cmd.pushText(10, 10, writer.buffered(), font, .{ .scale = 2 });
+        cmd.pushText(10, 10, writer.buffered(), font, .{ .scale = 1 });
 
         renderer.endDrawing(arena.allocator(), cmd);
-        platform.present();
     }
 }

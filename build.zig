@@ -97,20 +97,6 @@ pub fn build(b: *std.Build) !void {
         check.dependOn(&exe_check.step);
     }
 
-    const nearest_bench = b.addExecutable(.{
-        .name = "nearest-sprite-bench",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("testbed/nearest_sprite_bench.zig"),
-            .target = b.graph.host,
-            .optimize = .fast,
-        }),
-    });
-    nearest_bench.root_module.addImport("renderer", b.createModule(.{
-        .root_source_file = b.path("src/software_renderer.zig"),
-        .imports = &font_assets,
-    }));
-    b.step("bench-nearest", "Benchmark nearest-neighbour font and sprite draws").dependOn(&b.addRunArtifact(nearest_bench).step);
-
     // ==================================== TESTS ==================================/
     const test_step = b.step(
         "test",
@@ -141,6 +127,12 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
             .imports = &font_assets,
         });
+        if (std.mem.eql(u8, path, "src/software_renderer.zig")) {
+            try addPlatformDependencies(b, test_module);
+            const options = b.addOptions();
+            options.addOption(bool, "window_smoke", false);
+            test_module.addOptions("test_options", options);
+        }
         const host_tests = b.addTest(.{ .root_module = test_module });
         check.dependOn(&host_tests.step);
         test_step.dependOn(&b.addRunArtifact(host_tests).step);

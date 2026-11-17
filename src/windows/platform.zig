@@ -6,7 +6,6 @@ const Key = event_types.Key;
 const Event = event_types.Event;
 const MouseButton = event_types.MouseButton;
 const Platform = @import("../platform.zig");
-const Renderer = @import("../software_renderer.zig");
 const win32 = @import("win32.zig");
 const FrameBuffer = @import("../FrameBuffer.zig");
 
@@ -17,7 +16,6 @@ pub const State = struct {
     window: ?windows.HWND = null,
     device_context: windows.HDC = undefined,
     window_placement: win32.WINDOWPLACEMENT = undefined,
-    fullscreen: bool = false,
     event_storage: [2][1024]Event = undefined,
     event_lists: [2]std.ArrayList(Event) = undefined,
     pending_event_buffer: u1 = 0,
@@ -28,10 +26,7 @@ pub const State = struct {
     owns_mouse_capture: bool = false,
     reset_frame_clock: bool = false,
 
-    back_buffer: *FrameBuffer = undefined,
-
-    buffer_info: win32.BITMAPINFO = undefined,
-    windowed_frame_margin: u16 = 10,
+    presented_size: ?Platform.PixelSize = null,
     cursor: ?windows.HCURSOR = null,
     cursor_hidden: bool = true,
     frame_timer: ?windows.HANDLE = null,
@@ -85,10 +80,6 @@ pub const State = struct {
         }
     }
 
-    pub fn beginFrame(_: *Self) void {}
-
-    pub fn endFrame(_: *Self) void {}
-
     pub fn pollEvents(self: *Self) Platform.WindowStatus {
         pumpMessages(self);
         self.pollMousePosition();
@@ -127,67 +118,45 @@ pub const State = struct {
         self.cursor_hidden = hidden;
     }
 
-    pub fn present(self: *Self) void {
-        // Presentation dimensions must match the cached top-down bitmap header.
-        const buffer = self.back_buffer;
-        std.debug.assert(@as(i32, buffer.width) == self.buffer_info.bmiHeader.biWidth);
-        std.debug.assert(-@as(i32, buffer.height) == self.buffer_info.bmiHeader.biHeight);
-        const required_bytes = @as(usize, buffer.width) * buffer.height * FrameBuffer.bytes_per_pixel;
-        std.debug.assert(buffer.data.len >= required_bytes);
+    pub fn drawableSize(self: *Self) Platform.PixelSize {
+        var rect: win32.RECT = undefined;
+        if (!win32.GetClientRect(self.window, &rect).toBool()) return .{ .width = 0, .height = 0 };
+        return .{
+            .width = std.math.lossyCast(u16, rect.right - rect.left),
+            .height = std.math.lossyCast(u16, rect.bottom - rect.top),
+        };
+    }
 
+    pub fn softwarePresent(self: *Self, buffer: *const FrameBuffer) void {
         var rect: win32.RECT = undefined;
         if (!win32.GetClientRect(self.window, &rect).toBool()) return;
         const client_width = rect.right - rect.left;
         const client_height = rect.bottom - rect.top;
-        const source_width: i32 = buffer.width;
-        const source_height: i32 = buffer.height;
-        var dest_x: i32 = 0;
-        var dest_y: i32 = 0;
-        var dest_width = client_width;
-        var dest_height = client_height;
+        if (client_width <= 0 or client_height <= 0) return;
 
-        if (!self.fullscreen) {
-            // Windowed presentation keeps the framebuffer unscaled and clears its margins.
-            const margin: i32 = self.windowed_frame_margin;
-            dest_x = margin;
-            dest_y = margin;
-            dest_width = source_width;
-            dest_height = source_height;
-            _ = win32.PatBlt(self.device_context, 0, 0, client_width, margin, @bitCast(win32.BLACKNESS));
-            _ = win32.PatBlt(self.device_context, 0, margin, margin, source_height, @bitCast(win32.BLACKNESS));
-            _ = win32.PatBlt(
-                self.device_context,
-                0,
-                margin + source_height,
-                client_width,
-                client_height - margin - source_height,
-                @bitCast(win32.BLACKNESS),
-            );
-            _ = win32.PatBlt(
-                self.device_context,
-                margin + source_width,
-                margin,
-                client_width - margin - source_width,
-                source_height,
-                @bitCast(win32.BLACKNESS),
-            );
-        }
-
+        var info = std.mem.zeroes(win32.BITMAPINFO);
+        info.bmiHeader.biSize = @sizeOf(win32.BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = buffer.width;
+        info.bmiHeader.biHeight = -@as(i32, buffer.height); // Top-down rows.
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = win32.BI_RGB;
         _ = win32.StretchDIBits(
             self.device_context,
-            dest_x,
-            dest_y,
-            dest_width,
-            dest_height,
             0,
             0,
-            source_width,
-            source_height,
+            client_width,
+            client_height,
+            0,
+            0,
+            buffer.width,
+            buffer.height,
             buffer.data.ptr,
-            &self.buffer_info,
+            &info,
             @backingInt(win32.DIB_RGB_COLORS),
             @bitCast(win32.SRCCOPY),
         );
+        self.presented_size = .{ .width = buffer.width, .height = buffer.height };
     }
 
     // The slice stays immutable until the next handoff. Native callbacks append to the other list.
@@ -218,24 +187,6 @@ pub const State = struct {
     // Initialize in place: GWLP_USERDATA retains this address until destruction.
     pub fn createWindow(platform_state: *State, config: Platform.WindowConfig) CreateWindowError!void {
         const window_title = config.title.ptr;
-        const window_width = @as(i32, config.frame_buffer.width) + 2 * @as(i32, config.windowed_frame_margin);
-        const window_height = @as(i32, config.frame_buffer.height) + 2 * @as(i32, config.windowed_frame_margin);
-        platform_state.back_buffer = config.frame_buffer;
-        platform_state.windowed_frame_margin = config.windowed_frame_margin;
-        platform_state.buffer_info = std.mem.zeroes(win32.BITMAPINFO);
-        platform_state.buffer_info.bmiHeader = .{
-            .biSize = @sizeOf(win32.BITMAPINFOHEADER),
-            .biWidth = config.frame_buffer.width,
-            .biHeight = -@as(i32, config.frame_buffer.height),
-            .biPlanes = 1,
-            .biBitCount = 32,
-            .biCompression = win32.BI_RGB,
-            .biSizeImage = 0,
-            .biXPelsPerMeter = 0,
-            .biYPelsPerMeter = 0,
-            .biClrUsed = 0,
-            .biClrImportant = 0,
-        };
         const engine_name: [*:0]const u8 = "zfracture";
 
         platform_state.instance = win32.GetModuleHandleA(null) orelse
@@ -260,11 +211,6 @@ pub const State = struct {
             return error.FailedToRegisterWindowClass;
         }
 
-        var window_x: i32 = 50;
-        var window_y: i32 = 50;
-        var window_final_width: i32 = window_width;
-        var window_final_height: i32 = window_height;
-
         var window_style: u32 = win32.WS_SYSMENU | win32.WS_CAPTION | win32.WS_OVERLAPPED;
         const window_style_ex: u32 = win32.WS_EX_APPWINDOW;
 
@@ -272,29 +218,28 @@ pub const State = struct {
         window_style |= win32.WS_MAXIMIZEBOX;
         window_style |= win32.WS_THICKFRAME;
 
-        var border_rect: win32.RECT = std.mem.zeroes(win32.RECT);
-        _ = win32.AdjustWindowRectEx(
-            &border_rect,
+        var window_rect: win32.RECT = .{
+            .left = 50,
+            .top = 50,
+            .right = 50 + @as(i32, config.width),
+            .bottom = 50 + @as(i32, config.height),
+        };
+        if (!win32.AdjustWindowRectEx(
+            &window_rect,
             @bitCast(window_style),
             .FALSE,
             @bitCast(window_style_ex),
-        );
-
-        window_x += border_rect.left;
-        window_y += border_rect.top;
-
-        window_final_width += border_rect.right - border_rect.left;
-        window_final_height += border_rect.bottom - border_rect.top;
+        ).toBool()) return error.FailedToCreateWindow;
 
         platform_state.window = win32.CreateWindowExA(
             @bitCast(window_style_ex),
             engine_name,
             window_title,
             @bitCast(window_style),
-            window_x,
-            window_y,
-            window_final_width,
-            window_final_height,
+            window_rect.left,
+            window_rect.top,
+            window_rect.right - window_rect.left,
+            window_rect.bottom - window_rect.top,
             null,
             null,
             platform_state.instance,
@@ -318,7 +263,6 @@ pub const State = struct {
             return error.FailedToGetDeviceContext;
         errdefer _ = win32.ReleaseDC(platform_state.window, platform_state.device_context);
         platform_state.window_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
-        platform_state.fullscreen = false;
         platform_state.focused = false;
         platform_state.quit_requested = false;
         platform_state.modal_depth = 0;
@@ -340,6 +284,7 @@ pub const State = struct {
     }
 
     pub fn destroyWindow(self: *State) void {
+        self.presented_size = null;
         const window = self.window orelse return;
         _ = win32.SetWindowLongPtrA(window, win32.GWLP_USERDATA, 0);
         _ = win32.ReleaseDC(window, self.device_context);
@@ -357,7 +302,6 @@ pub const State = struct {
         const WS_OVERLAPPEDWINDOW = @as(i32, @bitCast(win32.WS_OVERLAPPEDWINDOW));
 
         if ((window_style & WS_OVERLAPPEDWINDOW) != 0) {
-            self.fullscreen = true;
             var monitor_info: win32.MONITORINFO = .{
                 .cbSize = @sizeOf(win32.MONITORINFO),
                 .rcMonitor = undefined,
@@ -394,7 +338,6 @@ pub const State = struct {
                 );
             }
         } else {
-            self.fullscreen = false;
             _ = win32.SetWindowLongA(
                 self.window,
                 win32.GWL_STYLE,
@@ -640,38 +583,28 @@ fn windowProc(
 }
 
 fn mousePosition(platform: *State, client: win32.POINT) event_types.MousePosition {
+    // Before the first present, input uses client pixels. Afterward, invert the last frame's stretch.
+    var rect: win32.RECT = undefined;
+    if (!win32.GetClientRect(platform.window, &rect).toBool()) return .{ .x = -1, .y = -1 };
+    const width = @as(i64, rect.right) - rect.left;
+    const height = @as(i64, rect.bottom) - rect.top;
+    if (width <= 0 or height <= 0) return .{ .x = -1, .y = -1 };
     var x: i64 = client.x;
     var y: i64 = client.y;
-    // Invert the destination rectangle used by present.
-    if (platform.fullscreen) {
-        var rect: win32.RECT = undefined;
-        if (!win32.GetClientRect(platform.window, &rect).toBool()) return .{ .x = -1, .y = -1 };
-        const width = @as(i64, rect.right) - rect.left;
-        const height = @as(i64, rect.bottom) - rect.top;
-        if (width <= 0) return .{ .x = -1, .y = -1 };
-        if (height <= 0) return .{ .x = -1, .y = -1 };
-        x = @divFloor(x * platform.back_buffer.width, width);
-        y = @divFloor(y * platform.back_buffer.height, height);
-    } else {
-        x -= platform.windowed_frame_margin;
-        y -= platform.windowed_frame_margin;
+    if (platform.presented_size) |size| {
+        x = @divFloor(x * size.width, width);
+        y = @divFloor(y * size.height, height);
     }
-    return .{
-        .x = @intCast(std.math.clamp(x, std.math.minInt(i16), std.math.maxInt(i16))),
-        .y = @intCast(std.math.clamp(y, std.math.minInt(i16), std.math.maxInt(i16))),
-    };
+    return .{ .x = std.math.lossyCast(i16, x), .y = std.math.lossyCast(i16, y) };
 }
 
 const TestWindow = struct {
     platform: State,
-    buffer: FrameBuffer,
-    pixels: [320 * 180 * 4]u8 align(4096),
 
     fn init(self: *TestWindow) !void {
-        self.buffer = .{ .width = 320, .height = 180, .data = &self.pixels };
         try self.platform.init();
         errdefer self.platform.deinit();
-        try self.platform.createWindow(.{ .title = "Fracture event test", .frame_buffer = &self.buffer });
+        try self.platform.createWindow(.{ .title = "Fracture event test", .width = 320, .height = 180 });
         self.platform.focused = true;
     }
 
@@ -713,21 +646,25 @@ test "poll samples fresh mouse coordinates without a queued motion event" {
     try std.testing.expect(win32.GetCursorPos(&saved_position).toBool());
     defer _ = user32.SetCursorPos(saved_position.x, saved_position.y);
 
-    // The fixture has 320x180 framebuffer pixels, a 10-pixel inset, and a
-    // 340x200 client area. Fullscreen stretches the framebuffer across it.
     var client: win32.RECT = undefined;
     try std.testing.expect(win32.GetClientRect(platform.window, &client).toBool());
-    try std.testing.expectEqual(@as(i32, 340), client.right - client.left);
-    try std.testing.expectEqual(@as(i32, 200), client.bottom - client.top);
-    const cases = [_]struct { point: win32.POINT, fullscreen: bool, expected: event_types.MousePosition }{
-        .{ .point = .{ .x = 17, .y = 23 }, .fullscreen = false, .expected = .{ .x = 7, .y = 13 } },
-        .{ .point = .{ .x = -11, .y = 27 }, .fullscreen = false, .expected = .{ .x = -21, .y = 17 } },
-        // One quarter across and three quarters down maps to (80,135).
-        .{ .point = .{ .x = 85, .y = 150 }, .fullscreen = true, .expected = .{ .x = 80, .y = 135 } },
+    try std.testing.expectEqual(@as(i32, 320), client.right);
+    try std.testing.expectEqual(@as(i32, 180), client.bottom);
+
+    const frame = try FrameBuffer.initCapacity(320, 180, std.testing.allocator);
+    defer frame.deinit(std.testing.allocator);
+    @memset(frame.data, 0);
+    platform.softwarePresent(&frame);
+    const resize_flags = win32.SWP_NOMOVE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE;
+    try std.testing.expect(win32.SetWindowPos(platform.window, null, 0, 0, 510, 390, @bitCast(resize_flags)).toBool());
+    try std.testing.expect(win32.GetClientRect(platform.window, &client).toBool());
+    try std.testing.expect(client.right > 320 and client.bottom > 180);
+    const cases = [_]struct { point: win32.POINT, expected: event_types.MousePosition }{
+        .{ .point = .{ .x = 0, .y = 0 }, .expected = .{ .x = 0, .y = 0 } },
+        .{ .point = .{ .x = -1, .y = -1 }, .expected = .{ .x = -1, .y = -1 } },
+        .{ .point = .{ .x = client.right - 1, .y = client.bottom - 1 }, .expected = .{ .x = 319, .y = 179 } },
     };
-    defer platform.fullscreen = false;
     for (cases) |case| {
-        platform.fullscreen = case.fullscreen;
         var screen_point = case.point;
         try std.testing.expect(user32.ClientToScreen(platform.window.?, &screen_point).toBool());
         try std.testing.expect(user32.SetCursorPos(screen_point.x, screen_point.y).toBool());
@@ -753,7 +690,7 @@ test "closing a window does not quit a recreated window" {
     _ = windowProc(platform.window.?, win32.WM_CLOSE, 0, 0);
     try std.testing.expect(platform.pollEvents().quit_requested);
     platform.destroyWindow();
-    try platform.createWindow(.{ .title = "Recreated window", .frame_buffer = &fixture.buffer });
+    try platform.createWindow(.{ .title = "Recreated window", .width = 320, .height = 180 });
     try std.testing.expect(!platform.pollEvents().quit_requested);
     // A real thread quit still stops this window and remains latched.
     win32.PostQuitMessage(0);

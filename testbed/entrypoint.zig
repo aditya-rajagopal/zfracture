@@ -13,12 +13,29 @@ const DrawCase = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    var platform: fr.Platform = .{};
-    try platform.init();
+    const allocator = std.heap.page_allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var platform: fr.Platform = .empty;
+    try platform.init(.{
+        .title = "Testbed - left click or Space: next texture case",
+        .width = 1280,
+        .height = 720,
+    });
     defer platform.deinit();
 
-    const width = 1280;
-    const height = 720;
+    var renderer: fr.SoftwareRenderer = undefined;
+    try renderer.init(allocator, .{
+        .platform = &platform,
+        .missing_texture_color = .magenta,
+        .workers = .{ .io = init.io },
+    });
+    defer renderer.deinit(allocator);
+
+    const width: f32 = @floatFromInt(renderer.back_buffer.width);
+    const height: f32 = @floatFromInt(renderer.back_buffer.height);
     const centre_x = width / 2;
     const centre_y = height / 2;
     const draw_cases = [_]DrawCase{
@@ -54,20 +71,6 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "2x, fully offscreen bottom", .pivot_world_x = centre_x, .pivot_world_y = height + 64, .width = 128, .height = 128 },
     };
 
-    const allocator = std.heap.page_allocator;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    var renderer: fr.SoftwareRenderer = undefined;
-    try renderer.init(allocator, .{
-        .width = width,
-        .height = height,
-        .missing_texture_color = .magenta,
-        .workers = .{ .io = init.io },
-    });
-    defer renderer.deinit(allocator);
-
     const bitmap = renderer.loadAndCreateTexture(
         init.io,
         allocator,
@@ -75,11 +78,6 @@ pub fn main(init: std.process.Init) !void {
         "assets/textures/paving2.png",
     );
 
-    try platform.createWindow(.{
-        .title = "Testbed - left click or Space: next texture case",
-        .frame_buffer = &renderer.back_buffer,
-    });
-    defer platform.destroyWindow();
     platform.setCursorHidden(false);
     platform.showWindow();
 
@@ -98,8 +96,6 @@ pub fn main(init: std.process.Init) !void {
                 if (err != error.Canceled) pacing_error = err;
             };
         }
-        platform.beginFrame();
-        defer platform.endFrame();
 
         const status = platform.pollEvents();
         const events = platform.takeEvents();
@@ -146,6 +142,5 @@ pub fn main(init: std.process.Init) !void {
             },
         );
         renderer.endDrawing(arena.allocator(), commands);
-        platform.present();
     }
 }

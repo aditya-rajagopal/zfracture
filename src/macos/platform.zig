@@ -31,14 +31,10 @@ pub const State = struct {
     window: Object = undefined,
     view: Object = undefined,
     delegate: Object = undefined,
-    bitmap_context: c.CGContextRef = undefined,
+    bitmap_context: c.CGContextRef = null,
     event_storage: [2][1024]Event = undefined,
     event_lists: [2]std.ArrayList(Event) = undefined,
     pending_event_buffer: u1 = 0,
-    back_buffer: *FrameBuffer = undefined,
-    // NOTE(adi): We store a snapshot of the framebuffer that was bound when the CGBitmapContext was created.
-    // If the back buffer changes we need to reflect that in the bound_frame_buffer.
-    bound_frame_buffer: FrameBuffer = undefined,
     window_placement: Rect = std.mem.zeroes(Rect),
     presentation_options: appkit.NSApplicationPresentationOptions = .{},
     fullscreen: bool = false,
@@ -58,34 +54,18 @@ pub const State = struct {
     client_mouse_buttons: [5]bool = @splat(false),
     keys_by_code: [128]?Key = @splat(null),
 
-    outer_pool: ?*objc.AutoreleasePool = null,
-    frame_pool: ?*objc.AutoreleasePool = null,
-    windowed_frame_margin: u16 = 10,
+    autorelease_pool: *objc.AutoreleasePool = undefined,
 
     const Self = @This();
 
     pub fn init(self: *Self) InitError!void {
         std.debug.assert(objc.getClass("NSThread").?.msgSend(bool, "isMainThread", .{}));
         self.* = .{};
-        self.outer_pool = objc.AutoreleasePool.init();
+        self.autorelease_pool = objc.AutoreleasePool.init();
     }
 
     pub fn deinit(self: *Self) void {
-        std.debug.assert(self.frame_pool == null);
-        self.outer_pool.?.deinit();
-        self.outer_pool = null;
-    }
-
-    pub fn beginFrame(self: *Self) void {
-        std.debug.assert(self.outer_pool != null);
-        std.debug.assert(self.frame_pool == null);
-        self.frame_pool = objc.AutoreleasePool.init();
-    }
-
-    pub fn endFrame(self: *Self) void {
-        std.debug.assert(self.outer_pool != null);
-        self.frame_pool.?.deinit();
-        self.frame_pool = null;
+        self.autorelease_pool.deinit();
     }
 
     pub fn waitUntil(_: *Self, io: std.Io, wake: std.Io.Timestamp) WaitError!void {
@@ -93,6 +73,8 @@ pub const State = struct {
     }
 
     pub fn pollEvents(self: *Self) Platform.WindowStatus {
+        self.autorelease_pool.deinit();
+        self.autorelease_pool = objc.AutoreleasePool.init();
         pumpMessages(self, max_messages_per_frame);
         const point = self.updateCursor();
         // AppKit may stop sending mouse-moved events before the pointer reaches
@@ -148,7 +130,6 @@ pub const State = struct {
     // Initialize in place: the view and delegate borrow this address until teardown.
     pub fn createWindow(self: *Self, config: Platform.WindowConfig) CreateWindowError!void {
         const title = config.title;
-        const back_buffer = config.frame_buffer;
         try registerClasses();
         const application_class = objc.getClass("FractureApplication").?;
         const application = application_class.msgSend(Object, "sharedApplication", .{});
@@ -168,21 +149,22 @@ pub const State = struct {
             );
             if (!activated) return error.FailedToActivateApplication;
         }
-        const buffer_width: f64 = @floatFromInt(back_buffer.width);
-        const window_width = buffer_width + 2 * @as(f64, @floatFromInt(config.windowed_frame_margin));
-        const buffer_height: f64 = @floatFromInt(back_buffer.height);
-        const window_height = buffer_height + 2 * @as(f64, @floatFromInt(config.windowed_frame_margin));
-        const frame = makeRect(0, 0, window_width, window_height);
+        const screen = objc.getClass("NSScreen").?.msgSend(Object, "mainScreen", .{});
+        if (screen.value == null) return error.FailedToCreateWindow;
+        const pixels = makeRect(0, 0, @floatFromInt(config.width), @floatFromInt(config.height));
+        const points = screen.msgSend(Rect, "convertRectFromBacking:", .{pixels});
+        const frame = makeRect(0, 0, points.size.width, points.size.height);
 
         const window_allocated = objc.getClass("FractureWindow").?.msgSend(Object, "alloc", .{});
         const window = window_allocated.msgSend(
             Object,
-            "initWithContentRect:styleMask:backing:defer:",
+            "initWithContentRect:styleMask:backing:defer:screen:",
             .{
                 frame,
                 @as(usize, @bitCast(window_style)),
                 appkit.NSBackingStoreType.buffered,
                 false,
+                screen,
             },
         );
         if (window.value == null) return error.FailedToCreateWindow;
@@ -224,36 +206,14 @@ pub const State = struct {
         errdefer delegate.release();
         window.msgSend(void, "setDelegate:", .{delegate});
         application.msgSend(void, "setDelegate:", .{delegate});
-        errdefer {
-            window.msgSend(void, "setDelegate:", .{nil});
-            application.msgSend(void, "setDelegate:", .{nil});
-        }
         installMenu(application, title);
-
-        const color_space = c.CGColorSpaceCreateWithName(c.kCGColorSpaceSRGB) orelse
-            return error.FailedToCreateColorSpace;
-        defer c.CGColorSpaceRelease(color_space);
-        const bitmap_context = c.CGBitmapContextCreate(
-            back_buffer.data.ptr,
-            back_buffer.width,
-            back_buffer.height,
-            8,
-            @as(usize, back_buffer.width) * 4,
-            color_space,
-            c.kCGBitmapByteOrder32Little | c.kCGImageAlphaNoneSkipFirst,
-        ) orelse return error.FailedToCreateBitmapContext;
 
         self.* = .{
             .application = application,
             .window = window,
             .view = view,
             .delegate = delegate,
-            .bitmap_context = bitmap_context,
-            .back_buffer = back_buffer,
-            .bound_frame_buffer = back_buffer.*,
-            .outer_pool = self.outer_pool,
-            .frame_pool = self.frame_pool,
-            .windowed_frame_margin = config.windowed_frame_margin,
+            .autorelease_pool = self.autorelease_pool,
         };
 
         for (&self.event_lists, &self.event_storage) |*list, *storage| {
@@ -298,7 +258,8 @@ pub const State = struct {
         self.window.release();
         self.view.release();
         self.delegate.release();
-        c.CGContextRelease(self.bitmap_context);
+        if (self.bitmap_context) |context| c.CGContextRelease(context);
+        self.bitmap_context = null;
     }
 
     pub fn toggleFullscreen(self: *Self) void {
@@ -348,10 +309,38 @@ pub const State = struct {
         _ = self.window.msgSend(bool, "makeFirstResponder:", .{self.view});
     }
 
-    pub fn present(self: *Self) void {
-        // TODO: Test Metal presentation instead of doing this. There are weirdly high
-        // number of minor page faults when writing to the framebuffer especially in release
-        // fast.
+    pub fn drawableSize(self: *Self) Platform.PixelSize {
+        const bounds = self.view.msgSend(Rect, "bounds", .{});
+        const pixels = self.view.msgSend(Rect, "convertRectToBacking:", .{bounds});
+        return .{
+            .width = @intFromFloat(std.math.clamp(@round(pixels.size.width), 0, std.math.maxInt(u16))),
+            .height = @intFromFloat(std.math.clamp(@round(pixels.size.height), 0, std.math.maxInt(u16))),
+        };
+    }
+
+    pub fn softwarePresent(self: *Self, buffer: *const FrameBuffer) void {
+        const row_bytes = @as(usize, buffer.width) * FrameBuffer.bytes_per_pixel;
+        if (self.bitmap_context == null or c.CGBitmapContextGetWidth(self.bitmap_context) != buffer.width or
+            c.CGBitmapContextGetHeight(self.bitmap_context) != buffer.height)
+        {
+            const color_space = c.CGColorSpaceCreateWithName(c.kCGColorSpaceSRGB) orelse return;
+            defer c.CGColorSpaceRelease(color_space);
+            const context = c.CGBitmapContextCreate(
+                null,
+                buffer.width,
+                buffer.height,
+                8,
+                row_bytes,
+                color_space,
+                c.kCGBitmapByteOrder32Little | c.kCGImageAlphaNoneSkipFirst,
+            ) orelse return;
+            if (self.bitmap_context) |previous| c.CGContextRelease(previous);
+            self.bitmap_context = context;
+        }
+        // AppKit can request a redraw after this call, including during a live resize.
+        const pixels: [*]u8 = @ptrCast(c.CGBitmapContextGetData(self.bitmap_context).?);
+        const frame_bytes = row_bytes * buffer.height;
+        @memcpy(pixels[0..frame_bytes], buffer.data[0..frame_bytes]);
         if (self.window.msgSend(bool, "isMiniaturized", .{})) return;
 
         self.view.msgSend(void, "setNeedsDisplay:", .{true});
@@ -575,37 +564,21 @@ fn windowDidEndLiveResize(receiver: objc.c.id, _: objc.c.SEL, _: objc.c.id) call
 fn drawRect(receiver: objc.c.id, _: objc.c.SEL, _: Rect) callconv(.c) void {
     const platform = platformForCallback(receiver) orelse return;
     // AppKit can draw during event handling as well as an explicit present call.
-    const buffer = platform.back_buffer;
-    std.debug.assert(buffer.width == platform.bound_frame_buffer.width);
-    std.debug.assert(buffer.height == platform.bound_frame_buffer.height);
-    std.debug.assert(buffer.data.ptr == platform.bound_frame_buffer.data.ptr);
-    const required_bytes = @as(usize, buffer.width) * buffer.height * FrameBuffer.bytes_per_pixel;
-    std.debug.assert(buffer.data.len >= required_bytes);
+    const bitmap_context = platform.bitmap_context orelse return;
 
     const graphics = objc.getClass("NSGraphicsContext").?.msgSend(Object, "currentContext", .{});
     const context = graphics.msgSend(c.CGContextRef, "CGContext", .{});
     const bounds = platform.view.msgSend(Rect, "bounds", .{});
     if (bounds.size.width <= 0 or bounds.size.height <= 0) return;
 
-    c.CGContextSetRGBFillColor(context, 0, 0, 0, 1);
-    c.CGContextFillRect(context, bounds);
-
-    // Release the snapshot before Zig writes the next frame. Drawing and updates share one thread.
-    const image = c.CGBitmapContextCreateImage(platform.bitmap_context) orelse return;
+    const image = c.CGBitmapContextCreateImage(bitmap_context) orelse return;
     defer c.CGImageRelease(image);
-    const dest = if (platform.fullscreen) bounds else makeRect(
-        @floatFromInt(platform.windowed_frame_margin),
-        @floatFromInt(platform.windowed_frame_margin),
-        @floatFromInt(buffer.width),
-        @floatFromInt(buffer.height),
-    );
-
     c.CGContextSaveGState(context);
     defer c.CGContextRestoreGState(context);
     c.CGContextSetInterpolationQuality(context, c.kCGInterpolationNone);
-    c.CGContextTranslateCTM(context, dest.origin.x, dest.origin.y + dest.size.height);
+    c.CGContextTranslateCTM(context, bounds.origin.x, bounds.origin.y + bounds.size.height);
     c.CGContextScaleCTM(context, 1, -1);
-    c.CGContextDrawImage(context, makeRect(0, 0, dest.size.width, dest.size.height), image);
+    c.CGContextDrawImage(context, makeRect(0, 0, bounds.size.width, bounds.size.height), image);
 }
 
 fn installMenu(application: Object, title: [:0]const u8) void {
@@ -847,22 +820,15 @@ fn mousePosition(platform: *State, event: Object) event_types.MousePosition {
 }
 
 fn mousePositionFromView(platform: *State, view_point: Point) event_types.MousePosition {
-    var point = view_point;
-    // Invert the destination rectangle used by drawRect, in AppKit points.
-    if (platform.fullscreen) {
-        const bounds = platform.view.msgSend(Rect, "bounds", .{});
-        if (bounds.size.width <= 0) return .{ .x = -1, .y = -1 };
-        if (bounds.size.height <= 0) return .{ .x = -1, .y = -1 };
-        point.x = (point.x - bounds.origin.x) * @as(f64, @floatFromInt(platform.back_buffer.width)) / bounds.size.width;
-        point.y = (point.y - bounds.origin.y) * @as(f64, @floatFromInt(platform.back_buffer.height)) / bounds.size.height;
-    } else {
-        const margin: f64 = @floatFromInt(platform.windowed_frame_margin);
-        point.x -= margin;
-        point.y -= margin;
-    }
+    const bounds = platform.view.msgSend(Rect, "bounds", .{});
+    if (bounds.size.width <= 0 or bounds.size.height <= 0) return .{ .x = -1, .y = -1 };
+    const size: Platform.PixelSize = if (platform.bitmap_context) |context| .{
+        .width = @intCast(c.CGBitmapContextGetWidth(context)),
+        .height = @intCast(c.CGBitmapContextGetHeight(context)),
+    } else platform.drawableSize();
     return .{
-        .x = mouseCoordinate(point.x),
-        .y = mouseCoordinate(point.y),
+        .x = mouseCoordinate((view_point.x - bounds.origin.x) * @as(f64, @floatFromInt(size.width)) / bounds.size.width),
+        .y = mouseCoordinate((view_point.y - bounds.origin.y) * @as(f64, @floatFromInt(size.height)) / bounds.size.height),
     };
 }
 
@@ -1109,8 +1075,6 @@ fn testInputPlatform(platform: *State) void {
         .window = .{ .value = null },
         .view = .{ .value = null },
         .delegate = .{ .value = null },
-        .bitmap_context = null,
-        .back_buffer = undefined,
     };
     for (&platform.event_lists, &platform.event_storage) |*list, *storage| {
         list.* = std.ArrayList(Event).initBuffer(storage);
@@ -1361,26 +1325,21 @@ test "tracking preserves mouse ownership and accepts new client presses on exit"
 
 // Native integration tests need a desktop session to create and activate a window.
 const TestWindow = struct {
-    buffer: FrameBuffer,
     platform: State,
 
     // Initialize in place: the native callbacks retain pointers into this fixture.
     fn init(self: *TestWindow) !void {
         if (!@import("test_options").window_smoke) return error.SkipZigTest;
 
-        const pixels = try std.testing.allocator.alignedAlloc(
-            u8,
-            .fromByteUnits(4096),
-            320 * 180 * 4,
-        );
-        errdefer std.testing.allocator.free(pixels);
-        @memset(pixels, 0);
-
-        self.buffer = .{ .width = 320, .height = 180, .data = pixels };
         try self.platform.init();
         errdefer self.platform.deinit();
-        try self.platform.createWindow(.{ .title = "Fracture window test", .frame_buffer = &self.buffer });
+        try self.platform.createWindow(.{ .title = "Fracture window test", .width = 320, .height = 180 });
         errdefer self.platform.destroyWindow();
+        const size = self.platform.drawableSize();
+        const buffer = try FrameBuffer.initCapacity(size.width, size.height, std.testing.allocator);
+        defer buffer.deinit(std.testing.allocator);
+        @memset(buffer.data, 0);
+        self.platform.softwarePresent(&buffer);
         self.platform.showWindow();
         errdefer std.debug.print("window test activation: key={}, active={}, focused={}, quit={}\n", .{
             self.platform.window.msgSend(bool, "isKeyWindow", .{}),
@@ -1416,7 +1375,6 @@ const TestWindow = struct {
     fn deinit(self: *TestWindow) void {
         defer self.platform.deinit();
         self.platform.destroyWindow();
-        std.testing.allocator.free(self.buffer.data);
 
         // Tests may intentionally leave input queued after quit. Discard it so
         // a later test cannot inherit events from this window.
@@ -1486,20 +1444,13 @@ test "poll samples fresh mouse coordinates without a queued motion event" {
     const saved_position = c.CGEventGetLocation(saved_event);
     defer _ = c.CGWarpMouseCursorPosition(saved_position);
 
-    // The fixture presents 320x180 pixels in a 340x200 point view, with a
-    // 10-point windowed inset. Fullscreen fills that view instead of insetting.
-    const bounds = platform.view.msgSend(Rect, "bounds", .{});
-    try std.testing.expectEqual(@as(f64, 340), bounds.size.width);
-    try std.testing.expectEqual(@as(f64, 200), bounds.size.height);
-    const cases = [_]struct { point: Point, fullscreen: bool, expected: event_types.MousePosition }{
-        .{ .point = .{ .x = 17, .y = 23 }, .fullscreen = false, .expected = .{ .x = 7, .y = 13 } },
-        .{ .point = .{ .x = -11, .y = 27 }, .fullscreen = false, .expected = .{ .x = -21, .y = 17 } },
-        // One quarter across and three quarters down maps to (80,135).
-        .{ .point = .{ .x = 85, .y = 150 }, .fullscreen = true, .expected = .{ .x = 80, .y = 135 } },
+    platform.window.msgSend(void, "setContentSize:", .{c.CGSize{ .width = 160, .height = 90 }});
+    const cases = [_]struct { point: Point, expected: event_types.MousePosition }{
+        .{ .point = .{ .x = 0, .y = 0 }, .expected = .{ .x = 0, .y = 0 } },
+        .{ .point = .{ .x = 159, .y = 89 }, .expected = .{ .x = 318, .y = 178 } },
+        .{ .point = .{ .x = -11, .y = 27 }, .expected = .{ .x = -22, .y = 54 } },
     };
-    defer platform.fullscreen = false;
     for (cases) |case| {
-        platform.fullscreen = case.fullscreen;
         const window_point = platform.view.msgSend(Point, "convertPoint:toView:", .{ case.point, nil });
         const screen_point = platform.window.msgSend(Point, "convertPointToScreen:", .{window_point});
         // AppKit's screen origin is bottom-left; Quartz's is top-left on the
@@ -1762,6 +1713,7 @@ test "client click focuses the window and its drag releases outside the view" {
     try fixture.init();
     defer fixture.deinit();
     const platform = &fixture.platform;
+    platform.window.msgSend(void, "setContentSize:", .{c.CGSize{ .width = 160, .height = 90 }});
     // Use a real focus transition: calling resignKeyWindow directly leaves NSApp's
     // keyWindow pointer naming a window that no longer considers itself key.
     platform.window.msgSend(void, "orderOut:", .{nil});
@@ -1776,11 +1728,11 @@ test "client click focuses the window and its drag releases outside the view" {
     try std.testing.expect(platform.window.msgSend(bool, "isKeyWindow", .{}));
     try std.testing.expect(platform.focused);
     const pressed = platform.takeEvents();
-    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 7, .y = 13 } } }}, pressed);
+    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_pressed = .{ .button = .left, .pos = .{ .x = 34, .y = 46 } } }}, pressed);
     // The release from a client drag still belongs to the game outside the view.
     const outside = platform.view.msgSend(Point, "convertPoint:toView:", .{ Point{ .x = -11, .y = 27 }, nil });
     platform.application.msgSend(void, "sendEvent:", .{testMouseEvent(.left_mouse_up, outside, number)});
-    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_released = .{ .button = .left, .pos = .{ .x = -21, .y = 17 } } }}, platform.takeEvents());
+    try std.testing.expectEqualDeep(&[_]Event{.{ .mouse_released = .{ .button = .left, .pos = .{ .x = -22, .y = 54 } } }}, platform.takeEvents());
 }
 
 pub const InitError = error{};
@@ -1793,8 +1745,6 @@ pub const CreateWindowError = error{
     FailedToCreateWindow,
     FailedToCreateView,
     FailedToCreateDelegate,
-    FailedToCreateColorSpace,
-    FailedToCreateBitmapContext,
 };
 
 pub fn processId() u32 {

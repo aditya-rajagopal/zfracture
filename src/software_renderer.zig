@@ -10,6 +10,7 @@ pub const monogram = @import("monogram.zig");
 
 const AABB = @import("shapes.zig").AABB;
 const FrameBuffer = @import("FrameBuffer.zig");
+const Platform = @import("platform.zig");
 
 const Renderer = @import("renderer.zig");
 const TileWorkers = @import("TileWorkers.zig");
@@ -17,6 +18,7 @@ const TileWorkers = @import("TileWorkers.zig");
 const Self = @This();
 
 back_buffer: FrameBuffer,
+platform: ?*Platform,
 front_face_winding_order: @FieldType(Config, "front_face_winding_order") = .clockwise,
 cull_mode: @FieldType(Config, "cull_mode") = .back,
 textures: [32]Bitmap,
@@ -128,8 +130,11 @@ const PreparedCommandBuffer = struct {
 };
 
 pub const Config = struct {
-    width: u16,
-    height: u16,
+    /// A windowed renderer borrows the live platform and sizes its buffer to the drawable.
+    platform: ?*Platform = null,
+    /// Dimensions for headless rendering.
+    width: u16 = 0,
+    height: u16 = 0,
     missing_texture_color: Color,
     front_face_winding_order: enum { clockwise, anticlockwise } = .clockwise,
     cull_mode: enum { none, front, back } = .back,
@@ -165,8 +170,14 @@ pub fn init(
     gpa: std.mem.Allocator,
     config: Config,
 ) !void {
+    const size: Platform.PixelSize = if (config.platform) |platform|
+        platform.drawableSize()
+    else
+        .{ .width = config.width, .height = config.height };
+    if (size.width == 0 or size.height == 0) return error.InvalidFramebuffer;
+    self.platform = config.platform;
     self.workers = .{};
-    self.back_buffer = try .initCapacity(config.width, config.height, gpa);
+    self.back_buffer = try .initCapacity(size.width, size.height, gpa);
     errdefer self.back_buffer.deinit(gpa);
 
     const headers = try gpa.alloc(PreparedCommandBuffer.Header, MAX_COMMANDS);
@@ -199,15 +210,15 @@ pub fn init(
     self.textures = @splat(.{ .width = 1, .height = 1, .pixels = missing_pixels });
     self.head = 1;
     if (config.workers) |workers| {
-        const cols = (@as(usize, config.width) + render_tile_size - 1) / render_tile_size;
-        const rows = (@as(usize, config.height) + render_tile_size - 1) / render_tile_size;
+        const cols = (@as(usize, size.width) + render_tile_size - 1) / render_tile_size;
+        const rows = (@as(usize, size.height) + render_tile_size - 1) / render_tile_size;
         try self.workers.init(gpa, cols * rows, workers);
     }
 }
 
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
     self.workers.deinit(gpa);
-    gpa.free(self.back_buffer.data);
+    self.back_buffer.deinit(gpa);
     self.command_buffer.commands.deinit(gpa);
     self.prepared_commands.headers.len = MAX_COMMANDS;
     self.prepared_commands.data.len = MAX_DATA;
@@ -571,6 +582,15 @@ pub fn renderTile(
 }
 
 pub fn endDrawing(self: *Self, arena: std.mem.Allocator, command_buffer: *Renderer.CommandBuffer) void {
+    self.renderCommands(arena, command_buffer);
+    if (self.platform) |platform| {
+        const trace = profile.begin(.present);
+        defer profile.end(trace);
+        platform.softwarePresent(&self.back_buffer);
+    }
+}
+
+fn renderCommands(self: *Self, arena: std.mem.Allocator, command_buffer: *Renderer.CommandBuffer) void {
     defer command_buffer.string_bytes_used = 0;
     const frame_trace = profile.begin(.renderer_end);
     defer profile.end(frame_trace);

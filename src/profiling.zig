@@ -2,6 +2,7 @@ const std = @import("std");
 const root = @import("root");
 
 pub const Anchor = enum {
+    present,
     renderer_end,
     renderer_prepare,
     renderer_bin,
