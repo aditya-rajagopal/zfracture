@@ -21,7 +21,7 @@ back_buffer: FrameBuffer,
 platform: ?*Platform,
 front_face_winding_order: @FieldType(Config, "front_face_winding_order") = .clockwise,
 cull_mode: @FieldType(Config, "cull_mode") = .back,
-textures: [64]Bitmap,
+textures: [128]Bitmap,
 head: u8 = 1,
 prepared_commands: PreparedCommandBuffer,
 command_buffer: Renderer.CommandBuffer,
@@ -150,8 +150,12 @@ pub const TileJob = struct {
     command_data: []align(PreparedCommandBuffer.data_alignment) const u8,
 };
 
-const MAX_COMMANDS = 1 + 4096; // The frame clear plus 4096 visible draws, including glyphs.
-const MAX_FRONTEND_COMMANDS = 8192;
+const max_visible_draws = 16_384;
+const MAX_COMMANDS = 1 + max_visible_draws; // The frame clear is also binned.
+const MAX_FRONTEND_COMMANDS = max_visible_draws + 4096; // Includes view changes and subpixel draws.
+comptime {
+    assert(MAX_COMMANDS <= std.math.maxInt(u16)); // A tile's bin can contain every command.
+}
 const max_command_size = std.mem.alignForward(
     usize,
     @max(
